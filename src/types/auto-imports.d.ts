@@ -34,6 +34,8 @@ declare global {
   const Link: typeof import('react-router').Link
   const List: typeof import('antd').List
   const Menu: typeof import('antd').Menu
+  const MenuFoldOutlined: typeof import('@ant-design/icons').MenuFoldOutlined
+  const MenuUnfoldOutlined: typeof import('@ant-design/icons').MenuUnfoldOutlined
   const Modal: typeof import('antd').Modal
   const NavLink: typeof import('react-router').NavLink
   const Navigate: typeof import('react-router').Navigate

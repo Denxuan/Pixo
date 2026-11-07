@@ -198,25 +198,25 @@ fn build_panel(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         PANEL_LABEL,
         WebviewUrl::App("index.html?view=panel".into()),
     )
-        .title("Pixo")
-        .inner_size(440.0, 560.0)
-        .min_inner_size(320.0, 420.0)
-        .decorations(false)
-        .transparent(true)
-        .shadow(true)
-        .always_on_top(cfg!(not(target_os = "macos")))
-        .skip_taskbar(true)
-        .visible_on_all_workspaces(cfg!(not(target_os = "macos")))
-        .resizable(true)
-        .visible(false)
-        .focused(false)
-        .center()
-        .build()
-        .map(|window| {
-            #[cfg(target_os = "macos")]
-            mark_nonactivating(&window);
-            window
-        })
+    .title("Pixo")
+    .inner_size(440.0, 560.0)
+    .min_inner_size(320.0, 420.0)
+    .decorations(false)
+    .transparent(true)
+    .shadow(true)
+    .always_on_top(cfg!(not(target_os = "macos")))
+    .skip_taskbar(true)
+    .visible_on_all_workspaces(cfg!(not(target_os = "macos")))
+    .resizable(true)
+    .visible(false)
+    .focused(false)
+    .center()
+    .build()
+    .map(|window| {
+        #[cfg(target_os = "macos")]
+        mark_nonactivating(&window);
+        window
+    })
 }
 
 fn reveal(app: &AppHandle, window: &WebviewWindow, placement: Placement) {

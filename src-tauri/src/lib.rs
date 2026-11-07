@@ -1,5 +1,6 @@
 mod clipboard;
 mod panel_anchor;
+mod permissions;
 mod shortcut;
 mod tray;
 
@@ -36,6 +37,7 @@ pub fn run() {
             }
             if std::env::args().any(|arg| arg == "--clipboard-panel") {
                 shortcut::show_panel(app.handle());
+                permissions::prepare();
             }
             Ok(())
         })
@@ -44,6 +46,7 @@ pub fn run() {
             clipboard::commands::clipboard_get,
             clipboard::commands::clipboard_image,
             clipboard::commands::clipboard_source_icon,
+            clipboard::commands::clipboard_installed_apps,
             clipboard::commands::clipboard_copy,
             clipboard::commands::clipboard_set_pinned,
             clipboard::commands::clipboard_delete,
@@ -56,6 +59,9 @@ pub fn run() {
             shortcut::clipboard_dismiss_panel,
             tray::clipboard_set_tray_labels,
             tray::clipboard_take_main_request,
+            permissions::permissions_status,
+            permissions::permissions_prepare,
+            permissions::permissions_open,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

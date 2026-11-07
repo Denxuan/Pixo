@@ -24,16 +24,32 @@ function isClipboardPanel() {
   }
 }
 
+function useSettingsHydrated() {
+  return useSyncExternalStore(
+    (onChange) => useSettingsStore.persist.onFinishHydration(onChange),
+    () => useSettingsStore.persist.hasHydrated(),
+    () => true,
+  );
+}
+
 export default function App() {
   const mode = useSettingsStore((state) => state.mode);
   const systemDark = useSyncExternalStore(subscribe, () => colorScheme.matches);
   const dark = isDarkTheme(mode, systemDark);
   const panel = isClipboardPanel();
+  const hydrated = useSettingsHydrated();
   useSharedSettings(!panel);
+
+  useEffect(() => {
+    if (!isDesktop() || panel || !hydrated) return;
+    const current = getCurrentWindow();
+    void current.setTheme(mode === "system" ? null : dark ? "dark" : "light").catch(() => undefined);
+    void current.setBackgroundColor(dark ? "#000000" : "#f5f5f5").catch(() => undefined);
+  }, [dark, hydrated, mode, panel]);
 
   return (
     <ConfigProvider theme={{ algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm }}>
-      <div className={dark ? "dark h-screen overflow-hidden" : "h-screen overflow-hidden"} style={{ colorScheme: dark ? "dark" : "light", background: panel ? "transparent" : undefined }}>
+      <div className={dark ? "dark h-full overflow-hidden" : "h-full overflow-hidden"} style={{ colorScheme: dark ? "dark" : "light", background: panel ? "transparent" : undefined }}>
         <Suspense fallback={panel ? null : <BootScreen />}>
           {panel ? <ClipboardPanel /> : <AppRouter />}
         </Suspense>

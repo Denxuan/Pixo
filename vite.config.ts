@@ -50,6 +50,8 @@ export default defineConfig(() => ({
             "GlobalOutlined",
             "CodeOutlined",
             "HistoryOutlined",
+            "MenuFoldOutlined",
+            "MenuUnfoldOutlined",
             "FontSizeOutlined",
             "FileImageOutlined",
             "FileOutlined",

@@ -87,6 +87,14 @@ pub struct SourceMark {
     pub icon_png: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledApp {
+    pub id: String,
+    pub name: String,
+    pub icon_png: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Summary {

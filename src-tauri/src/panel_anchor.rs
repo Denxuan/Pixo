@@ -1,16 +1,7 @@
 #[cfg(target_os = "macos")]
-use std::sync::atomic::{AtomicBool, Ordering};
-
-#[cfg(target_os = "macos")]
-use dispatch2::DispatchQueue;
-#[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
 #[cfg(target_os = "macos")]
-use objc2::rc::Retained;
-#[cfg(target_os = "macos")]
 use objc2_app_kit::NSScreen;
-#[cfg(target_os = "macos")]
-use objc2_foundation::{NSDictionary, NSNumber, NSString};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
@@ -146,23 +137,8 @@ fn trusted() -> bool {
     if unsafe { AXIsProcessTrusted() } != 0 {
         return true;
     }
-    schedule_trust_prompt();
+    crate::permissions::prompt_accessibility();
     false
-}
-
-#[cfg(target_os = "macos")]
-fn schedule_trust_prompt() {
-    static ASKED: AtomicBool = AtomicBool::new(false);
-    if ASKED.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    // The shortcut callback cannot unwind or re-enter AppKit. Ask on the next turn.
-    DispatchQueue::main().exec_async(|| {
-        let key = NSString::from_str("AXTrustedCheckOptionPrompt");
-        let yes = NSNumber::numberWithBool(true);
-        let options = NSDictionary::from_slices(&[&*key], &[&*yes]);
-        let _ = unsafe { AXIsProcessTrustedWithOptions(Retained::as_ptr(&options).cast()) };
-    });
 }
 
 #[cfg(target_os = "macos")]
@@ -398,7 +374,6 @@ struct CGRect {
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXIsProcessTrusted() -> u8;
-    fn AXIsProcessTrustedWithOptions(options: *const std::ffi::c_void) -> u8;
     fn AXUIElementCreateSystemWide() -> *mut std::ffi::c_void;
     fn AXUIElementCopyAttributeValue(
         element: *mut std::ffi::c_void,

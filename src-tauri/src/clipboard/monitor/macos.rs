@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
@@ -7,7 +8,7 @@ use std::time::Duration;
 
 use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{AnyThread, ClassType, MainThreadMarker};
 use objc2_app_kit::{
     NSBitmapImageFileType, NSBitmapImageRep, NSCompositingOperation, NSDeviceRGBColorSpace,
@@ -21,7 +22,7 @@ use objc2_foundation::{
 use super::{KindGate, MonitorEvent, Platform};
 use crate::clipboard::error::ClipboardError;
 use crate::clipboard::io;
-use crate::clipboard::model::{Capture, Payload, PlatformCaps, RichText, SourceMark};
+use crate::clipboard::model::{Capture, InstalledApp, Payload, PlatformCaps, RichText, SourceMark};
 use crate::clipboard::util::{
     decode_image_bytes, macos_sensitive, opaque_cache_file, path_to_file_uri,
 };
@@ -501,6 +502,153 @@ fn write_files(paths: &[String]) -> Result<(), ClipboardError> {
     Ok(())
 }
 
+pub fn installed_apps() -> Vec<InstalledApp> {
+    let home = std::env::var("HOME").ok();
+    let mut found = Vec::new();
+    for root in application_roots(home.as_deref()) {
+        collect_apps(&root, 0, &mut found);
+    }
+    let mut apps = Vec::new();
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+    for (id, name, path) in found {
+        if remember_app(&mut apps, &mut seen, id, name) {
+            paths.push(path);
+        }
+    }
+    for (app, icon) in apps.iter_mut().zip(app_icons(&paths)) {
+        app.icon_png = icon;
+    }
+    apps.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then(left.id.cmp(&right.id))
+    });
+    apps
+}
+
+fn application_roots(home: Option<&str>) -> Vec<PathBuf> {
+    let mut roots = vec![
+        PathBuf::from("/Applications"),
+        PathBuf::from("/System/Applications"),
+        PathBuf::from("/System/Library/CoreServices/Finder.app"),
+    ];
+    if let Some(home) = home.map(str::trim).filter(|home| !home.is_empty()) {
+        roots.insert(1, PathBuf::from(home).join("Applications"));
+    }
+    roots
+}
+
+fn collect_apps(dir: &Path, depth: u8, found: &mut Vec<(String, String, String)>) {
+    if found.len() > 2000 {
+        return;
+    }
+    if is_app(dir) {
+        if let Some(app) = read_installed_app(dir) {
+            found.push(app);
+        }
+        return;
+    }
+    if depth > 2 {
+        return;
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        if found.len() > 2000 {
+            return;
+        }
+        let path = entry.path();
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if file_name.starts_with('.') {
+            continue;
+        }
+        if is_app(&path) {
+            if let Some(app) = read_installed_app(&path) {
+                found.push(app);
+            }
+            continue;
+        }
+        if path.is_dir() {
+            collect_apps(&path, depth + 1, found);
+        }
+    }
+}
+
+fn is_app(path: &Path) -> bool {
+    path.extension().and_then(|ext| ext.to_str()) == Some("app")
+}
+
+fn read_installed_app(path: &Path) -> Option<(String, String, String)> {
+    let path_text = path.to_str()?;
+    let id = bundle_identifier(&path.join("Contents/Info.plist"))?;
+    let mut name = NSFileManager::defaultManager()
+        .displayNameAtPath(&NSString::from_str(path_text))
+        .to_string();
+    if let Some(stripped) = name.strip_suffix(".app") {
+        name = stripped.to_string();
+    }
+    let name = name.trim().to_string();
+    let name = if name.is_empty() {
+        path.file_stem()?.to_str()?.to_string()
+    } else {
+        name
+    };
+    Some((id, name, path_text.to_string()))
+}
+
+fn app_icons(paths: &[String]) -> Vec<Vec<u8>> {
+    let workspace = NSWorkspace::sharedWorkspace();
+    paths
+        .iter()
+        .map(|path| icon_png(&workspace.iconForFile(&NSString::from_str(path))).unwrap_or_default())
+        .collect()
+}
+
+#[allow(deprecated)]
+fn bundle_identifier(plist: &Path) -> Option<String> {
+    let path = plist.to_str()?;
+    let dict = unsafe {
+        NSDictionary::<NSString, AnyObject>::dictionaryWithContentsOfFile(&NSString::from_str(
+            path,
+        ))?
+    };
+    let value = dict.objectForKey(&NSString::from_str("CFBundleIdentifier"))?;
+    let text = value.downcast::<NSString>().ok()?;
+    Some(text.to_string())
+}
+
+fn remember_app(
+    apps: &mut Vec<InstalledApp>,
+    seen: &mut HashSet<String>,
+    id: String,
+    name: String,
+) -> bool {
+    let id = id.trim().to_string();
+    let name = name.trim().to_string();
+    if id.is_empty()
+        || name.is_empty()
+        || id.chars().count() > 256
+        || name.chars().count() > 256
+        || id.chars().any(char::is_control)
+        || name.chars().any(char::is_control)
+        || !seen.insert(id.clone())
+    {
+        return false;
+    }
+    apps.push(InstalledApp {
+        id,
+        name,
+        icon_png: Vec::new(),
+    });
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use objc2_foundation::{NSString, NSURL};
@@ -522,6 +670,79 @@ mod tests {
         let resolved = filesystem_path(&absolute.to_string()).expect("file reference resolves");
         assert!(resolved.starts_with('/'));
         assert!(!resolved.starts_with("/.file/"));
+    }
+
+    #[test]
+    fn application_roots_include_the_home_applications_folder() {
+        let roots = super::application_roots(Some("/Users/example"));
+        assert!(roots.iter().any(|path| path.ends_with("Applications")));
+        assert!(
+            roots
+                .iter()
+                .any(|path| path == std::path::Path::new("/Users/example/Applications"))
+        );
+    }
+
+    #[test]
+    fn remember_app_keeps_the_first_identifier_and_rejects_blank_names() {
+        let mut apps = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        super::remember_app(
+            &mut apps,
+            &mut seen,
+            "com.apple.Safari".into(),
+            "Safari".into(),
+        );
+        super::remember_app(
+            &mut apps,
+            &mut seen,
+            " com.apple.Safari ".into(),
+            "Safari again".into(),
+        );
+        super::remember_app(
+            &mut apps,
+            &mut seen,
+            "com.example.blank".into(),
+            "  ".into(),
+        );
+        assert_eq!(
+            apps,
+            vec![super::InstalledApp {
+                id: "com.apple.Safari".into(),
+                name: "Safari".into(),
+                icon_png: Vec::new(),
+            }]
+        );
+    }
+
+    #[test]
+    fn installed_apps_include_safari_and_finder() {
+        let apps = super::installed_apps();
+        if std::path::Path::new("/Applications/Safari.app").exists() {
+            let safari = apps
+                .iter()
+                .find(|app| app.id == "com.apple.Safari")
+                .expect("Safari is installed");
+            assert!(!safari.name.is_empty());
+            assert_ne!(safari.name, safari.id);
+            assert!(safari.icon_png.starts_with(b"\x89PNG"));
+        }
+        if std::path::Path::new("/System/Library/CoreServices/Finder.app").exists() {
+            let finder = apps
+                .iter()
+                .find(|app| app.id == "com.apple.finder")
+                .expect("Finder is installed");
+            assert!(!finder.name.is_empty());
+            assert!(finder.icon_png.starts_with(b"\x89PNG"));
+        }
+        if std::path::Path::new("/Applications").exists() {
+            assert!(apps.len() > 5, "only found {}", apps.len());
+        }
+        assert!(apps.windows(2).all(|pair| {
+            pair[0].name.to_lowercase() <= pair[1].name.to_lowercase()
+                || pair[0].name.to_lowercase() == pair[1].name.to_lowercase()
+                    && pair[0].id <= pair[1].id
+        }));
     }
 
     #[test]

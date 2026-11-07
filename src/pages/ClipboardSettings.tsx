@@ -1,4 +1,5 @@
 import { ClipboardRequestError, clipboardGetSettings, clipboardStatus, clipboardUpdateSettings, toClipboardError } from "@/api/clipboard";
+import ExcludedAppsField from "@/components/clipboard/ExcludedAppsField";
 import ShortcutField from "@/components/clipboard/ShortcutField";
 import type { ClipboardSettings, ClipboardStatus } from "@/types/clipboard";
 import { toSettingsUpdate } from "@/types/clipboard";
@@ -15,6 +16,7 @@ export default function ClipboardSettingsPage() {
   const [textMb, setTextMb] = useState<number | null>(1);
   const [imageMb, setImageMb] = useState<number | null>(20);
   const [excluded, setExcluded] = useState("");
+  const [excludedApps, setExcludedApps] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [confirmCount, setConfirmCount] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
@@ -35,6 +37,7 @@ export default function ClipboardSettingsPage() {
         setTextMb(Number(bytesToMegabytes(current.maxTextBytes)));
         setImageMb(Number(bytesToMegabytes(current.maxImageBytes)));
         setExcluded(current.excludedApps.join("\n"));
+        setExcludedApps(current.excludedApps);
       })
       .catch((caught) => {
         if (!alive) return;
@@ -64,7 +67,7 @@ export default function ClipboardSettingsPage() {
       retentionDays,
       maxTextBytes,
       maxImageBytes,
-      excludedApps: excluded.split("\n"),
+      excludedApps: status?.platform.includes("macos") ? excludedApps : excluded.split("\n"),
     };
     setSaving(true);
     try {
@@ -141,12 +144,18 @@ export default function ClipboardSettingsPage() {
             label={t("zdx.label.clipboard.excludedApps")}
             extra={
               <Flex vertical gap={4}>
-                <span>{t("zdx.text.clipboard.excludedHelp")}</span>
+                {status?.platform.includes("macos") ? <span>{t("zdx.text.clipboard.excludedPicker")}</span> : status ? <span>{t("zdx.text.clipboard.excludedHelp")}</span> : null}
                 {status?.platform.includes("wayland") && <span>{t("zdx.text.clipboard.excludedWayland")}</span>}
               </Flex>
             }
           >
-            <Input.TextArea value={excluded} onChange={(event) => setExcluded(event.target.value)} placeholder={t("zdx.placeholder.clipboard.excludedApps")} rows={4} />
+            {status == null ? (
+              <Spin size="small" />
+            ) : status.platform.includes("macos") ? (
+              <ExcludedAppsField value={excludedApps} onChange={setExcludedApps} />
+            ) : (
+              <Input.TextArea value={excluded} onChange={(event) => setExcluded(event.target.value)} placeholder={t("zdx.placeholder.clipboard.excludedApps")} rows={4} />
+            )}
           </Form.Item>
         </Form>
       )}

@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
 use super::error::ClipboardError;
-use super::model::{Capture, PlatformCaps, RichText, SourceMark};
+use super::model::{Capture, InstalledApp, PlatformCaps, RichText, SourceMark};
 
 pub enum MonitorEvent {
     Capture(Capture),
@@ -77,6 +77,17 @@ mod wayland;
 mod windows;
 #[cfg(target_os = "linux")]
 mod x11;
+
+pub fn installed_apps() -> Vec<InstalledApp> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::installed_apps()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
+    }
+}
 
 pub fn source_mark(source: &str) -> Option<SourceMark> {
     #[cfg(target_os = "macos")]

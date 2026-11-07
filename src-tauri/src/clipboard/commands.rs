@@ -2,7 +2,8 @@ use tauri::State;
 
 use super::error::ClipboardError;
 use super::model::{
-    ClipKind, CopyOutcome, Detail, ListPage, Settings, SettingsUpdate, SourceMark, Status, Summary,
+    ClipKind, CopyOutcome, Detail, InstalledApp, ListPage, Settings, SettingsUpdate, SourceMark,
+    Status, Summary,
 };
 use super::service::ClipboardState;
 
@@ -46,6 +47,11 @@ pub fn clipboard_get(state: State<'_, ClipboardState>, id: i64) -> Result<Detail
 #[tauri::command]
 pub fn clipboard_source_icon(source: String) -> Result<Option<SourceMark>, ClipboardError> {
     Ok(super::monitor::source_mark(&source))
+}
+
+#[tauri::command]
+pub fn clipboard_installed_apps() -> Result<Vec<InstalledApp>, ClipboardError> {
+    Ok(super::monitor::installed_apps())
 }
 
 #[tauri::command]

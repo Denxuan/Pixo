@@ -83,6 +83,28 @@ export async function clipboardImage(id: number, thumb: boolean): Promise<Uint8A
   return toBytes(await call<unknown>("clipboard_image", { id, thumb }));
 }
 
+export type InstalledApp = { id: string; name: string; iconPng: Uint8Array };
+
+function readIcon(value: unknown): Uint8Array {
+  if (value == null) return new Uint8Array();
+  try {
+    return toBytes(value);
+  } catch {
+    return new Uint8Array();
+  }
+}
+
+export async function clipboardInstalledApps(): Promise<InstalledApp[]> {
+  const value = await call<unknown>("clipboard_installed_apps");
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as { id?: unknown; name?: unknown; iconPng?: unknown };
+    if (typeof record.id !== "string" || typeof record.name !== "string" || record.id.length === 0 || record.name.length === 0) return [];
+    return [{ id: record.id, name: record.name, iconPng: readIcon(record.iconPng) }];
+  });
+}
+
 export async function clipboardSourceIcon(source: string): Promise<{ name: string; iconPng: Uint8Array } | null> {
   const value = await call<{ name?: unknown; iconPng?: unknown } | null>("clipboard_source_icon", { source });
   if (!value || typeof value.name !== "string" || value.name.length === 0) return null;

@@ -32,14 +32,15 @@ const motion = `
 
 export default function BootScreen() {
   const { t } = useTranslation();
+  const { token } = antdTheme.useToken();
 
   return (
     <div className="flex h-full">
       <style>{motion}</style>
-      <div className="box-border flex w-[232px] flex-col gap-2 bg-[#001529] px-5 pt-6">
+      <div className="box-border flex w-[232px] flex-col gap-2 px-5 pt-6" style={{ background: token.colorBgLayout, borderInlineEnd: `1px solid ${token.colorBorderSecondary}` }}>
         <img className="boot-mark h-10 w-10 rounded-xl" src="/pixo-icon.png" alt="" />
-        <p className="boot-name m-0 text-xl text-white font-semibold leading-[1.2] tracking-[-0.02em]">Pixo</p>
-        <p className="boot-line m-0 text-sm text-white/65 leading-[1.4]">{t("zdx.text.app.tagline")}</p>
+        <p className="boot-name m-0 text-xl font-semibold leading-[1.2] tracking-[-0.02em]" style={{ color: token.colorText }}>Pixo</p>
+        <p className="boot-line m-0 text-sm leading-[1.4]" style={{ color: token.colorTextSecondary }}>{t("zdx.text.app.tagline")}</p>
       </div>
     </div>
   );
