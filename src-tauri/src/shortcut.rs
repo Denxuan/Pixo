@@ -89,6 +89,8 @@ fn open_panel(app: &AppHandle) -> tauri::Result<()> {
         .inner_size(440.0, 560.0)
         .min_inner_size(320.0, 420.0)
         .decorations(false)
+        .transparent(true)
+        .shadow(true)
         .always_on_top(true)
         .skip_taskbar(true)
         .visible_on_all_workspaces(true)
