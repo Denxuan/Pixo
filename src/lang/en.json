@@ -1,0 +1,50 @@
+{
+  "zdx": {
+    "label": {
+      "theme": {
+        "title": "Theme",
+        "system": "System",
+        "light": "Light",
+        "dark": "Dark"
+      },
+      "language": {
+        "chinese": "Simplified Chinese",
+        "english": "English",
+        "switch": "Switch language",
+        "toggle": "中文"
+      },
+      "nav": {
+        "workspace": "Workspace",
+        "tools": "Tools"
+      },
+      "json": {
+        "title": "JSON formatter",
+        "input": "Input",
+        "output": "Output",
+        "format": "Format",
+        "compact": "Compact",
+        "copy": "Copy result"
+      }
+    },
+    "text": {
+      "app": {
+        "tagline": "Your desktop toolkit",
+        "welcome": "Welcome to Pixo",
+        "local": "Tools and data stay on this device"
+      },
+      "json": {
+        "description": "Format, compact, and check JSON data.",
+        "invalid": "Invalid JSON. Check your input and try again.",
+        "copyError": "Could not copy. Please copy the result manually.",
+        "copied": "Copied",
+        "privacy": "Your content is processed locally."
+      }
+    },
+    "placeholder": {
+      "json": {
+        "input": "Enter or paste JSON here",
+        "output": "Your result will appear here"
+      }
+    }
+  }
+}

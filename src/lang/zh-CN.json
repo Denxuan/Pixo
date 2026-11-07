@@ -1,0 +1,50 @@
+{
+  "zdx": {
+    "label": {
+      "theme": {
+        "title": "主题",
+        "system": "跟随系统",
+        "light": "浅色",
+        "dark": "深色"
+      },
+      "language": {
+        "chinese": "简体中文",
+        "english": "英语",
+        "switch": "切换语言",
+        "toggle": "EN"
+      },
+      "nav": {
+        "workspace": "工作空间",
+        "tools": "工具箱"
+      },
+      "json": {
+        "title": "JSON 格式化",
+        "input": "输入",
+        "output": "结果",
+        "format": "格式化",
+        "compact": "压缩",
+        "copy": "复制结果"
+      }
+    },
+    "text": {
+      "app": {
+        "tagline": "你的桌面工具箱",
+        "welcome": "欢迎使用 Pixo",
+        "local": "工具与数据留在本机"
+      },
+      "json": {
+        "description": "整理、压缩和检查 JSON 数据。",
+        "invalid": "JSON 格式有误，请检查输入后重试。",
+        "copyError": "复制失败，请手动复制结果。",
+        "copied": "已复制",
+        "privacy": "内容仅在本机处理。"
+      }
+    },
+    "placeholder": {
+      "json": {
+        "input": "在此输入或粘贴 JSON",
+        "output": "处理后的结果将显示在这里"
+      }
+    }
+  }
+}
