@@ -14,6 +14,7 @@ export interface ClipSummary {
   createdAt: number;
   lastCopiedAt: number;
   copyCount: number;
+  formatted: boolean;
 }
 
 export interface ClipDetail {

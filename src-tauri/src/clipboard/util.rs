@@ -26,6 +26,19 @@ pub fn hash_text(text: &str) -> String {
     sha256_hex(text.as_bytes())
 }
 
+pub fn hash_rich(text: &super::model::RichText) -> String {
+    let mut raw = hash_text(&text.plain).into_bytes();
+    raw.push(0);
+    if let Some(html) = &text.html {
+        raw.extend(html.as_bytes());
+    }
+    raw.push(0);
+    if let Some(rtf) = &text.rtf {
+        raw.extend(rtf);
+    }
+    sha256_hex(&raw)
+}
+
 pub fn hash_files(paths: &[String]) -> String {
     let mut raw = Vec::new();
     for (index, path) in paths.iter().enumerate() {
@@ -47,7 +60,7 @@ pub fn hash_image(width: u32, height: u32, rgba: &[u8]) -> String {
 
 pub fn payload_hash(payload: &Payload) -> String {
     match payload {
-        Payload::Text(text) => hash_text(text),
+        Payload::Text(text) => hash_rich(text),
         Payload::Files(paths) => hash_files(paths),
         Payload::Image {
             width,

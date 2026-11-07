@@ -193,7 +193,11 @@ fn open_panel(app: &AppHandle, placement: Placement) -> tauri::Result<()> {
 }
 
 fn build_panel(app: &AppHandle) -> tauri::Result<WebviewWindow> {
-    WebviewWindowBuilder::new(app, PANEL_LABEL, WebviewUrl::App("index.html".into()))
+    WebviewWindowBuilder::new(
+        app,
+        PANEL_LABEL,
+        WebviewUrl::App("index.html?view=panel".into()),
+    )
         .title("Pixo")
         .inner_size(440.0, 560.0)
         .min_inner_size(320.0, 420.0)

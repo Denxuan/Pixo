@@ -18,7 +18,7 @@ use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
 use super::{KindGate, MonitorEvent};
 use crate::clipboard::error::ClipboardError;
-use crate::clipboard::model::{Capture, Payload, PlatformCaps};
+use crate::clipboard::model::{Capture, Payload, PlatformCaps, RichText};
 use crate::clipboard::util::{
     decode_png, encode_png, kde_secret, parse_gnome_copied, parse_uri_list, uri_list,
 };
@@ -28,9 +28,15 @@ enum Command {
     Write(Owned, Sender<Result<(), ClipboardError>>),
 }
 
+struct OwnedText {
+    plain: Vec<u8>,
+    html: Option<Vec<u8>>,
+    rtf: Option<Vec<u8>>,
+}
+
 enum Owned {
     None,
-    Text(Vec<u8>),
+    Text(OwnedText),
     Png(Vec<u8>),
     Files { uri_list: Vec<u8>, text: Vec<u8> },
 }
@@ -46,6 +52,8 @@ struct Atoms {
     incr: Atom,
     property: Atom,
     plain: Atom,
+    html: Atom,
+    rtf: Atom,
     net_wm_pid: Atom,
 }
 
@@ -62,6 +70,11 @@ struct Pending {
     targets: Vec<Atom>,
     owner: Window,
     deadline: Instant,
+    plain: Option<String>,
+    html: Option<String>,
+    rtf: Option<Vec<u8>>,
+    tried_html: bool,
+    tried_rtf: bool,
 }
 
 pub struct X11Backend {
@@ -115,8 +128,12 @@ impl X11Backend {
         self.request(|reply| Command::Read(reply))
     }
 
-    pub fn write_text(&self, text: &str) -> Result<(), ClipboardError> {
-        self.write(Owned::Text(text.as_bytes().to_vec()))
+    pub fn write_text(&self, text: &RichText) -> Result<(), ClipboardError> {
+        self.write(Owned::Text(OwnedText {
+            plain: text.plain.as_bytes().to_vec(),
+            html: text.html.as_ref().map(|html| html.as_bytes().to_vec()),
+            rtf: text.rtf.clone(),
+        }))
     }
 
     pub fn write_image(&self, width: u32, height: u32, rgba: &[u8]) -> Result<(), ClipboardError> {
@@ -251,6 +268,8 @@ impl Context {
             incr: intern(&conn, b"INCR")?,
             property: intern(&conn, b"PIXO_CLIP")?,
             plain: intern(&conn, b"text/plain")?,
+            html: intern(&conn, b"text/html")?,
+            rtf: intern(&conn, b"text/rtf")?,
             net_wm_pid: intern(&conn, b"_NET_WM_PID")?,
         };
         conn.xfixes_select_selection_input(
@@ -315,6 +334,11 @@ impl Context {
             targets: Vec::new(),
             owner,
             deadline: Instant::now() + Duration::from_millis(800),
+            plain: None,
+            html: None,
+            rtf: None,
+            tried_html: false,
+            tried_rtf: false,
         });
     }
 
@@ -462,14 +486,7 @@ impl Context {
                 target,
                 owner,
                 value,
-            } => self.finish_pending(
-                events,
-                Ok(Capture {
-                    payload: payload_from_target(&self.atoms, target, &value),
-                    sensitive: false,
-                    source_app: self.source_app(owner),
-                }),
-            ),
+            } => self.finish_body(events, target, owner, value),
         }
     }
 
@@ -594,6 +611,10 @@ impl Context {
                 self.atoms.png
             } else if request.target == self.atoms.uri_list {
                 self.atoms.uri_list
+            } else if request.target == self.atoms.html {
+                self.atoms.html
+            } else if request.target == self.atoms.rtf {
+                self.atoms.rtf
             } else {
                 self.atoms.utf8
             };
@@ -631,8 +652,14 @@ impl Context {
         let mut targets = vec![self.atoms.targets];
         match &self.owned {
             Owned::None => {}
-            Owned::Text(_) => {
-                targets.extend([self.atoms.utf8, self.atoms.plain, AtomEnum::STRING.into()])
+            Owned::Text(text) => {
+                targets.extend([self.atoms.utf8, self.atoms.plain, AtomEnum::STRING.into()]);
+                if text.html.is_some() {
+                    targets.push(self.atoms.html);
+                }
+                if text.rtf.is_some() {
+                    targets.push(self.atoms.rtf);
+                }
             }
             Owned::Png(_) => targets.push(self.atoms.png),
             Owned::Files { .. } => {
@@ -644,13 +671,15 @@ impl Context {
 
     fn bytes_for(&self, target: Atom) -> Option<Vec<u8>> {
         match &self.owned {
-            Owned::Text(bytes)
+            Owned::Text(text)
                 if target == self.atoms.utf8
                     || target == self.atoms.plain
                     || target == AtomEnum::STRING.into() =>
             {
-                Some(bytes.clone())
+                Some(text.plain.clone())
             }
+            Owned::Text(text) if target == self.atoms.html => text.html.clone(),
+            Owned::Text(text) if target == self.atoms.rtf => text.rtf.clone(),
             Owned::Png(bytes) if target == self.atoms.png => Some(bytes.clone()),
             Owned::Files { uri_list, text } if target == self.atoms.uri_list => {
                 Some(uri_list.clone())
@@ -689,7 +718,13 @@ fn preferred_target(atoms: &Atoms, targets: &[Atom], kinds: &KindGate) -> Option
         preferred.push(atoms.png);
     }
     if kinds.text() {
-        preferred.extend([atoms.utf8, atoms.plain, AtomEnum::STRING.into()]);
+        preferred.extend([
+            atoms.utf8,
+            atoms.plain,
+            AtomEnum::STRING.into(),
+            atoms.html,
+            atoms.rtf,
+        ]);
     }
     preferred
         .into_iter()
@@ -717,5 +752,89 @@ fn payload_from_target(atoms: &Atoms, target: Atom, value: &[u8]) -> Option<Payl
         let files = parse_uri_list(&text);
         return (!files.is_empty()).then_some(Payload::Files(files));
     }
-    (!text.is_empty()).then_some(Payload::Text(text))
+    (!text.is_empty()).then_some(Payload::Text(RichText::plain(text)))
+}
+
+impl X11Backend {
+    fn finish_body(
+        &mut self,
+        events: &Sender<MonitorEvent>,
+        target: Atom,
+        owner: Window,
+        value: Vec<u8>,
+    ) {
+        let plain_target = target == self.atoms.utf8
+            || target == self.atoms.plain
+            || target == AtomEnum::STRING.into();
+        let html_target = target == self.atoms.html;
+        let rtf_target = target == self.atoms.rtf;
+        if !(plain_target || html_target || rtf_target) {
+            self.finish_pending(
+                events,
+                Ok(Capture {
+                    payload: payload_from_target(&self.atoms, target, &value),
+                    sensitive: false,
+                    source_app: self.source_app(owner),
+                }),
+            );
+            return;
+        }
+        let next = {
+            let Some(pending) = &mut self.pending else {
+                return;
+            };
+            if plain_target {
+                let text = String::from_utf8_lossy(&value)
+                    .trim_end_matches('\0')
+                    .to_string();
+                pending.plain = Some(text);
+            } else if html_target {
+                pending.tried_html = true;
+                pending.html = crate::clipboard::rich::html_from_windows(&value);
+            } else if rtf_target {
+                pending.tried_rtf = true;
+                if !value.is_empty() {
+                    pending.rtf = Some(value);
+                }
+            }
+            let html = self.atoms.html;
+            let rtf = self.atoms.rtf;
+            if !pending.tried_html && pending.targets.contains(&html) {
+                Some(html)
+            } else if !pending.tried_rtf && pending.targets.contains(&rtf) {
+                Some(rtf)
+            } else {
+                None
+            }
+        };
+        if let Some(next) = next {
+            if let Some(pending) = &mut self.pending {
+                pending.stage = Stage::Body(next);
+                pending.deadline = Instant::now() + Duration::from_millis(800);
+            }
+            self.convert(next);
+            return;
+        }
+        let (plain, html, rtf) = self
+            .pending
+            .as_ref()
+            .map(|pending| {
+                (
+                    pending.plain.clone().unwrap_or_default(),
+                    pending.html.clone(),
+                    pending.rtf.clone(),
+                )
+            })
+            .unwrap_or_default();
+        let payload = (!plain.is_empty() || html.is_some() || rtf.is_some())
+            .then_some(Payload::Text(RichText { plain, html, rtf }));
+        self.finish_pending(
+            events,
+            Ok(Capture {
+                payload,
+                sensitive: false,
+                source_app: self.source_app(owner),
+            }),
+        );
+    }
 }

@@ -1,4 +1,5 @@
 import { ClipboardRequestError, clipboardGetSettings, clipboardStatus, clipboardUpdateSettings, toClipboardError } from "@/api/clipboard";
+import ShortcutField from "@/components/clipboard/ShortcutField";
 import type { ClipboardSettings, ClipboardStatus } from "@/types/clipboard";
 import { toSettingsUpdate } from "@/types/clipboard";
 import { clipboardErrorText } from "@/utils/clipboardMessage";
@@ -134,7 +135,7 @@ export default function ClipboardSettingsPage() {
             <InputNumber min={0} style={{ width: "100%" }} value={imageMb} onChange={(value) => setImageMb(typeof value === "number" ? value : null)} />
           </Form.Item>
           <Form.Item label={t("zdx.label.clipboard.shortcut")} extra={t("zdx.text.clipboard.shortcutHelp")}>
-            <Input value={draft.shortcut} onChange={(event) => setDraft({ ...draft, shortcut: event.target.value })} placeholder={t("zdx.placeholder.clipboard.shortcut")} />
+            <ShortcutField value={draft.shortcut} macos={status?.platform.includes("macos") ?? false} onChange={(shortcut) => setDraft({ ...draft, shortcut })} />
           </Form.Item>
           <Form.Item
             label={t("zdx.label.clipboard.excludedApps")}

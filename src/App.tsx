@@ -1,11 +1,13 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+import BootScreen from "@/components/BootScreen";
 import { useSharedSettings } from "@/hooks/useSharedSettings";
-import ClipboardPanel from "@/pages/ClipboardPanel";
-import AppRouter from "@/router";
 import { useSettingsStore } from "@/stores/settings";
 import { isDesktop } from "@/utils/desktop";
 import { isDarkTheme } from "@/utils/theme";
+
+const ClipboardPanel = lazy(() => import("@/pages/ClipboardPanel"));
+const AppRouter = lazy(() => import("@/router"));
 
 const colorScheme = window.matchMedia("(prefers-color-scheme: dark)");
 const subscribe = (onChange: () => void) => {
@@ -32,7 +34,9 @@ export default function App() {
   return (
     <ConfigProvider theme={{ algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm }}>
       <div className={dark ? "dark h-screen overflow-hidden" : "h-screen overflow-hidden"} style={{ colorScheme: dark ? "dark" : "light", background: panel ? "transparent" : undefined }}>
-        {panel ? <ClipboardPanel /> : <AppRouter />}
+        <Suspense fallback={panel ? null : <BootScreen />}>
+          {panel ? <ClipboardPanel /> : <AppRouter />}
+        </Suspense>
       </div>
     </ConfigProvider>
   );

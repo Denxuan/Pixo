@@ -21,7 +21,7 @@ use objc2_foundation::{
 use super::{KindGate, MonitorEvent, Platform};
 use crate::clipboard::error::ClipboardError;
 use crate::clipboard::io;
-use crate::clipboard::model::{Capture, Payload, PlatformCaps, SourceMark};
+use crate::clipboard::model::{Capture, Payload, PlatformCaps, RichText, SourceMark};
 use crate::clipboard::util::{
     decode_image_bytes, macos_sensitive, opaque_cache_file, path_to_file_uri,
 };
@@ -75,9 +75,9 @@ impl Platform for MacPlatform {
         on_main(move || read_pasteboard(files, image, text))
     }
 
-    fn write_text(&self, text: &str) -> Result<(), ClipboardError> {
-        let text = text.to_string();
-        on_main(move || io::write_text(&text))
+    fn write_text(&self, text: &RichText) -> Result<(), ClipboardError> {
+        let text = text.clone();
+        on_main(move || write_rich(&text))
     }
 
     fn write_image(&self, width: u32, height: u32, rgba: &[u8]) -> Result<(), ClipboardError> {
@@ -190,12 +190,59 @@ fn read_pasteboard(
             });
         }
     }
-    let payload = io::read_text_or_image_filtered(image_enabled, text_enabled)?;
+    let mut payload = io::read_text_or_image_filtered(image_enabled, text_enabled)?;
+    if text_enabled {
+        if let Some(Payload::Text(text)) = &mut payload {
+            text.html = pasteboard_string(&pasteboard, "public.html")
+                .and_then(|html| crate::clipboard::rich::html_from_windows(html.as_bytes()));
+            text.rtf = pasteboard_data(&pasteboard, "public.rtf");
+        }
+    }
     Ok(Capture {
         payload,
         sensitive: false,
         source_app,
     })
+}
+
+fn pasteboard_string(pasteboard: &NSPasteboard, name: &str) -> Option<String> {
+    let kind = NSString::from_str(name);
+    let value = pasteboard.stringForType(&kind)?.to_string();
+    (!value.trim().is_empty()).then_some(value)
+}
+
+fn pasteboard_data(pasteboard: &NSPasteboard, name: &str) -> Option<Vec<u8>> {
+    let kind = NSString::from_str(name);
+    let bytes = pasteboard.dataForType(&kind)?.to_vec();
+    (!bytes.is_empty()).then_some(bytes)
+}
+
+fn write_rich(text: &RichText) -> Result<(), ClipboardError> {
+    if !text.formatted() {
+        return io::write_text(&text.plain);
+    }
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
+    let plain = NSString::from_str(&text.plain);
+    let string_type = unsafe { &*NSPasteboardTypeString };
+    if !pasteboard.setString_forType(&plain, string_type) {
+        return Err(ClipboardError::new("busy"));
+    }
+    if let Some(html) = &text.html {
+        let kind = NSString::from_str("public.html");
+        let value = NSString::from_str(html);
+        if !pasteboard.setString_forType(&value, &kind) {
+            return Err(ClipboardError::new("busy"));
+        }
+    }
+    if let Some(rtf) = &text.rtf {
+        let kind = NSString::from_str("public.rtf");
+        let data = unsafe { NSData::dataWithBytes_length(rtf.as_ptr().cast(), rtf.len()) };
+        if !pasteboard.setData_forType(Some(&data), &kind) {
+            return Err(ClipboardError::new("busy"));
+        }
+    }
+    Ok(())
 }
 
 fn pasteboard_types(pasteboard: &NSPasteboard) -> Vec<String> {

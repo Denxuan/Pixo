@@ -69,7 +69,8 @@
         "skipSensitive": "Skip sensitive content",
         "image": "Image",
         "files": "Files",
-        "text": "Text"
+        "text": "Text",
+        "formatted": "Formatted"
       }
     },
     "text": {
@@ -123,7 +124,9 @@
         "excludedHelp": "One app identifier per line. It must match the source shown on an item exactly.",
         "excludedWayland": "This Wayland session cannot identify the source app, so this exclusion list has no effect.",
         "macosAccess": "macOS may ask for permission the first time the clipboard is read. If items do not appear, allow Pixo to access the clipboard in System Settings under Privacy & Security.",
-        "shortcutHelp": "Example: CommandOrControl+Shift+V. If the shortcut cannot be registered, this change is not saved.",
+        "shortcutHelp": "Click the field and press the new shortcut. Esc cancels. Include Command, Control, Option, or Shift. If the shortcut cannot be registered, this change is not saved.",
+        "shortcutRecording": "Press the new shortcut",
+        "shortcutNeedModifier": "Press it together with a modifier key.",
         "kindDisabled": "This kind of content is turned off in settings.",
         "copiedTimes_one": "Copied {{count}} time",
         "copiedTimes_other": "Copied {{count}} times",

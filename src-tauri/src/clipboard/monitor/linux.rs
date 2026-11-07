@@ -106,7 +106,7 @@ impl Platform for LinuxPlatform {
         }
     }
 
-    fn write_text(&self, text: &str) -> Result<(), ClipboardError> {
+    fn write_text(&self, text: &crate::clipboard::model::RichText) -> Result<(), ClipboardError> {
         match &self.backend {
             Backend::Wayland(backend) => backend.write_text(text),
             Backend::X11(backend) => backend.write_text(text),

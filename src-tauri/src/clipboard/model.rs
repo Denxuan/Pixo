@@ -30,9 +30,31 @@ impl ClipKind {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RichText {
+    pub plain: String,
+    pub html: Option<String>,
+    pub rtf: Option<Vec<u8>>,
+}
+
+impl RichText {
+    pub fn plain(text: impl Into<String>) -> Self {
+        Self {
+            plain: text.into(),
+            html: None,
+            rtf: None,
+        }
+    }
+
+    pub fn formatted(&self) -> bool {
+        self.html.as_ref().is_some_and(|html| !html.is_empty())
+            || self.rtf.as_ref().is_some_and(|rtf| !rtf.is_empty())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Payload {
-    Text(String),
+    Text(RichText),
     Image {
         width: u32,
         height: u32,
@@ -80,6 +102,7 @@ pub struct Summary {
     pub created_at: i64,
     pub last_copied_at: i64,
     pub copy_count: i64,
+    pub formatted: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

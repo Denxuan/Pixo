@@ -27,7 +27,8 @@ use windows::core::w;
 use super::{KindGate, MonitorEvent, Platform};
 use crate::clipboard::error::ClipboardError;
 use crate::clipboard::io;
-use crate::clipboard::model::{Capture, Payload, PlatformCaps};
+use crate::clipboard::model::{Capture, Payload, PlatformCaps, RichText};
+use crate::clipboard::rich::html_from_windows;
 use crate::clipboard::util::{decode_dib, windows_history_excluded};
 
 const CF_DIB: u32 = 8;
@@ -107,8 +108,12 @@ impl Platform for WindowsPlatform {
         with_clipboard(read_open_clipboard)
     }
 
-    fn write_text(&self, text: &str) -> Result<(), ClipboardError> {
-        io::write_text(text)
+    fn write_text(&self, text: &RichText) -> Result<(), ClipboardError> {
+        if text.html.is_none() && text.rtf.is_none() {
+            return io::write_text(&text.plain);
+        }
+        let text = text.clone();
+        with_clipboard(move || write_rich_open(&text))
     }
 
     fn write_image(&self, width: u32, height: u32, rgba: &[u8]) -> Result<(), ClipboardError> {
@@ -250,15 +255,18 @@ fn read_open_clipboard() -> Result<Capture, ClipboardError> {
                 });
             }
         }
-        if allow_text && IsClipboardFormatAvailable(CF_UNICODETEXT).is_ok() {
-            if let Some(text) = read_text()? {
-                if !text.is_empty() {
-                    return Ok(Capture {
-                        payload: Some(Payload::Text(text)),
-                        sensitive: false,
-                        source_app,
-                    });
-                }
+        if allow_text {
+            let plain = read_text()?.unwrap_or_default();
+            let html =
+                read_registered(w!("HTML Format"))?.and_then(|bytes| html_from_windows(&bytes));
+            let rtf = read_registered(w!("Rich Text Format"))?;
+            let text = RichText { plain, html, rtf };
+            if !text.plain.is_empty() || text.formatted() {
+                return Ok(Capture {
+                    payload: Some(Payload::Text(text)),
+                    sensitive: false,
+                    source_app,
+                });
             }
         }
         Ok(Capture {
@@ -391,6 +399,34 @@ unsafe fn clipboard_owner() -> Option<String> {
     name.filter(|path| !path.is_empty())
 }
 
+fn write_rich_open(text: &RichText) -> Result<(), ClipboardError> {
+    unsafe {
+        EmptyClipboard()?;
+        set_unicode_text(&text.plain)?;
+        if let Some(html) = &text.html {
+            let format = RegisterClipboardFormatW(w!("HTML Format"));
+            if format != 0 {
+                set_bytes(format, &crate::clipboard::rich::windows_html(html))?;
+            }
+        }
+        if let Some(rtf) = &text.rtf {
+            let format = RegisterClipboardFormatW(w!("Rich Text Format"));
+            if format != 0 {
+                set_bytes(format, rtf)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+unsafe fn read_registered(name: windows::core::PCWSTR) -> Result<Option<Vec<u8>>, ClipboardError> {
+    let format = RegisterClipboardFormatW(name);
+    if format == 0 || IsClipboardFormatAvailable(format).is_err() {
+        return Ok(None);
+    }
+    read_bytes(format)
+}
+
 fn write_files_open(paths: &[String]) -> Result<(), ClipboardError> {
     unsafe {
         EmptyClipboard()?;
@@ -402,16 +438,20 @@ fn write_files_open(paths: &[String]) -> Result<(), ClipboardError> {
 
 unsafe fn set_unicode_text(text: &str) -> Result<(), ClipboardError> {
     let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-    let bytes = wide.len() * 2;
-    let memory = GlobalAlloc(GMEM_MOVEABLE, bytes).map_err(|_| ClipboardError::new("storage"))?;
-    let pointer = GlobalLock(memory) as *mut u16;
+    let bytes = std::slice::from_raw_parts(wide.as_ptr().cast::<u8>(), wide.len() * 2);
+    set_bytes(CF_UNICODETEXT, bytes)
+}
+
+unsafe fn set_bytes(format: u32, bytes: &[u8]) -> Result<(), ClipboardError> {
+    let memory =
+        GlobalAlloc(GMEM_MOVEABLE, bytes.len()).map_err(|_| ClipboardError::new("storage"))?;
+    let pointer = GlobalLock(memory);
     if pointer.is_null() {
         return Err(ClipboardError::new("storage"));
     }
-    std::ptr::copy_nonoverlapping(wide.as_ptr(), pointer, wide.len());
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer.cast(), bytes.len());
     let _ = GlobalUnlock(memory);
-    SetClipboardData(CF_UNICODETEXT, Some(HANDLE(memory.0)))
-        .map_err(|_| ClipboardError::new("busy"))?;
+    SetClipboardData(format, Some(HANDLE(memory.0))).map_err(|_| ClipboardError::new("busy"))?;
     Ok(())
 }
 

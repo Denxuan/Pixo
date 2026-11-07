@@ -15,8 +15,8 @@ use super::model::{
 use super::monitor::{self, MonitorEvent};
 use super::store::{self, Store, UpsertRequest, UpsertResult};
 use super::util::{
-    app_excluded, decode_png, encode_png, files_size_bytes, hash_files, hash_image, hash_text,
-    image_rgba_len, now_millis, thumbnail_png,
+    app_excluded, decode_png, encode_png, files_size_bytes, hash_files, hash_image, image_rgba_len,
+    now_millis, thumbnail_png,
 };
 use crate::shortcut;
 
@@ -140,8 +140,8 @@ impl ClipboardState {
         let detail = lock(&self.inner.store).get(id)?;
         match detail.kind.as_str() {
             "text" => {
-                let text = detail.text.unwrap_or_default();
-                self.arm(&hash_text(&text));
+                let text = lock(&self.inner.store).rich_text(id)?;
+                self.arm(&crate::clipboard::util::hash_rich(&text));
                 if let Err(error) = self.inner.platform.write_text(&text) {
                     self.disarm();
                     return Err(error);
@@ -352,6 +352,16 @@ impl Inner {
             self.emit_status();
             return Ok(None);
         }
+        let payload = match payload {
+            Payload::Text(text) => {
+                let text = crate::clipboard::rich::fit(
+                    crate::clipboard::rich::normalize(text),
+                    settings.max_text_bytes,
+                );
+                Payload::Text(text)
+            }
+            other => other,
+        };
         if payload_is_empty(&payload) {
             return Ok(None);
         }
@@ -375,6 +385,8 @@ impl Inner {
             kind: prepared.kind,
             hash: &prepared.hash,
             text: prepared.text,
+            html: prepared.html,
+            rtf: prepared.rtf,
             files_json: prepared.files_json,
             image_width: prepared.image_width,
             image_height: prepared.image_height,
@@ -476,6 +488,8 @@ struct Prepared {
     kind: ClipKind,
     hash: String,
     text: Option<String>,
+    html: Option<String>,
+    rtf: Option<Vec<u8>>,
     files_json: Option<String>,
     image_width: Option<u32>,
     image_height: Option<u32>,
@@ -488,9 +502,13 @@ fn prepare_payload(payload: &Payload) -> Result<Prepared, ClipboardError> {
     match payload {
         Payload::Text(text) => Ok(Prepared {
             kind: ClipKind::Text,
-            hash: hash_text(text),
-            size_bytes: text.len() as i64,
-            text: Some(text.clone()),
+            hash: crate::clipboard::util::hash_rich(text),
+            size_bytes: (text.plain.len()
+                + text.html.as_ref().map(String::len).unwrap_or(0)
+                + text.rtf.as_ref().map(Vec::len).unwrap_or(0)) as i64,
+            text: Some(text.plain.clone()),
+            html: text.html.clone(),
+            rtf: text.rtf.clone(),
             files_json: None,
             image_width: None,
             image_height: None,
@@ -502,6 +520,8 @@ fn prepare_payload(payload: &Payload) -> Result<Prepared, ClipboardError> {
             hash: hash_files(files),
             size_bytes: files_size_bytes(files),
             text: None,
+            html: None,
+            rtf: None,
             files_json: Some(store::files_json(files)?),
             image_width: None,
             image_height: None,
@@ -529,6 +549,8 @@ fn prepare_payload(payload: &Payload) -> Result<Prepared, ClipboardError> {
                 hash: hash_image(*width, *height, rgba),
                 size_bytes: rgba.len() as i64,
                 text: None,
+                html: None,
+                rtf: None,
                 files_json: None,
                 image_width: Some(*width),
                 image_height: Some(*height),
@@ -541,7 +563,7 @@ fn prepare_payload(payload: &Payload) -> Result<Prepared, ClipboardError> {
 
 fn payload_is_empty(payload: &Payload) -> bool {
     match payload {
-        Payload::Text(text) => text.is_empty(),
+        Payload::Text(text) => text.plain.is_empty(),
         Payload::Files(files) => files.is_empty(),
         Payload::Image { .. } => false,
     }
@@ -549,7 +571,7 @@ fn payload_is_empty(payload: &Payload) -> bool {
 
 fn payload_limit_bytes(payload: &Payload) -> Option<u64> {
     match payload {
-        Payload::Text(text) => Some(text.len() as u64),
+        Payload::Text(text) => Some(text.plain.len() as u64),
         Payload::Image { rgba, .. } => Some(rgba.len() as u64),
         Payload::Files(_) => None,
     }

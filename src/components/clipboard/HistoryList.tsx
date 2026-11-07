@@ -131,6 +131,7 @@ export default function HistoryList({
                   <span>{formatRelativeTime(item.lastCopiedAt, i18n.language)}</span>
                   <span>{formatBytes(item.sizeBytes, i18n.language)}</span>
                   <span>{t("zdx.text.clipboard.copiedTimes", { count: item.copyCount })}</span>
+                  {item.formatted ? <span>{t("zdx.label.clipboard.formatted")}</span> : null}
                   {item.sourceApp ? <SourceApp source={item.sourceApp} /> : null}
                 </Space>
               }

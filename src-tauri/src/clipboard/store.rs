@@ -22,7 +22,9 @@ CREATE TABLE IF NOT EXISTS clip_items (
   pinned INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   last_copied_at INTEGER NOT NULL,
-  copy_count INTEGER NOT NULL DEFAULT 1
+  copy_count INTEGER NOT NULL DEFAULT 1,
+  html TEXT,
+  rtf BLOB
 );
 CREATE INDEX IF NOT EXISTS idx_clip_items_order ON clip_items (pinned DESC, last_copied_at DESC, id DESC);
 CREATE TABLE IF NOT EXISTS clip_settings (
@@ -31,7 +33,7 @@ CREATE TABLE IF NOT EXISTS clip_settings (
 );
 ";
 
-const SELECT_COLUMNS: &str = "id, kind, content_hash, text, files_json, image_width, image_height, size_bytes, source_app, pinned, created_at, last_copied_at, copy_count";
+const SELECT_COLUMNS: &str = "id, kind, content_hash, text, files_json, image_width, image_height, size_bytes, source_app, pinned, created_at, last_copied_at, copy_count, CASE WHEN (html IS NOT NULL AND length(html) > 0) OR (rtf IS NOT NULL AND length(rtf) > 0) THEN 1 ELSE 0 END";
 
 #[derive(Debug, Clone)]
 struct ItemRow {
@@ -48,6 +50,7 @@ struct ItemRow {
     created_at: i64,
     last_copied_at: i64,
     copy_count: i64,
+    formatted: i64,
 }
 
 #[derive(Debug)]
@@ -60,6 +63,8 @@ pub struct UpsertRequest<'a> {
     pub image_height: Option<u32>,
     pub size_bytes: i64,
     pub source_app: Option<String>,
+    pub html: Option<String>,
+    pub rtf: Option<Vec<u8>>,
     pub now: i64,
     pub self_write: bool,
 }
@@ -93,7 +98,15 @@ impl Store {
             .map_err(storage)?;
         if version < 1 {
             conn.execute_batch(SCHEMA).map_err(storage)?;
-            conn.pragma_update(None, "user_version", 1)
+            conn.pragma_update(None, "user_version", 2)
+                .map_err(storage)?;
+        } else if version < 2 {
+            conn.execute_batch(
+                "ALTER TABLE clip_items ADD COLUMN html TEXT;
+                 ALTER TABLE clip_items ADD COLUMN rtf BLOB;",
+            )
+            .map_err(storage)?;
+            conn.pragma_update(None, "user_version", 2)
                 .map_err(storage)?;
         }
         Ok(Self { conn })
@@ -179,8 +192,9 @@ impl Store {
             .execute(
                 "INSERT INTO clip_items (
                     kind, content_hash, text, files_json, image_width, image_height,
-                    size_bytes, source_app, pinned, created_at, last_copied_at, copy_count
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?9, 1)",
+                    size_bytes, source_app, pinned, created_at, last_copied_at, copy_count,
+                    html, rtf
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?9, 1, ?10, ?11)",
                 params![
                     request.kind.as_str(),
                     request.hash,
@@ -191,6 +205,8 @@ impl Store {
                     request.size_bytes,
                     request.source_app,
                     request.now,
+                    request.html,
+                    request.rtf,
                 ],
             )
             .map_err(storage)?;
@@ -282,6 +298,30 @@ impl Store {
             return Err(ClipboardError::new("not_found"));
         }
         Ok(hash)
+    }
+
+    pub fn rich_text(&self, id: i64) -> Result<super::model::RichText, ClipboardError> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT IFNULL(text, ''), html, rtf FROM clip_items WHERE id = ?1 AND kind = 'text'",
+                params![id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<Vec<u8>>>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(storage)?
+            .ok_or_else(|| ClipboardError::new("not_found"))?;
+        Ok(super::model::RichText {
+            plain: row.0,
+            html: row.1.filter(|html| !html.is_empty()),
+            rtf: row.2.filter(|rtf| !rtf.is_empty()),
+        })
     }
 
     pub fn set_pinned(&mut self, id: i64, pinned: bool) -> Result<(), ClipboardError> {
@@ -527,6 +567,7 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ItemRow> {
         created_at: row.get(10)?,
         last_copied_at: row.get(11)?,
         copy_count: row.get(12)?,
+        formatted: row.get(13)?,
     })
 }
 
@@ -555,6 +596,7 @@ impl ItemRow {
             created_at: self.created_at,
             last_copied_at: self.last_copied_at,
             copy_count: self.copy_count,
+            formatted: self.formatted != 0,
         }
     }
 
@@ -721,6 +763,8 @@ mod tests {
             image_height: None,
             size_bytes: text.len() as i64,
             source_app: Some("com.example.editor".into()),
+            html: None,
+            rtf: None,
             now,
             self_write: false,
         }
@@ -812,6 +856,81 @@ mod tests {
     }
 
     #[test]
+    fn adds_rich_columns_to_an_existing_database() {
+        let directory = std::env::temp_dir().join(format!(
+            "pixo-clipboard-v1-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database = directory.join("history.db");
+        {
+            let conn = Connection::open(&database).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE clip_items (
+                   id INTEGER PRIMARY KEY,
+                   kind TEXT NOT NULL,
+                   content_hash TEXT NOT NULL UNIQUE,
+                   text TEXT,
+                   files_json TEXT,
+                   image_width INTEGER,
+                   image_height INTEGER,
+                   size_bytes INTEGER NOT NULL,
+                   source_app TEXT,
+                   pinned INTEGER NOT NULL DEFAULT 0,
+                   created_at INTEGER NOT NULL,
+                   last_copied_at INTEGER NOT NULL,
+                   copy_count INTEGER NOT NULL DEFAULT 1
+                 );",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO clip_items (
+                    kind, content_hash, text, size_bytes, pinned, created_at, last_copied_at, copy_count
+                 ) VALUES ('text', 'old-hash', 'old text', 8, 0, 1, 1, 1)",
+                [],
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+        }
+        let store = Store::open(&database).unwrap();
+        let item = store
+            .list(None, None, false, None, 10)
+            .unwrap()
+            .items
+            .remove(0);
+        assert_eq!(item.preview, "old text");
+        assert!(!item.formatted);
+        let rich = store.rich_text(item.id).unwrap();
+        assert!(rich.html.is_none());
+        assert!(rich.rtf.is_none());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn keeps_html_and_rtf_for_copy() {
+        let (mut store, directory) = test_store();
+        let mut request = text_request("rich", "Hello", 1);
+        request.html = Some("<b>Hello</b>".into());
+        request.rtf = Some(b"{\\rtf1 Hello}".to_vec());
+        store.upsert(request).unwrap();
+        let item = store
+            .list(None, None, false, None, 10)
+            .unwrap()
+            .items
+            .remove(0);
+        assert!(item.formatted);
+        let rich = store.rich_text(item.id).unwrap();
+        assert_eq!(rich.plain, "Hello");
+        assert_eq!(rich.html.as_deref(), Some("<b>Hello</b>"));
+        assert_eq!(rich.rtf.as_deref(), Some(b"{\\rtf1 Hello}".as_slice()));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn retention_does_not_delete_pinned_rows() {
         let (mut store, directory) = test_store();
         store.upsert(text_request("old", "old", 1)).unwrap();
@@ -836,7 +955,7 @@ mod tests {
             .unwrap()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
         let store = Store::open(&database).unwrap();
         assert_eq!(
             store.list(None, None, false, None, 10).unwrap().items[0].preview,

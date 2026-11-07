@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
 use super::error::ClipboardError;
-use super::model::{Capture, PlatformCaps, SourceMark};
+use super::model::{Capture, PlatformCaps, RichText, SourceMark};
 
 pub enum MonitorEvent {
     Capture(Capture),
@@ -51,7 +51,7 @@ pub trait Platform: Send + Sync {
         let _ = (text, image, files);
     }
     fn read_now(&self) -> Result<Capture, ClipboardError>;
-    fn write_text(&self, text: &str) -> Result<(), ClipboardError>;
+    fn write_text(&self, text: &RichText) -> Result<(), ClipboardError>;
     fn write_image(&self, width: u32, height: u32, rgba: &[u8]) -> Result<(), ClipboardError>;
     fn write_files(&self, paths: &[String]) -> Result<(), ClipboardError>;
     fn prepare_file_path(&self, path: &str) -> Option<String> {
@@ -145,7 +145,7 @@ impl Platform for UnsupportedPlatform {
         ))
     }
 
-    fn write_text(&self, _text: &str) -> Result<(), ClipboardError> {
+    fn write_text(&self, _text: &RichText) -> Result<(), ClipboardError> {
         Err(ClipboardError::new("unsupported"))
     }
 

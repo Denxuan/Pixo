@@ -11,7 +11,7 @@ use wl_clipboard_rs::watch::{ClipboardEvent, ClipboardType as WatchClipboard, Wa
 
 use super::{KindGate, MonitorEvent};
 use crate::clipboard::error::ClipboardError;
-use crate::clipboard::model::{Capture, Payload, PlatformCaps};
+use crate::clipboard::model::{Capture, Payload, PlatformCaps, RichText};
 use crate::clipboard::util::{
     decode_png, kde_secret, parse_gnome_copied, parse_uri_list, uri_list,
 };
@@ -65,10 +65,24 @@ impl WaylandBackend {
         })
     }
 
-    pub fn write_text(&self, text: &str) -> Result<(), ClipboardError> {
-        Options::new()
-            .copy(Source::Bytes(text.as_bytes().into()), CopyMime::Text)
-            .map_err(map_copy)
+    pub fn write_text(&self, text: &RichText) -> Result<(), ClipboardError> {
+        let mut sources = vec![MimeSource {
+            source: Source::Bytes(text.plain.as_bytes().into()),
+            mime_type: CopyMime::Text,
+        }];
+        if let Some(html) = &text.html {
+            sources.push(MimeSource {
+                source: Source::Bytes(html.as_bytes().into()),
+                mime_type: CopyMime::Specific("text/html".into()),
+            });
+        }
+        if let Some(rtf) = &text.rtf {
+            sources.push(MimeSource {
+                source: Source::Bytes(rtf.clone().into_boxed_slice()),
+                mime_type: CopyMime::Specific("text/rtf".into()),
+            });
+        }
+        Options::new().copy_multi(sources).map_err(map_copy)
     }
 
     pub fn write_image(&self, width: u32, height: u32, rgba: &[u8]) -> Result<(), ClipboardError> {
@@ -176,11 +190,33 @@ fn read_selected(
         });
     };
     let data = read(mime)?;
+    let mut payload = payload_for_mime(mime, &data);
+    if let Some(Payload::Text(text)) = &mut payload {
+        if let Some(offered) = offered_mime(mimes, &["text/html"]) {
+            if let Ok(bytes) = read(offered) {
+                text.html = crate::clipboard::rich::html_from_windows(&bytes);
+            }
+        }
+        if let Some(offered) = offered_mime(mimes, &["text/rtf", "application/rtf"]) {
+            if let Ok(bytes) = read(offered) {
+                if !bytes.is_empty() {
+                    text.rtf = Some(bytes);
+                }
+            }
+        }
+    }
     Ok(Capture {
-        payload: payload_for_mime(mime, &data),
+        payload,
         sensitive: false,
         source_app: None,
     })
+}
+
+fn offered_mime<'a>(mimes: &'a [String], names: &[&str]) -> Option<&'a str> {
+    mimes
+        .iter()
+        .find(|mime| names.iter().any(|name| mime.eq_ignore_ascii_case(name)))
+        .map(String::as_str)
 }
 
 fn choose_mime(mimes: &[String], kinds: &KindGate) -> Option<&'static str> {
@@ -221,7 +257,7 @@ fn payload_for_mime(mime: &str, data: &[u8]) -> Option<Payload> {
         return (!files.is_empty()).then_some(Payload::Files(files));
     }
     let text = text.trim_end_matches('\0').to_string();
-    (!text.is_empty()).then_some(Payload::Text(text))
+    (!text.is_empty()).then_some(Payload::Text(RichText::plain(text)))
 }
 
 fn read_mime(mime: &str) -> Result<Vec<u8>, ClipboardError> {

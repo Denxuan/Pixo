@@ -3,6 +3,7 @@ mod error;
 mod io;
 mod model;
 mod monitor;
+mod rich;
 mod service;
 mod store;
 mod util;

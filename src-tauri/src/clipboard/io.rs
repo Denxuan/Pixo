@@ -41,12 +41,15 @@ pub fn read_text_or_image_filtered(
         return Ok(None);
     }
     match clipboard.get_text() {
-        Ok(text) if !text.is_empty() => Ok(Some(Payload::Text(text))),
+        Ok(text) if !text.is_empty() => {
+            Ok(Some(Payload::Text(super::model::RichText::plain(text))))
+        }
         Ok(_) | Err(arboard::Error::ContentNotAvailable) => Ok(None),
         Err(error) => Err(map_arboard(error)),
     }
 }
 
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 pub fn write_text(text: &str) -> Result<(), ClipboardError> {
     let mut clipboard = Clipboard::new().map_err(map_arboard)?;
     clipboard.set_text(text).map_err(map_arboard)

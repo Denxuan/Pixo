@@ -3,6 +3,7 @@ mod panel_anchor;
 mod shortcut;
 mod tray;
 
+use tauri::window::Color;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -68,6 +69,36 @@ pub(crate) fn ensure_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .title("pixo")
         .inner_size(1100.0, 720.0)
         .min_inner_size(860.0, 600.0)
+        .background_color(window_canvas())
         .build()?;
     Ok(())
+}
+
+fn window_canvas() -> Color {
+    if startup_dark() {
+        Color(0, 0, 0, 255)
+    } else {
+        Color(245, 245, 245, 255)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn startup_dark() -> bool {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+
+    let Some(marker) = MainThreadMarker::new() else {
+        return false;
+    };
+    NSApplication::sharedApplication(marker)
+        .effectiveAppearance()
+        .name()
+        .to_string()
+        .to_ascii_lowercase()
+        .contains("dark")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn startup_dark() -> bool {
+    false
 }
