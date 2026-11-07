@@ -7,12 +7,16 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use super::error::{log_clipboard, ClipboardError};
-use super::model::{Capture, ClipKind, CopyOutcome, Detail, ListPage, Payload, Settings, SettingsUpdate, Status, Summary};
+use super::error::{ClipboardError, log_clipboard};
+use super::model::{
+    Capture, ClipKind, CopyOutcome, Detail, ListPage, Payload, Settings, SettingsUpdate, Status,
+    Summary,
+};
 use super::monitor::{self, MonitorEvent};
 use super::store::{self, Store, UpsertRequest, UpsertResult};
 use super::util::{
-    app_excluded, decode_png, encode_png, hash_files, hash_image, hash_text, image_rgba_len, now_millis, thumbnail_png,
+    app_excluded, decode_png, encode_png, hash_files, hash_image, hash_text, image_rgba_len,
+    now_millis, thumbnail_png,
 };
 use crate::shortcut;
 
@@ -50,7 +54,11 @@ pub fn initialize(app: AppHandle) -> Result<ClipboardState, ClipboardError> {
     store.save_settings(&settings)?;
     let (sender, receiver) = mpsc::channel();
     let platform = monitor::start(sender, Arc::new(std::sync::atomic::AtomicBool::new(false)))?;
-    platform.set_kinds(settings.record_text, settings.record_image, settings.record_files);
+    platform.set_kinds(
+        settings.record_text,
+        settings.record_image,
+        settings.record_files,
+    );
     let caps = platform.capabilities();
     platform.set_recording(settings.enabled && !settings.paused && caps.can_monitor);
     let pruned = store.apply_prune(&settings, now_millis())?;
@@ -135,17 +143,37 @@ impl ClipboardState {
                     self.disarm();
                     return Err(error);
                 }
-                Ok(CopyOutcome { missing: Vec::new() })
+                Ok(CopyOutcome {
+                    missing: Vec::new(),
+                })
             }
             "files" => {
-                let missing = detail
-                    .files
-                    .iter()
-                    .filter(|path| !Path::new(path).exists())
-                    .cloned()
-                    .collect();
-                self.arm(&hash_files(&detail.files));
-                if let Err(error) = self.inner.platform.write_files(&detail.files) {
+                let mut writable = Vec::new();
+                let mut missing = Vec::new();
+                for path in &detail.files {
+                    match self.inner.platform.prepare_file_path(path) {
+                        Some(real) => {
+                            if !Path::new(&real).exists() {
+                                missing.push(path.clone());
+                            }
+                            writable.push(real);
+                        }
+                        None => missing.push(path.clone()),
+                    }
+                }
+                if writable.is_empty() {
+                    return Err(ClipboardError::new("file_missing"));
+                }
+                let hash = hash_files(&writable);
+                if writable != detail.files {
+                    let files_json = store::files_json(&writable)?;
+                    let size_bytes = writable.iter().map(|path| path.len() as i64).sum();
+                    if lock(&self.inner.store).replace_files(id, &hash, &files_json, size_bytes)? {
+                        self.inner.emit_change(id, "updated");
+                    }
+                }
+                self.arm(&hash);
+                if let Err(error) = self.inner.platform.write_files(&writable) {
                     self.disarm();
                     return Err(error);
                 }
@@ -164,7 +192,9 @@ impl ClipboardState {
                     self.disarm();
                     return Err(error);
                 }
-                Ok(CopyOutcome { missing: Vec::new() })
+                Ok(CopyOutcome {
+                    missing: Vec::new(),
+                })
             }
             _ => Err(ClipboardError::new("not_found")),
         }
@@ -179,7 +209,8 @@ impl ClipboardState {
     pub fn delete(&self, ids: Vec<i64>) -> Result<(), ClipboardError> {
         let removal = lock(&self.inner.store).delete_ids(&ids)?;
         remove_images(&self.inner.images_dir, &removal.image_hashes);
-        self.inner.emit_change(ids.first().copied().unwrap_or(0), "removed");
+        self.inner
+            .emit_change(ids.first().copied().unwrap_or(0), "removed");
         Ok(())
     }
 
@@ -202,7 +233,9 @@ impl ClipboardState {
             }
         };
         *lock(&self.inner.last_error) = None;
-        self.inner.record(capture, true)?.ok_or_else(|| ClipboardError::new("not_found"))
+        self.inner
+            .record(capture, true)?
+            .ok_or_else(|| ClipboardError::new("not_found"))
     }
 
     pub fn status(&self) -> Status {
@@ -259,7 +292,11 @@ impl ClipboardState {
             return Err(error);
         }
         *lock(&self.inner.settings) = proposed.clone();
-        self.inner.platform.set_kinds(proposed.record_text, proposed.record_image, proposed.record_files);
+        self.inner.platform.set_kinds(
+            proposed.record_text,
+            proposed.record_image,
+            proposed.record_files,
+        );
         self.inner.apply_recording(&proposed);
         if plan.count > 0 {
             let removal = lock(&self.inner.store).apply_prune(&proposed, now_millis())?;
@@ -374,7 +411,8 @@ impl Inner {
 
     fn apply_recording(&self, settings: &Settings) {
         let caps = self.platform.capabilities();
-        self.platform.set_recording(settings.enabled && !settings.paused && caps.can_monitor);
+        self.platform
+            .set_recording(settings.enabled && !settings.paused && caps.can_monitor);
     }
 
     fn sync_shortcut(&self) -> Result<(), ClipboardError> {
@@ -396,7 +434,14 @@ impl Inner {
         let access = self.platform.access();
         let last_error = *lock(&self.last_error);
         Status {
-            state: status_state(caps.can_monitor, access.as_deref(), last_error, settings.enabled, settings.paused).to_string(),
+            state: status_state(
+                caps.can_monitor,
+                access.as_deref(),
+                last_error,
+                settings.enabled,
+                settings.paused,
+            )
+            .to_string(),
             platform: caps.platform.to_string(),
             can_monitor: caps.can_monitor,
             can_read_source_app: caps.can_read_source_app,
@@ -460,7 +505,11 @@ fn prepare_payload(payload: &Payload) -> Result<Prepared, ClipboardError> {
             png: None,
             thumb: None,
         }),
-        Payload::Image { width, height, rgba } => {
+        Payload::Image {
+            width,
+            height,
+            rgba,
+        } => {
             if image_rgba_len(*width, *height) != Some(rgba.len()) {
                 return Err(ClipboardError::new("invalid_input"));
             }
@@ -578,11 +627,26 @@ mod tests {
 
     #[test]
     fn status_prefers_support_then_permission_then_switch() {
-        assert_eq!(status_state(false, Some("deny"), None, true, false), "unsupported");
-        assert_eq!(status_state(true, Some("deny"), None, true, false), "permission_denied");
-        assert_eq!(status_state(true, None, Some("permission_denied"), false, false), "permission_denied");
-        assert_eq!(status_state(true, Some("allow"), None, false, false), "disabled");
+        assert_eq!(
+            status_state(false, Some("deny"), None, true, false),
+            "unsupported"
+        );
+        assert_eq!(
+            status_state(true, Some("deny"), None, true, false),
+            "permission_denied"
+        );
+        assert_eq!(
+            status_state(true, None, Some("permission_denied"), false, false),
+            "permission_denied"
+        );
+        assert_eq!(
+            status_state(true, Some("allow"), None, false, false),
+            "disabled"
+        );
         assert_eq!(status_state(true, None, None, true, true), "paused");
-        assert_eq!(status_state(true, Some("ask"), None, true, false), "running");
+        assert_eq!(
+            status_state(true, Some("ask"), None, true, false),
+            "running"
+        );
     }
 }

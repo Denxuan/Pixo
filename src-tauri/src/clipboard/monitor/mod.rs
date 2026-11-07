@@ -1,6 +1,6 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 
 use super::error::ClipboardError;
 use super::model::{Capture, PlatformCaps};
@@ -54,30 +54,43 @@ pub trait Platform: Send + Sync {
     fn write_text(&self, text: &str) -> Result<(), ClipboardError>;
     fn write_image(&self, width: u32, height: u32, rgba: &[u8]) -> Result<(), ClipboardError>;
     fn write_files(&self, paths: &[String]) -> Result<(), ClipboardError>;
+    fn prepare_file_path(&self, path: &str) -> Option<String> {
+        let path = path.trim();
+        if path.is_empty() {
+            None
+        } else {
+            Some(path.to_string())
+        }
+    }
     fn access(&self) -> Option<String> {
         None
     }
 }
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "linux")]
+mod wayland;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "linux")]
-mod wayland;
-#[cfg(target_os = "linux")]
 mod x11;
 
-pub fn start(events: Sender<MonitorEvent>, recording: Arc<AtomicBool>) -> Result<Box<dyn Platform>, ClipboardError> {
+pub fn start(
+    events: Sender<MonitorEvent>,
+    recording: Arc<AtomicBool>,
+) -> Result<Box<dyn Platform>, ClipboardError> {
     #[cfg(target_os = "macos")]
     {
         Ok(Box::new(macos::MacPlatform::start(events, recording)))
     }
     #[cfg(target_os = "windows")]
     {
-        Ok(Box::new(windows::WindowsPlatform::start(events, recording)?))
+        Ok(Box::new(windows::WindowsPlatform::start(
+            events, recording,
+        )?))
     }
     #[cfg(target_os = "linux")]
     {
@@ -132,4 +145,3 @@ impl Platform for UnsupportedPlatform {
         Err(ClipboardError::new("unsupported"))
     }
 }
-

@@ -32,6 +32,7 @@
         "pause": "Pause",
         "resume": "Resume",
         "settings": "Settings",
+        "back": "Back",
         "search": "Search history",
         "filter": {
           "all": "All",
@@ -83,6 +84,7 @@
       },
       "clipboard": {
         "description": "Keep text, images, and file paths on this computer so you can copy them again.",
+        "settingsDescription": "Choose what to record, how long to keep it, and the shortcut for the quick panel.",
         "privacy": "History stays on this computer and is never uploaded. You can review what is stored, and where, before turning it on.",
         "empty": "Nothing here yet. Copied items will show up after you turn history on.",
         "disabled": "Clipboard history is off.",
@@ -101,7 +103,6 @@
         "clearConfirm": "Clear clipboard history?",
         "deleteConfirm": "Delete this item?",
         "confirmPrune": "Saving will delete {{count}} unpinned items.",
-        "macosAccess": "macOS may ask for clipboard access the first time Pixo reads it. If you deny access, new items cannot be recorded.",
         "waylandShortcut": "This Wayland session cannot register a global shortcut. Open the quick panel with pixo --clipboard-panel.",
         "sourceApp": "From {{app}}",
         "skippedSensitive_one": "Skipped {{count}} sensitive item.",

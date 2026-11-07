@@ -1,6 +1,6 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 
 use super::{MonitorEvent, Platform};
 use crate::clipboard::error::ClipboardError;
@@ -25,7 +25,10 @@ fn session() -> Session {
 enum Backend {
     Wayland(super::wayland::WaylandBackend),
     X11(super::x11::X11Backend),
-    Missing { platform: &'static str, reason: String },
+    Missing {
+        platform: &'static str,
+        reason: String,
+    },
 }
 
 pub struct LinuxPlatform {
@@ -33,7 +36,10 @@ pub struct LinuxPlatform {
 }
 
 impl LinuxPlatform {
-    pub fn start(events: Sender<MonitorEvent>, recording: Arc<AtomicBool>) -> Result<Self, ClipboardError> {
+    pub fn start(
+        events: Sender<MonitorEvent>,
+        recording: Arc<AtomicBool>,
+    ) -> Result<Self, ClipboardError> {
         let backend = match session() {
             Session::Wayland => match super::wayland::WaylandBackend::start(events, recording) {
                 Ok(backend) => Backend::Wayland(backend),

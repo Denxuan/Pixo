@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import AutoImport from "unplugin-auto-import/vite";
@@ -21,7 +21,29 @@ export default defineConfig(() => ({
           "react-router": ["HashRouter", "Routes", "Route", "Link", "NavLink", "Outlet", "Navigate", "useNavigate", "useLocation", "useParams"],
           zustand: [["create", "createZustandStore"]],
           "zustand/middleware": ["persist"],
-          antd: ["Button", "ConfigProvider", "Input", "Modal", "Switch", ["theme", "antdTheme"]],
+          antd: [
+            "Alert",
+            "Avatar",
+            "Button",
+            "Checkbox",
+            "ConfigProvider",
+            "Empty",
+            "Flex",
+            "Form",
+            "Input",
+            "InputNumber",
+            "Layout",
+            "List",
+            "Menu",
+            "Modal",
+            "Segmented",
+            "Select",
+            "Space",
+            "Spin",
+            "Switch",
+            "Typography",
+            ["theme", "antdTheme"],
+          ],
           "@ant-design/icons": [
             "SendOutlined",
             "AppstoreOutlined",
@@ -41,7 +63,7 @@ export default defineConfig(() => ({
           ],
         },
       ],
-      dts: "src/types/auto-imports.d.ts",
+      dts: process.env.VITEST ? false : "src/types/auto-imports.d.ts",
       dtsMode: "overwrite",
     }),
     UnoCSS(),
@@ -49,6 +71,10 @@ export default defineConfig(() => ({
     babel({ presets: [reactCompilerPreset()] }),
   ],
   resolve: { tsconfigPaths: true },
+  test: {
+    environment: "node",
+    include: ["tests/**/*.test.ts"],
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

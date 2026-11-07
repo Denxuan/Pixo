@@ -183,7 +183,10 @@ impl Settings {
             || self.shortcut.trim().is_empty()
             || self.shortcut.chars().count() > 80
             || self.excluded_apps.len() > 100
-            || self.excluded_apps.iter().any(|app| app.chars().count() > 256)
+            || self
+                .excluded_apps
+                .iter()
+                .any(|app| app.chars().count() > 256)
         {
             return Err(ClipboardError::new("invalid_input"));
         }

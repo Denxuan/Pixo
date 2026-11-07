@@ -1,11 +1,12 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use dispatch2::DispatchQueue;
 use objc2::MainThreadMarker;
+use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{
     NSPasteboard, NSPasteboardAccessBehavior, NSPasteboardTypeFileURL, NSPasteboardTypeString,
@@ -17,7 +18,7 @@ use super::{KindGate, MonitorEvent, Platform};
 use crate::clipboard::error::ClipboardError;
 use crate::clipboard::io;
 use crate::clipboard::model::{Capture, Payload, PlatformCaps};
-use crate::clipboard::util::{file_uri_to_path, macos_sensitive};
+use crate::clipboard::util::{macos_sensitive, path_to_file_uri};
 
 pub struct MacPlatform {
     recording: Arc<AtomicBool>,
@@ -83,6 +84,11 @@ impl Platform for MacPlatform {
         on_main(move || write_files(&paths))
     }
 
+    fn prepare_file_path(&self, path: &str) -> Option<String> {
+        let path = path.to_string();
+        on_main(move || filesystem_path(&path))
+    }
+
     fn access(&self) -> Option<String> {
         on_main(access_behavior)
     }
@@ -121,7 +127,9 @@ fn on_main<T: Send>(work: impl FnOnce() -> T + Send) -> T {
     DispatchQueue::main().exec_sync(move || {
         let _ = sender.send(work());
     });
-    receiver.recv().expect("main queue returned the clipboard result")
+    receiver
+        .recv()
+        .expect("main queue returned the clipboard result")
 }
 
 fn change_count() -> isize {
@@ -141,7 +149,11 @@ fn access_behavior() -> Option<String> {
     )
 }
 
-fn read_pasteboard(files_enabled: bool, image_enabled: bool, text_enabled: bool) -> Result<Capture, ClipboardError> {
+fn read_pasteboard(
+    files_enabled: bool,
+    image_enabled: bool,
+    text_enabled: bool,
+) -> Result<Capture, ClipboardError> {
     if access_behavior().as_deref() == Some("deny") {
         return Err(ClipboardError::new("permission_denied"));
     }
@@ -201,7 +213,7 @@ fn file_paths(pasteboard: &NSPasteboard) -> Vec<String> {
         let Some(value) = items.objectAtIndex(index).stringForType(file_type) else {
             continue;
         };
-        if let Some(path) = file_uri_to_path(&value.to_string()) {
+        if let Some(path) = filesystem_path(&value.to_string()) {
             paths.push(path);
         }
     }
@@ -218,13 +230,45 @@ fn frontmost_bundle() -> Option<String> {
     }
 }
 
+fn filesystem_path(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let reference = if raw.len() >= 5 && raw[..5].eq_ignore_ascii_case("file:") {
+        raw.to_string()
+    } else if raw.starts_with("/.file/") {
+        format!("file://{raw}")
+    } else if raw.starts_with('/') {
+        return Some(raw.to_string());
+    } else {
+        return None;
+    };
+    let url = NSURL::URLWithString(&NSString::from_str(&reference))?;
+    let path = url
+        .filePathURL()
+        .and_then(|resolved| resolved.path())
+        .or_else(|| url.path())?;
+    let path = path.to_string();
+    if path.is_empty() || path.starts_with("/.file/") {
+        None
+    } else {
+        Some(path)
+    }
+}
+
+fn file_url(path: &str) -> Option<Retained<NSURL>> {
+    let path = filesystem_path(path)?;
+    NSURL::URLWithString(&NSString::from_str(&path_to_file_uri(&path)))
+}
+
 fn write_files(paths: &[String]) -> Result<(), ClipboardError> {
+    let urls: Vec<_> = paths.iter().filter_map(|path| file_url(path)).collect();
+    if urls.is_empty() {
+        return Err(ClipboardError::new("file_missing"));
+    }
     let pasteboard = NSPasteboard::generalPasteboard();
     pasteboard.clearContents();
-    let urls: Vec<_> = paths
-        .iter()
-        .map(|path| NSURL::fileURLWithPath(&NSString::from_str(path)))
-        .collect();
     let writers: Vec<&ProtocolObject<dyn NSPasteboardWriting>> = urls
         .iter()
         .map(|url| ProtocolObject::from_ref::<NSURL>(&**url))
@@ -239,4 +283,28 @@ fn write_files(paths: &[String]) -> Result<(), ClipboardError> {
         return Err(ClipboardError::new("busy"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use objc2_foundation::{NSString, NSURL};
+
+    use super::filesystem_path;
+
+    #[test]
+    fn resolves_file_urls_without_panicking() {
+        assert_eq!(filesystem_path("/Users").as_deref(), Some("/Users"));
+        assert_eq!(filesystem_path("file:///Users").as_deref(), Some("/Users"));
+        assert_eq!(filesystem_path("file:///.file/id=missing").as_deref(), None);
+        let url = NSURL::fileURLWithPath(&NSString::from_str("/Users"));
+        let Some(reference) = url.fileReferenceURL() else {
+            return;
+        };
+        let Some(absolute) = reference.absoluteString() else {
+            return;
+        };
+        let resolved = filesystem_path(&absolute.to_string()).expect("file reference resolves");
+        assert!(resolved.starts_with('/'));
+        assert!(!resolved.starts_with("/.file/"));
+    }
 }

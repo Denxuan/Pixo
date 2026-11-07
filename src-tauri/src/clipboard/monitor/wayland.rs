@@ -1,18 +1,20 @@
 use std::io::Read;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use wl_clipboard_rs::copy::{self, MimeSource, MimeType as CopyMime, Options, Source};
-use wl_clipboard_rs::paste::{self, get_contents, get_mime_types, ClipboardType, MimeType, Seat};
+use wl_clipboard_rs::paste::{self, ClipboardType, MimeType, Seat, get_contents, get_mime_types};
 use wl_clipboard_rs::utils::PASSWORD_MANAGER_HINT_MIME_TYPE;
 use wl_clipboard_rs::watch::{ClipboardEvent, ClipboardType as WatchClipboard, Watcher};
 
 use super::{KindGate, MonitorEvent};
 use crate::clipboard::error::ClipboardError;
 use crate::clipboard::model::{Capture, Payload, PlatformCaps};
-use crate::clipboard::util::{decode_png, kde_secret, parse_gnome_copied, parse_uri_list, uri_list};
+use crate::clipboard::util::{
+    decode_png, kde_secret, parse_gnome_copied, parse_uri_list, uri_list,
+};
 
 pub struct WaylandBackend {
     recording: Arc<AtomicBool>,
@@ -58,7 +60,9 @@ impl WaylandBackend {
     pub fn read_now(&self) -> Result<Capture, ClipboardError> {
         let mimes = get_mime_types(ClipboardType::Regular, Seat::Unspecified).map_err(map_paste)?;
         let kinds = Arc::clone(&self.kinds);
-        read_selected(&mimes.into_iter().collect::<Vec<_>>(), &kinds, |mime| read_mime(mime))
+        read_selected(&mimes.into_iter().collect::<Vec<_>>(), &kinds, |mime| {
+            read_mime(mime)
+        })
     }
 
     pub fn write_text(&self, text: &str) -> Result<(), ClipboardError> {
@@ -68,7 +72,8 @@ impl WaylandBackend {
     }
 
     pub fn write_image(&self, width: u32, height: u32, rgba: &[u8]) -> Result<(), ClipboardError> {
-        let png = crate::clipboard::util::encode_png(width, height, rgba).map_err(|_| ClipboardError::new("storage"))?;
+        let png = crate::clipboard::util::encode_png(width, height, rgba)
+            .map_err(|_| ClipboardError::new("storage"))?;
         Options::new()
             .copy(
                 Source::Bytes(png.into_boxed_slice()),
@@ -110,7 +115,11 @@ fn watch_loop(events: Sender<MonitorEvent>, recording: Arc<AtomicBool>, kinds: A
             Ok(Some(ClipboardEvent::Cleared { .. })) => {
                 initial = false;
             }
-            Ok(Some(ClipboardEvent::Changed { mime_types, mut offer, .. })) => {
+            Ok(Some(ClipboardEvent::Changed {
+                mime_types,
+                mut offer,
+                ..
+            })) => {
                 if initial {
                     initial = false;
                     continue;
@@ -121,7 +130,8 @@ fn watch_loop(events: Sender<MonitorEvent>, recording: Arc<AtomicBool>, kinds: A
                 let capture = read_selected(&mime_types, &kinds, |mime| {
                     let mut pipe = offer.receive(mime).map_err(map_paste)?;
                     let mut data = Vec::new();
-                    pipe.read_to_end(&mut data).map_err(|_| ClipboardError::new("busy"))?;
+                    pipe.read_to_end(&mut data)
+                        .map_err(|_| ClipboardError::new("busy"))?;
                     Ok(data)
                 });
                 let event = match capture {
@@ -145,7 +155,10 @@ fn read_selected(
     kinds: &KindGate,
     mut read: impl FnMut(&str) -> Result<Vec<u8>, ClipboardError>,
 ) -> Result<Capture, ClipboardError> {
-    if mimes.iter().any(|mime| mime.eq_ignore_ascii_case(PASSWORD_MANAGER_HINT_MIME_TYPE)) {
+    if mimes
+        .iter()
+        .any(|mime| mime.eq_ignore_ascii_case(PASSWORD_MANAGER_HINT_MIME_TYPE))
+    {
         let hint = read(PASSWORD_MANAGER_HINT_MIME_TYPE).unwrap_or_default();
         if kde_secret(&String::from_utf8_lossy(&hint)) {
             return Ok(Capture {
@@ -181,14 +194,22 @@ fn choose_mime(mimes: &[String], kinds: &KindGate) -> Option<&'static str> {
     if kinds.text() {
         preferred.extend(["text/plain;charset=utf-8", "text/plain", "UTF8_STRING"]);
     }
-    preferred.into_iter().find(|candidate| mimes.iter().any(|mime| mime.eq_ignore_ascii_case(candidate)))
+    preferred.into_iter().find(|candidate| {
+        mimes
+            .iter()
+            .any(|mime| mime.eq_ignore_ascii_case(candidate))
+    })
 }
 
 fn payload_for_mime(mime: &str, data: &[u8]) -> Option<Payload> {
     if mime.eq_ignore_ascii_case("image/png") {
         return decode_png(data)
             .ok()
-            .map(|(width, height, rgba)| Payload::Image { width, height, rgba });
+            .map(|(width, height, rgba)| Payload::Image {
+                width,
+                height,
+                rgba,
+            });
     }
     let text = String::from_utf8_lossy(data);
     if mime.eq_ignore_ascii_case("x-special/gnome-copied-files") {
@@ -204,9 +225,15 @@ fn payload_for_mime(mime: &str, data: &[u8]) -> Option<Payload> {
 }
 
 fn read_mime(mime: &str) -> Result<Vec<u8>, ClipboardError> {
-    let (mut pipe, _) = get_contents(ClipboardType::Regular, Seat::Unspecified, MimeType::Specific(mime)).map_err(map_paste)?;
+    let (mut pipe, _) = get_contents(
+        ClipboardType::Regular,
+        Seat::Unspecified,
+        MimeType::Specific(mime),
+    )
+    .map_err(map_paste)?;
     let mut data = Vec::new();
-    pipe.read_to_end(&mut data).map_err(|_| ClipboardError::new("busy"))?;
+    pipe.read_to_end(&mut data)
+        .map_err(|_| ClipboardError::new("busy"))?;
     Ok(data)
 }
 

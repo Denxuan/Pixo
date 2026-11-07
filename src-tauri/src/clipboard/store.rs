@@ -92,7 +92,8 @@ impl Store {
             .map_err(storage)?;
         if version < 1 {
             conn.execute_batch(SCHEMA).map_err(storage)?;
-            conn.pragma_update(None, "user_version", 1).map_err(storage)?;
+            conn.pragma_update(None, "user_version", 1)
+                .map_err(storage)?;
         }
         Ok(Self { conn })
     }
@@ -208,7 +209,8 @@ impl Store {
     ) -> Result<ListPage, ClipboardError> {
         let (cursor_pinned, cursor_time, cursor_id) = match cursor {
             Some(cursor) => {
-                let parsed = parse_cursor(cursor).ok_or_else(|| ClipboardError::new("invalid_input"))?;
+                let parsed =
+                    parse_cursor(cursor).ok_or_else(|| ClipboardError::new("invalid_input"))?;
                 (Some(parsed.0), Some(parsed.1), Some(parsed.2))
             }
             None => (None, None, None),
@@ -295,6 +297,38 @@ impl Store {
         Ok(())
     }
 
+    pub fn replace_files(
+        &mut self,
+        id: i64,
+        hash: &str,
+        files_json: &str,
+        size_bytes: i64,
+    ) -> Result<bool, ClipboardError> {
+        let owner: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM clip_items WHERE content_hash = ?1",
+                params![hash],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage)?;
+        if owner.is_some() {
+            return Ok(false);
+        }
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE clip_items SET content_hash = ?1, files_json = ?2, size_bytes = ?3 WHERE id = ?4",
+                params![hash, files_json, size_bytes, id],
+            )
+            .map_err(storage)?;
+        if changed == 0 {
+            return Err(ClipboardError::new("not_found"));
+        }
+        Ok(true)
+    }
+
     pub fn delete_ids(&mut self, ids: &[i64]) -> Result<Removal, ClipboardError> {
         if ids.is_empty() || ids.len() > 500 {
             return Err(ClipboardError::new("invalid_input"));
@@ -362,7 +396,11 @@ impl Store {
         Ok(removal)
     }
 
-    pub fn apply_prune(&mut self, settings: &Settings, now: i64) -> Result<Removal, ClipboardError> {
+    pub fn apply_prune(
+        &mut self,
+        settings: &Settings,
+        now: i64,
+    ) -> Result<Removal, ClipboardError> {
         let removal = self.prune_plan(settings, now)?;
         if removal.count == 0 {
             return Ok(removal);
@@ -416,7 +454,11 @@ fn collect_matches(
     let mut statement = conn.prepare(sql).map_err(storage)?;
     let rows = statement
         .query_map(parameters, |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         })
         .map_err(storage)?;
     for row in rows {
@@ -570,9 +612,18 @@ pub fn image_paths(directory: &Path, hash: &str) -> (PathBuf, PathBuf) {
     )
 }
 
-pub fn write_image_files(directory: &Path, hash: &str, png: &[u8], thumb: &[u8]) -> Result<(), ClipboardError> {
+pub fn write_image_files(
+    directory: &Path,
+    hash: &str,
+    png: &[u8],
+    thumb: &[u8],
+) -> Result<(), ClipboardError> {
     std::fs::create_dir_all(directory).map_err(storage)?;
-    write_atomic(&directory.join(format!("{hash}.png.tmp")), &directory.join(format!("{hash}.png")), png)?;
+    write_atomic(
+        &directory.join(format!("{hash}.png.tmp")),
+        &directory.join(format!("{hash}.png")),
+        png,
+    )?;
     write_atomic(
         &directory.join(format!("{hash}.thumb.png.tmp")),
         &directory.join(format!("{hash}.thumb.png")),
@@ -596,8 +647,8 @@ pub fn files_json(files: &[String]) -> Result<String, ClipboardError> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::model::ClipKind;
+    use super::*;
 
     fn test_store() -> (Store, PathBuf) {
         let directory = std::env::temp_dir().join(format!(
@@ -633,16 +684,30 @@ mod tests {
         let (mut store, directory) = test_store();
         let hash = "hash-a";
         let added = store.upsert(text_request(hash, "alpha", 1_000)).unwrap();
-        let UpsertResult::Added(summary) = added else { panic!("expected insert"); };
+        let UpsertResult::Added(summary) = added else {
+            panic!("expected insert");
+        };
         let updated = store.upsert(text_request(hash, "alpha", 2_000)).unwrap();
-        let UpsertResult::Updated { summary: updated, incremented } = updated else { panic!("expected update"); };
+        let UpsertResult::Updated {
+            summary: updated,
+            incremented,
+        } = updated
+        else {
+            panic!("expected update");
+        };
         assert!(incremented);
         assert_eq!(updated.id, summary.id);
         assert_eq!(updated.copy_count, 2);
         let mut request = text_request(hash, "alpha", 3_000);
         request.self_write = true;
         let touched = store.upsert(request).unwrap();
-        let UpsertResult::Updated { summary: touched, incremented } = touched else { panic!("expected touch"); };
+        let UpsertResult::Updated {
+            summary: touched,
+            incremented,
+        } = touched
+        else {
+            panic!("expected touch");
+        };
         assert!(!incremented);
         assert_eq!(touched.copy_count, 2);
         assert_eq!(touched.last_copied_at, 3_000);
@@ -656,7 +721,11 @@ mod tests {
         store.upsert(text_request("mid", "mid", 2)).unwrap();
         store.upsert(text_request("new", "new", 3)).unwrap();
         let page = store.list(None, None, false, None, 10).unwrap();
-        let oldest = page.items.iter().find(|item| item.preview == "old").unwrap();
+        let oldest = page
+            .items
+            .iter()
+            .find(|item| item.preview == "old")
+            .unwrap();
         store.set_pinned(oldest.id, true).unwrap();
         let mut settings = Settings::default();
         settings.max_items = 1;
@@ -664,7 +733,11 @@ mod tests {
         let removal = store.apply_prune(&settings, 10).unwrap();
         assert_eq!(removal.count, 1);
         let page = store.list(None, None, false, None, 10).unwrap();
-        let previews: Vec<_> = page.items.iter().map(|item| item.preview.as_str()).collect();
+        let previews: Vec<_> = page
+            .items
+            .iter()
+            .map(|item| item.preview.as_str())
+            .collect();
         assert!(previews.contains(&"old"));
         assert!(previews.contains(&"new"));
         assert!(!previews.contains(&"mid"));
@@ -676,13 +749,17 @@ mod tests {
         let (mut store, directory) = test_store();
         store.upsert(text_request("one", "100%", 1)).unwrap();
         store.upsert(text_request("two", "plain", 2)).unwrap();
-        store.upsert(text_request("three", "percent % value", 3)).unwrap();
+        store
+            .upsert(text_request("three", "percent % value", 3))
+            .unwrap();
         let matches = store.list(Some("%"), None, false, None, 10).unwrap();
         assert_eq!(matches.items.len(), 2);
         let page = store.list(None, None, false, None, 1).unwrap();
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].preview, "percent % value");
-        let next = store.list(None, None, false, page.next_cursor.as_deref(), 1).unwrap();
+        let next = store
+            .list(None, None, false, page.next_cursor.as_deref(), 1)
+            .unwrap();
         assert_eq!(next.items[0].preview, "plain");
         let _ = std::fs::remove_dir_all(directory);
     }
@@ -695,7 +772,9 @@ mod tests {
         store.set_pinned(id, true).unwrap();
         let mut settings = Settings::default();
         settings.retention_days = 1;
-        let removal = store.prune_plan(&settings, 1 + 3 * 24 * 60 * 60 * 1000).unwrap();
+        let removal = store
+            .prune_plan(&settings, 1 + 3 * 24 * 60 * 60 * 1000)
+            .unwrap();
         assert_eq!(removal.count, 0);
         let _ = std::fs::remove_dir_all(directory);
     }

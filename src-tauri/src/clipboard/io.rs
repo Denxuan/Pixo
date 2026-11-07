@@ -17,7 +17,10 @@ pub fn map_arboard(error: arboard::Error) -> ClipboardError {
     }
 }
 
-pub fn read_text_or_image_filtered(image: bool, text: bool) -> Result<Option<Payload>, ClipboardError> {
+pub fn read_text_or_image_filtered(
+    image: bool,
+    text: bool,
+) -> Result<Option<Payload>, ClipboardError> {
     let mut clipboard = Clipboard::new().map_err(map_arboard)?;
     if image {
         match clipboard.get_image() {

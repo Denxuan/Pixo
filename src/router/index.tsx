@@ -1,16 +1,16 @@
 import AppShell from "@/layout/AppShell";
 import ClipboardPage from "@/pages/Clipboard";
-import JsonTool from "@/pages/JsonTool";
+import ClipboardSettingsPage from "@/pages/ClipboardSettings";
 
 export default function AppRouter() {
   return (
     <HashRouter>
       <Routes>
         <Route element={<AppShell />}>
-          <Route index element={<Navigate to="/json" replace />} />
-          <Route path="/json" element={<JsonTool />} />
+          <Route index element={<Navigate to="/clipboard" replace />} />
           <Route path="/clipboard" element={<ClipboardPage />} />
-          <Route path="*" element={<Navigate to="/json" replace />} />
+          <Route path="/clipboard/settings" element={<ClipboardSettingsPage />} />
+          <Route path="*" element={<Navigate to="/clipboard" replace />} />
         </Route>
       </Routes>
     </HashRouter>

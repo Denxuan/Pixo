@@ -1,17 +1,17 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use x11rb::connection::Connection;
-use x11rb::protocol::xfixes::ConnectionExt as _;
-use x11rb::protocol::xproto::{
-    Atom, AtomEnum, ConnectionExt as _, CreateWindowAux, EventMask, Property, PropMode, SelectionNotifyEvent,
-    Window, WindowClass, SELECTION_NOTIFY_EVENT,
-};
-use x11rb::protocol::xfixes::SelectionEventMask;
 use x11rb::protocol::Event;
+use x11rb::protocol::xfixes::ConnectionExt as _;
+use x11rb::protocol::xfixes::SelectionEventMask;
+use x11rb::protocol::xproto::{
+    Atom, AtomEnum, ConnectionExt as _, CreateWindowAux, EventMask, PropMode, Property,
+    SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, Window, WindowClass,
+};
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE};
@@ -143,7 +143,9 @@ impl X11Backend {
         self.commands
             .send(command(sender))
             .map_err(|_| ClipboardError::new("unsupported"))?;
-        receiver.recv().unwrap_or_else(|_| Err(ClipboardError::new("unsupported")))
+        receiver
+            .recv()
+            .unwrap_or_else(|_| Err(ClipboardError::new("unsupported")))
     }
 }
 
@@ -174,7 +176,11 @@ fn run(
                 Err(mpsc::TryRecvError::Disconnected) => return,
             }
         }
-        if context.pending.as_ref().is_some_and(|pending| Instant::now() > pending.deadline) {
+        if context
+            .pending
+            .as_ref()
+            .is_some_and(|pending| Instant::now() > pending.deadline)
+        {
             context.finish_pending(&events, Err(ClipboardError::new("busy")));
         }
         match context.conn.poll_for_event() {
@@ -210,7 +216,8 @@ struct Context {
 
 impl Context {
     fn connect(kinds: Arc<KindGate>) -> Result<Self, String> {
-        let (conn, screen_number) = RustConnection::connect(None).map_err(|error| error.to_string())?;
+        let (conn, screen_number) =
+            RustConnection::connect(None).map_err(|error| error.to_string())?;
         let screen = &conn.setup().roots[screen_number];
         let window = conn.generate_id().map_err(|error| error.to_string())?;
         conn.create_window(
@@ -246,10 +253,14 @@ impl Context {
             plain: intern(&conn, b"text/plain")?,
             net_wm_pid: intern(&conn, b"_NET_WM_PID")?,
         };
-        conn.xfixes_select_selection_input(screen.root, atoms.clipboard, SelectionEventMask::SET_SELECTION_OWNER)
-            .map_err(|error| error.to_string())?
-            .check()
-            .map_err(|error| error.to_string())?;
+        conn.xfixes_select_selection_input(
+            screen.root,
+            atoms.clipboard,
+            SelectionEventMask::SET_SELECTION_OWNER,
+        )
+        .map_err(|error| error.to_string())?
+        .check()
+        .map_err(|error| error.to_string())?;
         conn.flush().map_err(|error| error.to_string())?;
         Ok(Self {
             conn,
@@ -350,7 +361,10 @@ impl Context {
                 _ => reply.type_,
             };
             if let Some(pending) = &mut self.pending {
-                pending.stage = Stage::Incremental { target, data: Vec::new() };
+                pending.stage = Stage::Incremental {
+                    target,
+                    data: Vec::new(),
+                };
                 pending.deadline = Instant::now() + Duration::from_secs(2);
             }
             return;
@@ -364,13 +378,21 @@ impl Context {
         };
         if reply.value.is_empty() {
             let (target, data) = match &self.pending {
-                Some(Pending { stage: Stage::Incremental { target, data }, .. }) => (*target, data.clone()),
+                Some(Pending {
+                    stage: Stage::Incremental { target, data },
+                    ..
+                }) => (*target, data.clone()),
                 _ => return,
             };
             self.consume_bytes(events, data);
             return;
         }
-        if let Some(Pending { stage: Stage::Incremental { data, .. }, deadline, .. }) = &mut self.pending {
+        if let Some(Pending {
+            stage: Stage::Incremental { data, .. },
+            deadline,
+            ..
+        }) = &mut self.pending
+        {
             data.extend(reply.value);
             *deadline = Instant::now() + Duration::from_secs(2);
         }
@@ -380,9 +402,18 @@ impl Context {
         let secret_atom = self.atoms.secret;
         enum Step {
             Convert(Atom),
-            Body { targets: Vec<Atom>, owner: Window },
-            Ready { target: Atom, owner: Window, value: Vec<u8> },
-            Secret { owner: Window },
+            Body {
+                targets: Vec<Atom>,
+                owner: Window,
+            },
+            Ready {
+                target: Atom,
+                owner: Window,
+                value: Vec<u8>,
+            },
+            Secret {
+                owner: Window,
+            },
         }
         let step = {
             let Some(pending) = self.pending.as_mut() else {
@@ -427,7 +458,11 @@ impl Context {
                     source_app: self.source_app(owner),
                 }),
             ),
-            Step::Ready { target, owner, value } => self.finish_pending(
+            Step::Ready {
+                target,
+                owner,
+                value,
+            } => self.finish_pending(
                 events,
                 Ok(Capture {
                     payload: payload_from_target(&self.atoms, target, &value),
@@ -460,20 +495,37 @@ impl Context {
     fn convert(&mut self, target: Atom) {
         let _ = self
             .conn
-            .convert_selection(self.window, self.atoms.clipboard, target, self.atoms.property, CURRENT_TIME)
+            .convert_selection(
+                self.window,
+                self.atoms.clipboard,
+                target,
+                self.atoms.property,
+                CURRENT_TIME,
+            )
             .and_then(|cookie| cookie.check());
         let _ = self.conn.flush();
     }
 
     fn property(&self) -> Option<x11rb::protocol::xproto::GetPropertyReply> {
         self.conn
-            .get_property(true, self.window, self.atoms.property, AtomEnum::ANY, 0, 8_000_000)
+            .get_property(
+                true,
+                self.window,
+                self.atoms.property,
+                AtomEnum::ANY,
+                0,
+                8_000_000,
+            )
             .ok()?
             .reply()
             .ok()
     }
 
-    fn finish_pending(&mut self, events: &Sender<MonitorEvent>, result: Result<Capture, ClipboardError>) {
+    fn finish_pending(
+        &mut self,
+        events: &Sender<MonitorEvent>,
+        result: Result<Capture, ClipboardError>,
+    ) {
         if let Some(pending) = self.pending.take() {
             if let Some(sink) = pending.sink {
                 let _ = sink.send(result);
@@ -496,7 +548,14 @@ impl Context {
         }
         let reply = self
             .conn
-            .get_property(false, owner, self.atoms.net_wm_pid, AtomEnum::CARDINAL, 0, 1)
+            .get_property(
+                false,
+                owner,
+                self.atoms.net_wm_pid,
+                AtomEnum::CARDINAL,
+                0,
+                1,
+            )
             .ok()?
             .reply()
             .ok()?;
@@ -515,7 +574,11 @@ impl Context {
     }
 
     fn selection_request(&mut self, request: x11rb::protocol::xproto::SelectionRequestEvent) {
-        let property = if request.property == NONE { request.target } else { request.property };
+        let property = if request.property == NONE {
+            request.target
+        } else {
+            request.property
+        };
         let supported = self.supported_targets();
         let accepted = if request.target == self.atoms.targets {
             let _ = self.conn.change_property32(
@@ -534,9 +597,13 @@ impl Context {
             } else {
                 self.atoms.utf8
             };
-            let _ = self
-                .conn
-                .change_property8(PropMode::REPLACE, request.requestor, property, type_, &bytes);
+            let _ = self.conn.change_property8(
+                PropMode::REPLACE,
+                request.requestor,
+                property,
+                type_,
+                &bytes,
+            );
             true
         } else {
             false
@@ -564,21 +631,35 @@ impl Context {
         let mut targets = vec![self.atoms.targets];
         match &self.owned {
             Owned::None => {}
-            Owned::Text(_) => targets.extend([self.atoms.utf8, self.atoms.plain, AtomEnum::STRING.into()]),
+            Owned::Text(_) => {
+                targets.extend([self.atoms.utf8, self.atoms.plain, AtomEnum::STRING.into()])
+            }
             Owned::Png(_) => targets.push(self.atoms.png),
-            Owned::Files { .. } => targets.extend([self.atoms.uri_list, self.atoms.utf8, self.atoms.plain]),
+            Owned::Files { .. } => {
+                targets.extend([self.atoms.uri_list, self.atoms.utf8, self.atoms.plain])
+            }
         }
         targets
     }
 
     fn bytes_for(&self, target: Atom) -> Option<Vec<u8>> {
         match &self.owned {
-            Owned::Text(bytes) if target == self.atoms.utf8 || target == self.atoms.plain || target == AtomEnum::STRING.into() => {
+            Owned::Text(bytes)
+                if target == self.atoms.utf8
+                    || target == self.atoms.plain
+                    || target == AtomEnum::STRING.into() =>
+            {
                 Some(bytes.clone())
             }
             Owned::Png(bytes) if target == self.atoms.png => Some(bytes.clone()),
-            Owned::Files { uri_list, text } if target == self.atoms.uri_list => Some(uri_list.clone()),
-            Owned::Files { text, .. } if target == self.atoms.utf8 || target == self.atoms.plain => Some(text.clone()),
+            Owned::Files { uri_list, text } if target == self.atoms.uri_list => {
+                Some(uri_list.clone())
+            }
+            Owned::Files { text, .. }
+                if target == self.atoms.utf8 || target == self.atoms.plain =>
+            {
+                Some(text.clone())
+            }
             _ => None,
         }
     }
@@ -610,16 +691,24 @@ fn preferred_target(atoms: &Atoms, targets: &[Atom], kinds: &KindGate) -> Option
     if kinds.text() {
         preferred.extend([atoms.utf8, atoms.plain, AtomEnum::STRING.into()]);
     }
-    preferred.into_iter().find(|target| targets.contains(target))
+    preferred
+        .into_iter()
+        .find(|target| targets.contains(target))
 }
 
 fn payload_from_target(atoms: &Atoms, target: Atom, value: &[u8]) -> Option<Payload> {
     if target == atoms.png {
         return decode_png(value)
             .ok()
-            .map(|(width, height, rgba)| Payload::Image { width, height, rgba });
+            .map(|(width, height, rgba)| Payload::Image {
+                width,
+                height,
+                rgba,
+            });
     }
-    let text = String::from_utf8_lossy(value).trim_end_matches('\0').to_string();
+    let text = String::from_utf8_lossy(value)
+        .trim_end_matches('\0')
+        .to_string();
     if target == atoms.gnome {
         let files = parse_gnome_copied(&text);
         return (!files.is_empty()).then_some(Payload::Files(files));

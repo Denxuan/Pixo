@@ -3,23 +3,26 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
-use windows::core::w;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, POINT, WPARAM,
+};
 use windows::Win32::System::DataExchange::{
-    AddClipboardFormatListener, CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
-    OpenClipboard, RegisterClipboardFormatW, RemoveClipboardFormatListener, SetClipboardData,
+    AddClipboardFormatListener, CloseClipboard, EmptyClipboard, GetClipboardData,
+    IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW,
+    RemoveClipboardFormatListener, SetClipboardData,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClipboardOwner, GetMessageW, GetWindowThreadProcessId,
-    HWND_MESSAGE, MSG, PostQuitMessage, RegisterClassW, TranslateMessage, WM_CLIPBOARDUPDATE, WM_QUIT,
-    WNDCLASSW,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClipboardOwner, GetMessageW,
+    GetWindowThreadProcessId, HWND_MESSAGE, MSG, PostQuitMessage, RegisterClassW, TranslateMessage,
+    WM_CLIPBOARDUPDATE, WM_QUIT, WNDCLASSW,
 };
+use windows::core::w;
 
 use super::{KindGate, MonitorEvent, Platform};
 use crate::clipboard::error::ClipboardError;
@@ -59,8 +62,13 @@ pub struct WindowsPlatform {
 }
 
 impl WindowsPlatform {
-    pub fn start(events: Sender<MonitorEvent>, recording: Arc<AtomicBool>) -> Result<Self, ClipboardError> {
-        state().recording.store(recording.load(Ordering::SeqCst), Ordering::SeqCst);
+    pub fn start(
+        events: Sender<MonitorEvent>,
+        recording: Arc<AtomicBool>,
+    ) -> Result<Self, ClipboardError> {
+        state()
+            .recording
+            .store(recording.load(Ordering::SeqCst), Ordering::SeqCst);
         // The service owns `recording`; mirror it into the listener so the window procedure can see it.
         let _recording = recording;
         *lock(&state().events) = Some(events);
@@ -150,7 +158,12 @@ fn listen() -> Result<(), ClipboardError> {
     }
 }
 
-unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     if message == WM_CLIPBOARDUPDATE {
         if state().recording.load(Ordering::SeqCst) {
             let event = match with_clipboard(read_open_clipboard) {
@@ -173,14 +186,18 @@ fn send_event(event: MonitorEvent) {
     }
 }
 
-fn with_clipboard<T>(read: impl FnOnce() -> Result<T, ClipboardError>) -> Result<T, ClipboardError> {
+fn with_clipboard<T>(
+    read: impl FnOnce() -> Result<T, ClipboardError>,
+) -> Result<T, ClipboardError> {
     let _guard = lock(clipboard_lock());
     let mut delay = 50u64;
     for attempt in 0..3 {
         match unsafe { OpenClipboard(None) } {
             Ok(()) => {
                 let result = read();
-                unsafe { let _ = CloseClipboard(); }
+                unsafe {
+                    let _ = CloseClipboard();
+                }
                 return result;
             }
             Err(_) if attempt < 2 => {
@@ -310,7 +327,11 @@ unsafe fn read_image() -> Result<Option<Payload>, ClipboardError> {
     if png_format != 0 && IsClipboardFormatAvailable(png_format).is_ok() {
         if let Some(bytes) = read_bytes(png_format)? {
             if let Ok((width, height, rgba)) = crate::clipboard::util::decode_png(&bytes) {
-                return Ok(Some(Payload::Image { width, height, rgba }));
+                return Ok(Some(Payload::Image {
+                    width,
+                    height,
+                    rgba,
+                }));
             }
         }
     }
@@ -318,7 +339,11 @@ unsafe fn read_image() -> Result<Option<Payload>, ClipboardError> {
         if IsClipboardFormatAvailable(format).is_ok() {
             if let Some(bytes) = read_bytes(format)? {
                 if let Some((width, height, rgba)) = decode_dib(&bytes) {
-                    return Ok(Some(Payload::Image { width, height, rgba }));
+                    return Ok(Some(Payload::Image {
+                        width,
+                        height,
+                        rgba,
+                    }));
                 }
             }
         }
@@ -385,7 +410,8 @@ unsafe fn set_unicode_text(text: &str) -> Result<(), ClipboardError> {
     }
     std::ptr::copy_nonoverlapping(wide.as_ptr(), pointer, wide.len());
     let _ = GlobalUnlock(memory);
-    SetClipboardData(CF_UNICODETEXT, Some(HANDLE(memory.0))).map_err(|_| ClipboardError::new("busy"))?;
+    SetClipboardData(CF_UNICODETEXT, Some(HANDLE(memory.0)))
+        .map_err(|_| ClipboardError::new("busy"))?;
     Ok(())
 }
 
@@ -404,15 +430,29 @@ unsafe fn set_hdrop(paths: &[String]) -> Result<(), ClipboardError> {
         non_client: i32,
         wide: i32,
     }
-    let header = Header { files: 20, x: 0, y: 0, non_client: 0, wide: 1 };
+    let header = Header {
+        files: 20,
+        x: 0,
+        y: 0,
+        non_client: 0,
+        wide: 1,
+    };
     let bytes = std::mem::size_of::<Header>() + wide.len() * 2;
     let memory = GlobalAlloc(GMEM_MOVEABLE, bytes).map_err(|_| ClipboardError::new("storage"))?;
     let pointer = GlobalLock(memory) as *mut u8;
     if pointer.is_null() {
         return Err(ClipboardError::new("storage"));
     }
-    std::ptr::copy_nonoverlapping(&header as *const Header as *const u8, pointer, std::mem::size_of::<Header>());
-    std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, pointer.add(std::mem::size_of::<Header>()), wide.len() * 2);
+    std::ptr::copy_nonoverlapping(
+        &header as *const Header as *const u8,
+        pointer,
+        std::mem::size_of::<Header>(),
+    );
+    std::ptr::copy_nonoverlapping(
+        wide.as_ptr() as *const u8,
+        pointer.add(std::mem::size_of::<Header>()),
+        wide.len() * 2,
+    );
     let _ = GlobalUnlock(memory);
     SetClipboardData(CF_HDROP, Some(HANDLE(memory.0))).map_err(|_| ClipboardError::new("busy"))?;
     Ok(())
@@ -426,7 +466,14 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 impl Drop for WindowsPlatform {
     fn drop(&mut self) {
         if let Some(hwnd) = lock(&state().hwnd).take() {
-            unsafe { let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(Some(hwnd), WM_QUIT, WPARAM(0), LPARAM(0)); }
+            unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
+                    Some(hwnd),
+                    WM_QUIT,
+                    WPARAM(0),
+                    LPARAM(0),
+                );
+            }
         }
     }
 }

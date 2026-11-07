@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+import { useSharedSettings } from "@/hooks/useSharedSettings";
 import ClipboardPanel from "@/pages/ClipboardPanel";
 import AppRouter from "@/router";
 import { useSettingsStore } from "@/stores/settings";
@@ -26,10 +27,11 @@ export default function App() {
   const systemDark = useSyncExternalStore(subscribe, () => colorScheme.matches);
   const dark = isDarkTheme(mode, systemDark);
   const panel = isClipboardPanel();
+  useSharedSettings(!panel);
 
   return (
     <ConfigProvider theme={{ algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm }}>
-      <div className={dark ? "dark h-screen overflow-hidden" : "h-screen overflow-hidden"} style={{ colorScheme: dark ? "dark" : "light" }}>
+      <div className={dark ? "dark h-screen overflow-hidden" : "h-screen overflow-hidden"} style={{ colorScheme: dark ? "dark" : "light", background: panel ? "transparent" : undefined }}>
         {panel ? <ClipboardPanel /> : <AppRouter />}
       </div>
     </ConfigProvider>
