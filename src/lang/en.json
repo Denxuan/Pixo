@@ -15,7 +15,8 @@
       },
       "nav": {
         "workspace": "Workspace",
-        "tools": "Tools"
+        "tools": "Tools",
+        "clipboard": "Clipboard"
       },
       "json": {
         "title": "JSON formatter",
@@ -24,6 +25,47 @@
         "format": "Format",
         "compact": "Compact",
         "copy": "Copy result"
+      },
+      "clipboard": {
+        "title": "Clipboard history",
+        "enable": "Turn on history",
+        "pause": "Pause",
+        "resume": "Resume",
+        "settings": "Settings",
+        "search": "Search history",
+        "filter": {
+          "all": "All",
+          "text": "Text",
+          "image": "Images",
+          "files": "Files",
+          "pinned": "Pinned"
+        },
+        "copy": "Copy",
+        "pin": "Pin",
+        "unpin": "Unpin",
+        "delete": "Delete",
+        "clear": "Clear history",
+        "keepPinned": "Keep pinned items",
+        "loadMore": "Load more",
+        "readNow": "Read current clipboard",
+        "save": "Save",
+        "cancel": "Cancel",
+        "confirm": "Confirm",
+        "close": "Close",
+        "list": "Clipboard items",
+        "recordText": "Record text",
+        "recordImage": "Record images",
+        "recordFiles": "Record files",
+        "maxItems": "Maximum items",
+        "retentionDays": "Retention days",
+        "maxText": "Text limit (MB)",
+        "maxImage": "Image limit (MB)",
+        "shortcut": "Global shortcut",
+        "excludedApps": "Excluded apps",
+        "skipSensitive": "Skip sensitive content",
+        "image": "Image",
+        "files": "Files",
+        "text": "Text"
       }
     },
     "text": {
@@ -38,12 +80,74 @@
         "copyError": "Could not copy. Please copy the result manually.",
         "copied": "Copied",
         "privacy": "Your content is processed locally."
+      },
+      "clipboard": {
+        "description": "Keep text, images, and file paths on this computer so you can copy them again.",
+        "privacy": "History stays on this computer and is never uploaded. You can review what is stored, and where, before turning it on.",
+        "empty": "Nothing here yet. Copied items will show up after you turn history on.",
+        "disabled": "Clipboard history is off.",
+        "noResults": "No matching items.",
+        "unsupported": "Clipboard monitoring is unavailable here.",
+        "permissionDenied": "Clipboard access was denied.",
+        "paused": "History is paused.",
+        "running": "History is recording.",
+        "loading": "Loading history.",
+        "copied": "Copied",
+        "panelHint": "Copied. You can paste it now.",
+        "panelHelp": "Use arrow keys to choose, Enter to copy, Esc to close, and Ctrl or Command+P to pin.",
+        "enableTitle": "Turn on clipboard history",
+        "enableBody": "Pixo stores copied text, images, and file paths locally, and skips content the system marks as sensitive. You can pause, delete, or clear it at any time.",
+        "storagePath": "Stored in {{path}}",
+        "clearConfirm": "Clear clipboard history?",
+        "deleteConfirm": "Delete this item?",
+        "confirmPrune": "Saving will delete {{count}} unpinned items.",
+        "macosAccess": "macOS may ask for clipboard access the first time Pixo reads it. If you deny access, new items cannot be recorded.",
+        "waylandShortcut": "This Wayland session cannot register a global shortcut. Open the quick panel with pixo --clipboard-panel.",
+        "sourceApp": "From {{app}}",
+        "skippedSensitive_one": "Skipped {{count}} sensitive item.",
+        "skippedSensitive_other": "Skipped {{count}} sensitive items.",
+        "skippedTooLarge_one": "Skipped {{count}} item over the size limit.",
+        "skippedTooLarge_other": "Skipped {{count}} items over the size limit.",
+        "skippedExcluded_one": "Skipped {{count}} item from an excluded app.",
+        "skippedExcluded_other": "Skipped {{count}} items from excluded apps.",
+        "fileMissing_one": "{{count}} file is no longer at its original path. The list was still copied.",
+        "fileMissing_other": "{{count}} files are no longer at their original paths. The list was still copied.",
+        "retentionZero": "Use 0 to keep items until the count limit removes them.",
+        "excludedHelp": "One app identifier per line. It must match the source shown on an item exactly.",
+        "shortcutHelp": "Example: CommandOrControl+Shift+V. If the shortcut cannot be registered, this change is not saved.",
+        "kindDisabled": "This kind of content is turned off in settings.",
+        "copiedTimes_one": "Copied {{count}} time",
+        "copiedTimes_other": "Copied {{count}} times",
+        "statusReason": {
+          "wayland_no_data_control": "This Wayland session does not offer a clipboard monitoring protocol.",
+          "no_display": "No usable display session was found.",
+          "platform": "Clipboard monitoring is unavailable on this platform."
+        },
+        "error": {
+          "unsupported": "This action is not available in the current environment.",
+          "permission_denied": "Clipboard access was denied.",
+          "busy": "The clipboard is busy. Try again in a moment.",
+          "not_found": "Nothing recordable was found.",
+          "too_large": "The content is over the size limit.",
+          "file_missing": "The original file no longer exists.",
+          "storage": "The local history could not be saved.",
+          "invalid_input": "Those settings are not valid.",
+          "shortcut_conflict": "That shortcut could not be registered.",
+          "needs_confirm": "This change deletes existing items and needs confirmation.",
+          "desktop_only": "Clipboard history is available in the Pixo desktop app.",
+          "unknown": "The action did not finish. Try again."
+        }
       }
     },
     "placeholder": {
       "json": {
         "input": "Enter or paste JSON here",
         "output": "Your result will appear here"
+      },
+      "clipboard": {
+        "search": "Search text or file names",
+        "shortcut": "CommandOrControl+Shift+V",
+        "excludedApps": "com.example.app"
       }
     }
   }

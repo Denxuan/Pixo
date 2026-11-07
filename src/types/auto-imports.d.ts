@@ -13,18 +13,32 @@ declare global {
   const Button: typeof import('antd').Button
   const CodeOutlined: typeof import('@ant-design/icons').CodeOutlined
   const ConfigProvider: typeof import('antd').ConfigProvider
+  const CopyOutlined: typeof import('@ant-design/icons').CopyOutlined
+  const DeleteOutlined: typeof import('@ant-design/icons').DeleteOutlined
+  const FileImageOutlined: typeof import('@ant-design/icons').FileImageOutlined
+  const FileOutlined: typeof import('@ant-design/icons').FileOutlined
+  const FontSizeOutlined: typeof import('@ant-design/icons').FontSizeOutlined
   const Fragment: typeof import('react').Fragment
   const GlobalOutlined: typeof import('@ant-design/icons').GlobalOutlined
   const HashRouter: typeof import('react-router').HashRouter
+  const HistoryOutlined: typeof import('@ant-design/icons').HistoryOutlined
+  const Input: typeof import('antd').Input
   const Link: typeof import('react-router').Link
+  const Modal: typeof import('antd').Modal
   const NavLink: typeof import('react-router').NavLink
   const Navigate: typeof import('react-router').Navigate
   const Outlet: typeof import('react-router').Outlet
+  const PauseOutlined: typeof import('@ant-design/icons').PauseOutlined
+  const PlayCircleOutlined: typeof import('@ant-design/icons').PlayCircleOutlined
+  const PushpinOutlined: typeof import('@ant-design/icons').PushpinOutlined
   const Route: typeof import('react-router').Route
   const Routes: typeof import('react-router').Routes
+  const SearchOutlined: typeof import('@ant-design/icons').SearchOutlined
   const SendOutlined: typeof import('@ant-design/icons').SendOutlined
+  const SettingOutlined: typeof import('@ant-design/icons').SettingOutlined
   const StrictMode: typeof import('react').StrictMode
   const Suspense: typeof import('react').Suspense
+  const Switch: typeof import('antd').Switch
   const Trans: typeof import('react-i18next').Trans
   const antdTheme: typeof import('antd').theme
   const cache: typeof import('react').cache

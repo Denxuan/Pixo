@@ -15,7 +15,8 @@
       },
       "nav": {
         "workspace": "工作空间",
-        "tools": "工具箱"
+        "tools": "工具箱",
+        "clipboard": "剪贴板"
       },
       "json": {
         "title": "JSON 格式化",
@@ -24,6 +25,47 @@
         "format": "格式化",
         "compact": "压缩",
         "copy": "复制结果"
+      },
+      "clipboard": {
+        "title": "剪贴板历史",
+        "enable": "开启记录",
+        "pause": "暂停",
+        "resume": "继续",
+        "settings": "设置",
+        "search": "搜索历史",
+        "filter": {
+          "all": "全部",
+          "text": "文本",
+          "image": "图片",
+          "files": "文件",
+          "pinned": "已固定"
+        },
+        "copy": "复制",
+        "pin": "固定",
+        "unpin": "取消固定",
+        "delete": "删除",
+        "clear": "清空历史",
+        "keepPinned": "保留已固定的记录",
+        "loadMore": "加载更多",
+        "readNow": "读取当前剪贴板",
+        "save": "保存",
+        "cancel": "取消",
+        "confirm": "确认",
+        "close": "关闭",
+        "list": "剪贴板记录",
+        "recordText": "记录文本",
+        "recordImage": "记录图片",
+        "recordFiles": "记录文件",
+        "maxItems": "最多保留条数",
+        "retentionDays": "保留天数",
+        "maxText": "文本上限（MB）",
+        "maxImage": "图片上限（MB）",
+        "shortcut": "全局快捷键",
+        "excludedApps": "排除的应用",
+        "skipSensitive": "跳过敏感内容",
+        "image": "图片",
+        "files": "文件",
+        "text": "文本"
       }
     },
     "text": {
@@ -38,12 +80,74 @@
         "copyError": "复制失败，请手动复制结果。",
         "copied": "已复制",
         "privacy": "内容仅在本机处理。"
+      },
+      "clipboard": {
+        "description": "在本机保存文本、图片和文件路径，方便再次复制。",
+        "privacy": "记录只保存在这台电脑上，不会上传。开启前可以先看保存位置和记录范围。",
+        "empty": "还没有记录。复制一些内容后会显示在这里。",
+        "disabled": "剪贴板记录尚未开启。",
+        "noResults": "没有符合条件的记录。",
+        "unsupported": "当前环境不能监听剪贴板。",
+        "permissionDenied": "系统拒绝了剪贴板访问。",
+        "paused": "记录已暂停。",
+        "running": "正在记录。",
+        "loading": "正在加载记录。",
+        "copied": "已复制",
+        "panelHint": "已复制，可直接粘贴",
+        "panelHelp": "方向键选择，Enter 复制，Esc 关闭，Ctrl 或 Command 加 P 固定。",
+        "enableTitle": "开启剪贴板记录",
+        "enableBody": "Pixo 会在本地保存你复制的文本、图片和文件路径，并跳过系统标记为敏感的内容。可以随时暂停、删除或清空。",
+        "storagePath": "保存位置：{{path}}",
+        "clearConfirm": "确定清空剪贴板历史吗？",
+        "deleteConfirm": "确定删除这条记录吗？",
+        "confirmPrune": "保存后会删除 {{count}} 条未固定的记录。",
+        "macosAccess": "macOS 可能会在首次读取剪贴板时请求权限。拒绝后将无法记录新内容。",
+        "waylandShortcut": "当前 Wayland 会话不能注册全局快捷键。可以用 pixo --clipboard-panel 打开快速面板。",
+        "sourceApp": "来自 {{app}}",
+        "skippedSensitive_one": "已跳过 {{count}} 条敏感内容。",
+        "skippedSensitive_other": "已跳过 {{count}} 条敏感内容。",
+        "skippedTooLarge_one": "已跳过 {{count}} 条超出大小限制的内容。",
+        "skippedTooLarge_other": "已跳过 {{count}} 条超出大小限制的内容。",
+        "skippedExcluded_one": "已跳过 {{count}} 条来自排除应用的内容。",
+        "skippedExcluded_other": "已跳过 {{count}} 条来自排除应用的内容。",
+        "fileMissing_one": "{{count}} 个文件已经不在原位置，列表仍已复制。",
+        "fileMissing_other": "{{count}} 个文件已经不在原位置，列表仍已复制。",
+        "retentionZero": "填 0 表示不按时间清理。",
+        "excludedHelp": "每行一个应用标识，需要与记录里的来源完全一致。",
+        "shortcutHelp": "例如 CommandOrControl+Shift+V。快捷键无法注册时不会保存这次修改。",
+        "kindDisabled": "这种内容已在设置中关闭。",
+        "copiedTimes_one": "复制过 {{count}} 次",
+        "copiedTimes_other": "复制过 {{count}} 次",
+        "statusReason": {
+          "wayland_no_data_control": "当前 Wayland 会话没有提供剪贴板监听协议。",
+          "no_display": "没有检测到可用的图形会话。",
+          "platform": "这个平台目前不能监听剪贴板。"
+        },
+        "error": {
+          "unsupported": "当前环境不支持这个操作。",
+          "permission_denied": "没有剪贴板访问权限。",
+          "busy": "剪贴板正被占用，请稍后再试。",
+          "not_found": "没有找到可记录的内容。",
+          "too_large": "内容超出大小限制。",
+          "file_missing": "原文件已经不存在。",
+          "storage": "本地记录暂时无法保存。",
+          "invalid_input": "输入的设置无效。",
+          "shortcut_conflict": "这个快捷键无法注册。",
+          "needs_confirm": "这次修改会删除已有记录，需要确认。",
+          "desktop_only": "剪贴板记录只能在 Pixo 桌面版中使用。",
+          "unknown": "操作没有完成，请稍后再试。"
+        }
       }
     },
     "placeholder": {
       "json": {
         "input": "在此输入或粘贴 JSON",
         "output": "处理后的结果将显示在这里"
+      },
+      "clipboard": {
+        "search": "搜索文本或文件名",
+        "shortcut": "CommandOrControl+Shift+V",
+        "excludedApps": "com.example.app"
       }
     }
   }
