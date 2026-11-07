@@ -68,8 +68,7 @@ export function clipboardGet(id: number): Promise<ClipDetail> {
   return call("clipboard_get", { id });
 }
 
-export async function clipboardImage(id: number, thumb: boolean): Promise<Uint8Array> {
-  const value = await call<unknown>("clipboard_image", { id, thumb });
+function toBytes(value: unknown): Uint8Array {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (ArrayBuffer.isView(value)) {
     return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
@@ -78,6 +77,16 @@ export async function clipboardImage(id: number, thumb: boolean): Promise<Uint8A
     return Uint8Array.from(value);
   }
   throw new ClipboardRequestError("unknown");
+}
+
+export async function clipboardImage(id: number, thumb: boolean): Promise<Uint8Array> {
+  return toBytes(await call<unknown>("clipboard_image", { id, thumb }));
+}
+
+export async function clipboardSourceIcon(source: string): Promise<{ name: string; iconPng: Uint8Array } | null> {
+  const value = await call<{ name?: unknown; iconPng?: unknown } | null>("clipboard_source_icon", { source });
+  if (!value || typeof value.name !== "string" || value.name.length === 0) return null;
+  return { name: value.name, iconPng: toBytes(value.iconPng ?? []) };
 }
 
 export function clipboardCopy(id: number): Promise<CopyResult> {

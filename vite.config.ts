@@ -53,6 +53,7 @@ export default defineConfig(() => ({
             "FontSizeOutlined",
             "FileImageOutlined",
             "FileOutlined",
+            "PushpinFilled",
             "PushpinOutlined",
             "CopyOutlined",
             "DeleteOutlined",

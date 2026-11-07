@@ -1,24 +1,30 @@
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use dispatch2::DispatchQueue;
-use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2::{AnyThread, ClassType, MainThreadMarker};
 use objc2_app_kit::{
-    NSPasteboard, NSPasteboardAccessBehavior, NSPasteboardTypeFileURL, NSPasteboardTypeString,
-    NSPasteboardWriting, NSWorkspace,
+    NSBitmapImageFileType, NSBitmapImageRep, NSCompositingOperation, NSDeviceRGBColorSpace,
+    NSGraphicsContext, NSImage, NSPasteboard, NSPasteboardAccessBehavior, NSPasteboardTypeFileURL,
+    NSPasteboardTypeString, NSPasteboardWriting, NSWorkspace,
 };
-use objc2_foundation::{NSArray, NSString, NSURL};
+use objc2_foundation::{
+    NSArray, NSData, NSDictionary, NSFileManager, NSPoint, NSRect, NSSize, NSString, NSURL,
+};
 
 use super::{KindGate, MonitorEvent, Platform};
 use crate::clipboard::error::ClipboardError;
 use crate::clipboard::io;
-use crate::clipboard::model::{Capture, Payload, PlatformCaps};
-use crate::clipboard::util::{macos_sensitive, path_to_file_uri};
+use crate::clipboard::model::{Capture, Payload, PlatformCaps, SourceMark};
+use crate::clipboard::util::{
+    decode_image_bytes, macos_sensitive, opaque_cache_file, path_to_file_uri,
+};
 
 pub struct MacPlatform {
     recording: Arc<AtomicBool>,
@@ -168,6 +174,13 @@ fn read_pasteboard(
         });
     }
     if files_enabled {
+        if let Some(image) = image_from_opaque_file(&pasteboard) {
+            return Ok(Capture {
+                payload: Some(image),
+                sensitive: false,
+                source_app,
+            });
+        }
         let files = file_paths(&pasteboard);
         if !files.is_empty() {
             return Ok(Capture {
@@ -203,6 +216,91 @@ fn pasteboard_types(pasteboard: &NSPasteboard) -> Vec<String> {
     names
 }
 
+const OPAQUE_IMAGE_LIMIT: u64 = 40 * 1024 * 1024;
+
+fn image_from_opaque_file(pasteboard: &NSPasteboard) -> Option<Payload> {
+    let urls = pasteboard_file_urls(pasteboard);
+    let path = if urls.len() == 1 {
+        urls[0].path()?.to_string()
+    } else if urls.is_empty() {
+        let paths = file_paths(pasteboard);
+        if paths.len() != 1 {
+            return None;
+        }
+        paths.into_iter().next()?
+    } else {
+        return None;
+    };
+    if !opaque_cache_file(&path) {
+        return None;
+    }
+    if let Some(url) = urls.first() {
+        if let Some(bytes) = read_url_bytes(url) {
+            if let Some(payload) = image_payload(&bytes) {
+                return Some(payload);
+            }
+        }
+    } else if let Some(data) = NSData::dataWithContentsOfFile(&NSString::from_str(&path)) {
+        if let Some(payload) = image_payload(&data.to_vec()) {
+            return Some(payload);
+        }
+    }
+    image_payload(&pasteboard_tiff(pasteboard)?)
+}
+
+fn image_payload(bytes: &[u8]) -> Option<Payload> {
+    if bytes.is_empty() || bytes.len() as u64 > OPAQUE_IMAGE_LIMIT {
+        return None;
+    }
+    let (width, height, rgba) = decode_image_bytes(bytes)?;
+    Some(Payload::Image {
+        width,
+        height,
+        rgba,
+    })
+}
+
+fn pasteboard_file_urls(pasteboard: &NSPasteboard) -> Vec<Retained<NSURL>> {
+    let classes = NSArray::from_slice(&[NSURL::class()]);
+    let Some(objects) = (unsafe { pasteboard.readObjectsForClasses_options(&classes, None) })
+    else {
+        return Vec::new();
+    };
+    let mut urls = Vec::new();
+    for index in 0..objects.count() {
+        if let Ok(url) = objects.objectAtIndex(index).downcast::<NSURL>() {
+            urls.push(url);
+        }
+    }
+    urls
+}
+
+fn read_url_bytes(url: &NSURL) -> Option<Vec<u8>> {
+    let started = unsafe { url.startAccessingSecurityScopedResource() };
+    let too_big = url
+        .path()
+        .and_then(|path| std::fs::metadata(path.to_string()).ok())
+        .is_some_and(|meta| meta.len() > OPAQUE_IMAGE_LIMIT);
+    let data = if too_big {
+        None
+    } else {
+        NSData::dataWithContentsOfURL(url).map(|data| data.to_vec())
+    };
+    if started {
+        unsafe { url.stopAccessingSecurityScopedResource() };
+    }
+    data.filter(|bytes| !bytes.is_empty())
+}
+
+fn pasteboard_tiff(pasteboard: &NSPasteboard) -> Option<Vec<u8>> {
+    if !NSImage::canInitWithPasteboard(pasteboard) {
+        return None;
+    }
+    NSImage::initWithPasteboard(NSImage::alloc(), pasteboard)?
+        .TIFFRepresentation()
+        .map(|data| data.to_vec())
+}
+
 fn file_paths(pasteboard: &NSPasteboard) -> Vec<String> {
     let mut paths = Vec::new();
     let Some(items) = pasteboard.pasteboardItems() else {
@@ -218,6 +316,77 @@ fn file_paths(pasteboard: &NSPasteboard) -> Vec<String> {
         }
     }
     paths
+}
+
+pub fn source_mark(source: &str) -> Option<SourceMark> {
+    let source = source.trim();
+    if source.is_empty() || source.len() > 256 || source.chars().any(char::is_control) {
+        return None;
+    }
+    let source = source.to_string();
+    on_main(move || cached_source_mark(&source))
+}
+
+fn cached_source_mark(source: &str) -> Option<SourceMark> {
+    static CACHE: Mutex<Option<HashMap<String, Option<SourceMark>>>> = Mutex::new(None);
+    let mut guard = CACHE.lock().unwrap_or_else(|error| error.into_inner());
+    let cache = guard.get_or_insert_with(HashMap::new);
+    if let Some(mark) = cache.get(source) {
+        return mark.clone();
+    }
+    let mark = lookup_source_mark(source);
+    cache.insert(source.to_string(), mark.clone());
+    mark
+}
+
+fn lookup_source_mark(source: &str) -> Option<SourceMark> {
+    let workspace = NSWorkspace::sharedWorkspace();
+    let url = workspace.URLForApplicationWithBundleIdentifier(&NSString::from_str(source))?;
+    let path = url.path()?;
+    let name = NSFileManager::defaultManager()
+        .displayNameAtPath(&path)
+        .to_string();
+    let name = name.trim();
+    let name = if name.is_empty() {
+        source.to_string()
+    } else {
+        name.to_string()
+    };
+    let icon_png = icon_png(&workspace.iconForFile(&path)).unwrap_or_default();
+    Some(SourceMark { name, icon_png })
+}
+
+fn icon_png(image: &NSImage) -> Option<Vec<u8>> {
+    let rep = unsafe {
+        NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+            NSBitmapImageRep::alloc(),
+            std::ptr::null_mut(),
+            32,
+            32,
+            8,
+            4,
+            true,
+            false,
+            NSDeviceRGBColorSpace,
+            0,
+            0,
+        )
+    }?;
+    let context = NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep)?;
+    NSGraphicsContext::saveGraphicsState_class();
+    NSGraphicsContext::setCurrentContext(Some(&context));
+    image.drawInRect_fromRect_operation_fraction(
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(32.0, 32.0)),
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+        NSCompositingOperation::SourceOver,
+        1.0,
+    );
+    NSGraphicsContext::restoreGraphicsState_class();
+    let properties = NSDictionary::new();
+    let png =
+        unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &properties) }?;
+    let bytes = png.to_vec();
+    bytes.starts_with(b"\x89PNG").then_some(bytes)
 }
 
 fn frontmost_bundle() -> Option<String> {
@@ -306,5 +475,11 @@ mod tests {
         let resolved = filesystem_path(&absolute.to_string()).expect("file reference resolves");
         assert!(resolved.starts_with('/'));
         assert!(!resolved.starts_with("/.file/"));
+    }
+
+    #[test]
+    fn source_mark_rejects_blank_identifiers() {
+        assert!(super::source_mark("").is_none());
+        assert!(super::source_mark("com.apple\n.finder").is_none());
     }
 }

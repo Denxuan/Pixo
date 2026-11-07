@@ -115,6 +115,8 @@
         "fileMissing_other": "{{count}} files are no longer at their original paths. The list was still copied.",
         "retentionZero": "Use 0 to keep items until the count limit removes them.",
         "excludedHelp": "One app identifier per line. It must match the source shown on an item exactly.",
+        "excludedWayland": "This Wayland session cannot identify the source app, so this exclusion list has no effect.",
+        "macosAccess": "macOS may ask for permission the first time the clipboard is read. If items do not appear, allow Pixo to access the clipboard in System Settings under Privacy & Security.",
         "shortcutHelp": "Example: CommandOrControl+Shift+V. If the shortcut cannot be registered, this change is not saved.",
         "kindDisabled": "This kind of content is turned off in settings.",
         "copiedTimes_one": "Copied {{count}} time",

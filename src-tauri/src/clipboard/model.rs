@@ -60,6 +60,13 @@ pub struct Capture {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SourceMark {
+    pub name: String,
+    pub icon_png: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Summary {
     pub id: i64,
     pub kind: String,

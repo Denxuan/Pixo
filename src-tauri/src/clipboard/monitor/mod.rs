@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
 use super::error::ClipboardError;
-use super::model::{Capture, PlatformCaps};
+use super::model::{Capture, PlatformCaps, SourceMark};
 
 pub enum MonitorEvent {
     Capture(Capture),
@@ -77,6 +77,18 @@ mod wayland;
 mod windows;
 #[cfg(target_os = "linux")]
 mod x11;
+
+pub fn source_mark(source: &str) -> Option<SourceMark> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::source_mark(source)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = source;
+        None
+    }
+}
 
 pub fn start(
     events: Sender<MonitorEvent>,

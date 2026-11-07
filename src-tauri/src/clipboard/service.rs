@@ -15,8 +15,8 @@ use super::model::{
 use super::monitor::{self, MonitorEvent};
 use super::store::{self, Store, UpsertRequest, UpsertResult};
 use super::util::{
-    app_excluded, decode_png, encode_png, hash_files, hash_image, hash_text, image_rgba_len,
-    now_millis, thumbnail_png,
+    app_excluded, decode_png, encode_png, files_size_bytes, hash_files, hash_image, hash_text,
+    image_rgba_len, now_millis, thumbnail_png,
 };
 use crate::shortcut;
 
@@ -47,9 +47,8 @@ pub fn initialize(app: AppHandle) -> Result<ClipboardState, ClipboardError> {
         eprintln!("clipboard path: {error}");
         ClipboardError::new("storage")
     })?;
-    let images_dir = root.join("images");
-    fs::create_dir_all(&images_dir).map_err(storage_io)?;
-    let mut store = Store::open(&root.join("history.db"))?;
+    let (database, images_dir) = store::prepare_layout(&root)?;
+    let mut store = Store::open(&database)?;
     let settings = store.load_settings()?;
     store.save_settings(&settings)?;
     let (sender, receiver) = mpsc::channel();
@@ -66,7 +65,11 @@ pub fn initialize(app: AppHandle) -> Result<ClipboardState, ClipboardError> {
     if let Ok(hashes) = store.image_hashes() {
         remove_orphan_images(&images_dir, &hashes);
     }
-    let storage_path = root.to_string_lossy().into_owned();
+    let storage_path = database
+        .parent()
+        .unwrap_or(root.as_path())
+        .to_string_lossy()
+        .into_owned();
     let inner = Arc::new(Inner {
         store: Mutex::new(store),
         settings: Mutex::new(settings),
@@ -167,7 +170,7 @@ impl ClipboardState {
                 let hash = hash_files(&writable);
                 if writable != detail.files {
                     let files_json = store::files_json(&writable)?;
-                    let size_bytes = writable.iter().map(|path| path.len() as i64).sum();
+                    let size_bytes = files_size_bytes(&writable);
                     if lock(&self.inner.store).replace_files(id, &hash, &files_json, size_bytes)? {
                         self.inner.emit_change(id, "updated");
                     }
@@ -497,7 +500,7 @@ fn prepare_payload(payload: &Payload) -> Result<Prepared, ClipboardError> {
         Payload::Files(files) => Ok(Prepared {
             kind: ClipKind::Files,
             hash: hash_files(files),
-            size_bytes: files.iter().map(|path| path.len() as i64).sum(),
+            size_bytes: files_size_bytes(files),
             text: None,
             files_json: Some(store::files_json(files)?),
             image_width: None,
@@ -588,11 +591,6 @@ fn remove_orphan_images(directory: &Path, hashes: &std::collections::HashSet<Str
             }
         }
     }
-}
-
-fn storage_io(error: std::io::Error) -> ClipboardError {
-    eprintln!("clipboard storage: {error}");
-    ClipboardError::new("storage")
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

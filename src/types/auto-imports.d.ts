@@ -40,6 +40,7 @@ declare global {
   const Outlet: typeof import('react-router').Outlet
   const PauseOutlined: typeof import('@ant-design/icons').PauseOutlined
   const PlayCircleOutlined: typeof import('@ant-design/icons').PlayCircleOutlined
+  const PushpinFilled: typeof import('@ant-design/icons').PushpinFilled
   const PushpinOutlined: typeof import('@ant-design/icons').PushpinOutlined
   const Route: typeof import('react-router').Route
   const Routes: typeof import('react-router').Routes

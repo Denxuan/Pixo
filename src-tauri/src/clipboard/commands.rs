@@ -2,7 +2,7 @@ use tauri::State;
 
 use super::error::ClipboardError;
 use super::model::{
-    ClipKind, CopyOutcome, Detail, ListPage, Settings, SettingsUpdate, Status, Summary,
+    ClipKind, CopyOutcome, Detail, ListPage, Settings, SettingsUpdate, SourceMark, Status, Summary,
 };
 use super::service::ClipboardState;
 
@@ -41,6 +41,11 @@ pub fn clipboard_list(
 #[tauri::command]
 pub fn clipboard_get(state: State<'_, ClipboardState>, id: i64) -> Result<Detail, ClipboardError> {
     state.get(id)
+}
+
+#[tauri::command]
+pub fn clipboard_source_icon(source: String) -> Result<Option<SourceMark>, ClipboardError> {
+    Ok(super::monitor::source_mark(&source))
 }
 
 #[tauri::command]

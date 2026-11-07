@@ -1,5 +1,5 @@
-import { ClipboardRequestError, clipboardGetSettings, clipboardUpdateSettings, toClipboardError } from "@/api/clipboard";
-import type { ClipboardSettings } from "@/types/clipboard";
+import { ClipboardRequestError, clipboardGetSettings, clipboardStatus, clipboardUpdateSettings, toClipboardError } from "@/api/clipboard";
+import type { ClipboardSettings, ClipboardStatus } from "@/types/clipboard";
 import { toSettingsUpdate } from "@/types/clipboard";
 import { clipboardErrorText } from "@/utils/clipboardMessage";
 import { isDesktop } from "@/utils/desktop";
@@ -10,6 +10,7 @@ export default function ClipboardSettingsPage() {
   const navigate = useNavigate();
   const desktop = isDesktop();
   const [draft, setDraft] = useState<ClipboardSettings | null>(null);
+  const [status, setStatus] = useState<ClipboardStatus | null>(null);
   const [textMb, setTextMb] = useState<number | null>(1);
   const [imageMb, setImageMb] = useState<number | null>(20);
   const [excluded, setExcluded] = useState("");
@@ -23,6 +24,9 @@ export default function ClipboardSettingsPage() {
   useEffect(() => {
     if (!desktop) return;
     let alive = true;
+    void clipboardStatus().then((current) => {
+      if (alive) setStatus(current);
+    }).catch(() => undefined);
     void clipboardGetSettings()
       .then((current) => {
         if (!alive) return;
@@ -85,6 +89,7 @@ export default function ClipboardSettingsPage() {
         <div>
           <Typography.Title level={3} style={{ margin: 0 }}>{t("zdx.label.clipboard.settings")}</Typography.Title>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("zdx.text.clipboard.settingsDescription")}</Typography.Paragraph>
+          {status && <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("zdx.text.clipboard.storagePath", { path: status.storagePath })}</Typography.Paragraph>}
         </div>
         <Space>
           <Button onClick={() => navigate("/clipboard")}>{t("zdx.label.clipboard.back")}</Button>
@@ -100,6 +105,7 @@ export default function ClipboardSettingsPage() {
           action={<Button size="small" type="primary" onClick={() => void save(true)}>{t("zdx.label.clipboard.confirm")}</Button>}
         />
       )}
+      {status?.platform.includes("macos") && <Alert type="info" showIcon message={t("zdx.text.clipboard.macosAccess")} />}
       {error && <Alert type="error" showIcon message={error} />}
       {!desktop && <Alert type="info" showIcon message={t("zdx.text.clipboard.error.desktop_only")} />}
       {desktop && loading && (
@@ -130,7 +136,15 @@ export default function ClipboardSettingsPage() {
           <Form.Item label={t("zdx.label.clipboard.shortcut")} extra={t("zdx.text.clipboard.shortcutHelp")}>
             <Input value={draft.shortcut} onChange={(event) => setDraft({ ...draft, shortcut: event.target.value })} placeholder={t("zdx.placeholder.clipboard.shortcut")} />
           </Form.Item>
-          <Form.Item label={t("zdx.label.clipboard.excludedApps")} extra={t("zdx.text.clipboard.excludedHelp")}>
+          <Form.Item
+            label={t("zdx.label.clipboard.excludedApps")}
+            extra={
+              <Flex vertical gap={4}>
+                <span>{t("zdx.text.clipboard.excludedHelp")}</span>
+                {status?.platform.includes("wayland") && <span>{t("zdx.text.clipboard.excludedWayland")}</span>}
+              </Flex>
+            }
+          >
             <Input.TextArea value={excluded} onChange={(event) => setExcluded(event.target.value)} placeholder={t("zdx.placeholder.clipboard.excludedApps")} rows={4} />
           </Form.Item>
         </Form>

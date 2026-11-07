@@ -1,6 +1,49 @@
-import { clipboardImage } from "@/api/clipboard";
+import { clipboardImage, clipboardSourceIcon } from "@/api/clipboard";
 import type { ClipSummary } from "@/types/clipboard";
 import { formatBytes, formatRelativeTime } from "@/utils/time";
+
+type LoadedSource = { name: string; url: string };
+
+const sourceCache = new Map<string, Promise<LoadedSource | null>>();
+
+function loadSource(source: string): Promise<LoadedSource | null> {
+  const cached = sourceCache.get(source);
+  if (cached) return cached;
+  const pending = clipboardSourceIcon(source)
+    .then((mark) => {
+      if (!mark) return null;
+      if (mark.iconPng.length === 0) return { name: mark.name, url: "" };
+      const buffer = mark.iconPng.buffer.slice(mark.iconPng.byteOffset, mark.iconPng.byteOffset + mark.iconPng.byteLength) as ArrayBuffer;
+      return { name: mark.name, url: URL.createObjectURL(new Blob([buffer], { type: "image/png" })) };
+    })
+    .catch(() => null);
+  sourceCache.set(source, pending);
+  return pending;
+}
+
+function SourceApp({ source }: { source: string }) {
+  const { t } = useTranslation();
+  const [loaded, setLoaded] = useState<LoadedSource | null | undefined>(undefined);
+
+  useEffect(() => {
+    let alive = true;
+    void loadSource(source).then((mark) => {
+      if (alive) setLoaded(mark);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [source]);
+
+  if (loaded === undefined) return null;
+  const name = loaded?.name || source;
+  return (
+    <span className="inline-flex items-center gap-1">
+      {loaded?.url ? <img src={loaded.url} alt="" aria-hidden="true" width={16} height={16} style={{ borderRadius: 4 }} /> : null}
+      <span>{t("zdx.text.clipboard.sourceApp", { app: name })}</span>
+    </span>
+  );
+}
 
 function kindIcon(kind: string) {
   if (kind === "image") return <FileImageOutlined />;
@@ -66,15 +109,16 @@ export default function HistoryList({
             onClick={() => onActive(item.id)}
             onFocus={() => onActive(item.id)}
             style={{
-              background: active ? token.colorPrimaryBg : token.colorBgContainer,
-              border: `1px solid ${active ? token.colorPrimaryBorder : token.colorBorderSecondary}`,
+              background: active ? token.colorPrimaryBg : item.pinned ? token.colorWarningBg : token.colorBgContainer,
+              border: `1px solid ${active ? token.colorPrimaryBorder : item.pinned ? token.colorWarningBorder : token.colorBorderSecondary}`,
+              boxShadow: item.pinned ? `inset 3px 0 0 ${token.colorWarning}` : undefined,
               borderRadius: token.borderRadiusLG,
               marginBottom: 8,
               paddingInline: 12,
               cursor: "pointer",
             }}
             actions={[
-              <Button key="pin" type="text" aria-label={item.pinned ? t("zdx.label.clipboard.unpin") : t("zdx.label.clipboard.pin")} icon={<PushpinOutlined />} onClick={(event) => { event.stopPropagation(); onPin(item.id, !item.pinned); }} />,
+              <Button key="pin" type="text" aria-label={item.pinned ? t("zdx.label.clipboard.unpin") : t("zdx.label.clipboard.pin")} aria-pressed={item.pinned} icon={item.pinned ? <PushpinFilled /> : <PushpinOutlined />} style={item.pinned ? { color: token.colorWarning } : undefined} onClick={(event) => { event.stopPropagation(); onPin(item.id, !item.pinned); }} />,
               <Button key="copy" type="text" aria-label={t("zdx.label.clipboard.copy")} icon={<CopyOutlined />} onClick={(event) => { event.stopPropagation(); onCopy(item.id); }} />,
               <Button key="delete" type="text" danger aria-label={t("zdx.label.clipboard.delete")} icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); onDelete(item.id); }} />,
             ]}
@@ -87,7 +131,7 @@ export default function HistoryList({
                   <span>{formatRelativeTime(item.lastCopiedAt, i18n.language)}</span>
                   <span>{formatBytes(item.sizeBytes, i18n.language)}</span>
                   <span>{t("zdx.text.clipboard.copiedTimes", { count: item.copyCount })}</span>
-                  {item.sourceApp ? <span>{t("zdx.text.clipboard.sourceApp", { app: item.sourceApp })}</span> : null}
+                  {item.sourceApp ? <SourceApp source={item.sourceApp} /> : null}
                 </Space>
               }
             />

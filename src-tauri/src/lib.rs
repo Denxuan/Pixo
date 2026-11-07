@@ -1,4 +1,5 @@
 mod clipboard;
+mod panel_anchor;
 mod shortcut;
 
 use tauri::Manager;
@@ -32,6 +33,7 @@ pub fn run() {
             clipboard::commands::clipboard_list,
             clipboard::commands::clipboard_get,
             clipboard::commands::clipboard_image,
+            clipboard::commands::clipboard_source_icon,
             clipboard::commands::clipboard_copy,
             clipboard::commands::clipboard_set_pinned,
             clipboard::commands::clipboard_delete,

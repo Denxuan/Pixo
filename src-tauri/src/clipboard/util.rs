@@ -91,6 +91,40 @@ pub fn file_name(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+pub fn files_size_bytes(paths: &[String]) -> i64 {
+    paths
+        .iter()
+        .filter_map(|path| std::fs::metadata(path).ok())
+        .map(|meta| i64::try_from(meta.len()).unwrap_or(i64::MAX))
+        .sum()
+}
+
+pub fn opaque_cache_file(path: &str) -> bool {
+    let name = file_name(path);
+    let stem = match name.rsplit_once('.') {
+        Some((stem, extension)) if image_extension(extension) => stem,
+        Some(_) => return false,
+        None => name.as_str(),
+    };
+    matches!(stem.len(), 32 | 40 | 64) && stem.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn image_extension(extension: &str) -> bool {
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "bmp" | "gif" | "heic" | "heif" | "jpeg" | "jpg" | "png" | "tif" | "tiff" | "webp"
+    )
+}
+
+pub fn decode_image_bytes(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    let image = image::load_from_memory(bytes).ok()?.into_rgba8();
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 || image_rgba_len(width, height).is_none() {
+        return None;
+    }
+    Some((width, height, image.into_raw()))
+}
+
 pub fn like_pattern(query: &str) -> String {
     let mut pattern = String::from("%");
     for ch in query.chars() {
@@ -345,6 +379,40 @@ mod tests {
         let preview = preview_text(&format!("a\nb{}", "x".repeat(300)));
         assert!(preview.starts_with("a b"));
         assert_eq!(preview.chars().count(), 200);
+    }
+
+    #[test]
+    fn opaque_cache_file_matches_hash_images_only() {
+        assert!(opaque_cache_file(
+            "/tmp/1182d8be4e0d8984fd2f07617e95f00b.png"
+        ));
+        assert!(opaque_cache_file(
+            "/tmp/1182D8BE4E0D8984FD2F07617E95F00B.JPEG"
+        ));
+        assert!(!opaque_cache_file("/tmp/holiday.png"));
+        assert!(!opaque_cache_file(
+            "/tmp/1182d8be4e0d8984fd2f07617e95f00b.pdf"
+        ));
+    }
+
+    #[test]
+    fn files_size_bytes_uses_file_length() {
+        let directory = std::env::temp_dir().join(format!(
+            "pixo-size-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("note.txt");
+        std::fs::write(&path, b"hello").unwrap();
+        assert_eq!(
+            files_size_bytes(&[path.to_string_lossy().into_owned(), "/missing/nope".into()]),
+            5
+        );
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

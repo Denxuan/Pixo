@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -605,6 +606,52 @@ fn storage(error: impl std::fmt::Display) -> ClipboardError {
     ClipboardError::new("storage")
 }
 
+pub fn prepare_layout(root: &Path) -> Result<(PathBuf, PathBuf), ClipboardError> {
+    let directory = root.join("clipboard");
+    fs::create_dir_all(&directory).map_err(storage)?;
+    let database = directory.join("history.db");
+    if !database.exists() && root.join("history.db").exists() {
+        move_legacy(&root.join("history.db"), &database)?;
+        move_legacy(
+            &root.join("history.db-wal"),
+            &directory.join("history.db-wal"),
+        )?;
+        move_legacy(
+            &root.join("history.db-shm"),
+            &directory.join("history.db-shm"),
+        )?;
+    }
+    let images = directory.join("images");
+    move_legacy_dir(&root.join("images"), &images)?;
+    fs::create_dir_all(&images).map_err(storage)?;
+    Ok((database, images))
+}
+
+fn move_legacy(from: &Path, to: &Path) -> Result<(), ClipboardError> {
+    if to.exists() || !from.exists() {
+        return Ok(());
+    }
+    fs::rename(from, to).map_err(storage)
+}
+
+fn move_legacy_dir(from: &Path, to: &Path) -> Result<(), ClipboardError> {
+    if !from.is_dir() {
+        return Ok(());
+    }
+    if !to.exists() {
+        return fs::rename(from, to).map_err(storage);
+    }
+    for entry in fs::read_dir(from).map_err(storage)? {
+        let entry = entry.map_err(storage)?;
+        let destination = to.join(entry.file_name());
+        if destination.exists() {
+            continue;
+        }
+        fs::rename(entry.path(), destination).map_err(storage)?;
+    }
+    Ok(())
+}
+
 pub fn image_paths(directory: &Path, hash: &str) -> (PathBuf, PathBuf) {
     (
         directory.join(format!("{hash}.png")),
@@ -777,5 +824,67 @@ mod tests {
             .unwrap();
         assert_eq!(removal.count, 0);
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn migrates_unversioned_database_without_dropping_rows() {
+        let (mut store, directory) = test_store();
+        store.upsert(text_request("kept", "kept", 1)).unwrap();
+        drop(store);
+        let database = directory.join("history.db");
+        let version: i64 = Connection::open(&database)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+        let store = Store::open(&database).unwrap();
+        assert_eq!(
+            store.list(None, None, false, None, 10).unwrap().items[0].preview,
+            "kept"
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn prepare_layout_moves_legacy_files_and_keeps_an_existing_database() {
+        let root = std::env::temp_dir().join(format!(
+            "pixo-layout-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("images")).unwrap();
+        std::fs::write(root.join("history.db"), b"legacy-db").unwrap();
+        std::fs::write(root.join("history.db-wal"), b"legacy-wal").unwrap();
+        std::fs::write(root.join("images").join("abc.png"), b"png").unwrap();
+        let (database, images) = prepare_layout(&root).unwrap();
+        assert_eq!(database, root.join("clipboard").join("history.db"));
+        assert_eq!(std::fs::read(&database).unwrap(), b"legacy-db");
+        assert_eq!(
+            std::fs::read(root.join("clipboard").join("history.db-wal")).unwrap(),
+            b"legacy-wal"
+        );
+        assert_eq!(std::fs::read(images.join("abc.png")).unwrap(), b"png");
+        assert!(!root.join("history.db").exists());
+        assert!(!root.join("images").exists());
+        std::fs::write(root.join("history.db"), b"newer-legacy").unwrap();
+        std::fs::write(root.join("history.db-wal"), b"stray-wal").unwrap();
+        let (again, _) = prepare_layout(&root).unwrap();
+        assert_eq!(std::fs::read(again).unwrap(), b"legacy-db");
+        assert_eq!(
+            std::fs::read(root.join("history.db")).unwrap(),
+            b"newer-legacy"
+        );
+        assert_eq!(
+            std::fs::read(root.join("history.db-wal")).unwrap(),
+            b"stray-wal"
+        );
+        assert_eq!(
+            std::fs::read(root.join("clipboard").join("history.db-wal")).unwrap(),
+            b"legacy-wal"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }
