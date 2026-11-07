@@ -1,8 +1,9 @@
 mod clipboard;
 mod panel_anchor;
 mod shortcut;
+mod tray;
 
-use tauri::Manager;
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -24,6 +25,14 @@ pub fn run() {
                 Box::new(error) as Box<dyn std::error::Error>
             })?;
             app.manage(state);
+            #[cfg(target_os = "macos")]
+            if let Err(error) = shortcut::prepare_panel(app.handle()) {
+                eprintln!("clipboard panel: {error}");
+            }
+            ensure_main_window(app.handle())?;
+            if let Err(error) = tray::install(app.handle()) {
+                eprintln!("clipboard tray: {error}");
+            }
             if std::env::args().any(|arg| arg == "--clipboard-panel") {
                 shortcut::show_panel(app.handle());
             }
@@ -43,7 +52,22 @@ pub fn run() {
             clipboard::commands::clipboard_set_paused,
             clipboard::commands::clipboard_get_settings,
             clipboard::commands::clipboard_update_settings,
+            shortcut::clipboard_dismiss_panel,
+            tray::clipboard_set_tray_labels,
+            tray::clipboard_take_main_request,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+pub(crate) fn ensure_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
+    if app.get_webview_window("main").is_some() {
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+        .title("pixo")
+        .inner_size(1100.0, 720.0)
+        .min_inner_size(860.0, 600.0)
+        .build()?;
+    Ok(())
 }

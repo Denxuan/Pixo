@@ -4,7 +4,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
 use dispatch2::DispatchQueue;
 #[cfg(target_os = "macos")]
+use objc2::MainThreadMarker;
+#[cfg(target_os = "macos")]
 use objc2::rc::Retained;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::NSScreen;
 #[cfg(target_os = "macos")]
 use objc2_foundation::{NSDictionary, NSNumber, NSString};
 
@@ -50,6 +54,49 @@ pub fn place_beside(anchor: Rect, panel_width: f64, panel_height: f64, screen: R
     let min_y = screen.y + margin;
     let max_y = (screen_top - margin - panel_height).max(min_y);
     (x.clamp(min_x, max_x), y.clamp(min_y, max_y))
+}
+
+/// Place a panel just under the top of a work area. Coordinates are AppKit points:
+/// origin at the bottom left, y growing upward. `anchor_x` is the horizontal center.
+pub fn place_under_bar(
+    anchor_x: f64,
+    panel_width: f64,
+    panel_height: f64,
+    area: Rect,
+) -> (f64, f64) {
+    let gap = 8.0;
+    let margin = 8.0;
+    let min_x = area.x + margin;
+    let max_x = (area.x + area.width - margin - panel_width).max(min_x);
+    let min_y = area.y + margin;
+    let max_y = (area.y + area.height - margin - panel_height).max(min_y);
+    let x = (anchor_x - panel_width / 2.0).clamp(min_x, max_x);
+    let y = (area.y + area.height - gap - panel_height).clamp(min_y, max_y);
+    (x, y)
+}
+
+/// Place a panel under an icon, or above it when the icon sits on a bottom taskbar.
+/// Coordinates use a top-left origin and y grows downward.
+pub fn place_under_icon(
+    icon: Rect,
+    panel_width: f64,
+    panel_height: f64,
+    screen: Rect,
+) -> (f64, f64) {
+    let gap = 8.0;
+    let margin = 8.0;
+    let min_x = screen.x + margin;
+    let max_x = (screen.x + screen.width - margin - panel_width).max(min_x);
+    let min_y = screen.y + margin;
+    let max_y = (screen.y + screen.height - margin - panel_height).max(min_y);
+    let x = (icon.x + icon.width / 2.0 - panel_width / 2.0).clamp(min_x, max_x);
+    let below = icon.y + icon.height + gap;
+    let y = if below + panel_height <= screen.y + screen.height - margin {
+        below
+    } else {
+        icon.y - gap - panel_height
+    };
+    (x, y.clamp(min_y, max_y))
 }
 
 #[cfg(target_os = "macos")]
@@ -218,6 +265,58 @@ fn primary_height() -> f64 {
 }
 
 #[cfg(target_os = "macos")]
+pub fn pointer() -> Rect {
+    mouse_rect()
+}
+
+/// Usable area under the menu bar on the display that contains `anchor`.
+#[cfg(target_os = "macos")]
+pub fn work_area(anchor: Rect) -> Rect {
+    if let Some(area) = visible_area(anchor) {
+        if area.width > 1.0 && area.height > 1.0 {
+            return area;
+        }
+    }
+    let screen = screen_containing(anchor);
+    Rect {
+        x: screen.x,
+        y: screen.y,
+        width: screen.width,
+        height: (screen.height - 24.0).max(1.0),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn visible_area(anchor: Rect) -> Option<Rect> {
+    let mtm = MainThreadMarker::new()?;
+    let screens = NSScreen::screens(mtm);
+    let center_x = anchor.x + anchor.width / 2.0;
+    let center_y = anchor.y + anchor.height / 2.0;
+    let count = screens.count();
+    let mut index = 0;
+    while index < count {
+        let screen = screens.objectAtIndex(index);
+        index += 1;
+        let frame = screen.frame();
+        if center_x < frame.origin.x
+            || center_y < frame.origin.y
+            || center_x >= frame.origin.x + frame.size.width
+            || center_y >= frame.origin.y + frame.size.height
+        {
+            continue;
+        }
+        let visible = screen.visibleFrame();
+        return Some(Rect {
+            x: visible.origin.x,
+            y: visible.origin.y,
+            width: visible.size.width,
+            height: visible.size.height,
+        });
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
 fn mouse_rect() -> Rect {
     let event = unsafe { CGEventCreate(std::ptr::null_mut()) };
     let point = if event.is_null() {
@@ -342,7 +441,7 @@ unsafe extern "C" {
 
 #[cfg(test)]
 mod tests {
-    use super::{Rect, ax_to_appkit, place_beside};
+    use super::{Rect, ax_to_appkit, place_beside, place_under_bar, place_under_icon};
 
     #[cfg(target_os = "macos")]
     #[test]
@@ -439,5 +538,55 @@ mod tests {
         );
         assert!(x >= 8.0 && y >= 8.0);
         assert!(x + 440.0 <= 1432.0 && y + 560.0 <= 892.0);
+    }
+
+    #[test]
+    fn places_the_panel_under_the_menu_bar() {
+        let area = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 876.0,
+        };
+        assert_eq!(place_under_bar(1400.0, 440.0, 560.0, area), (992.0, 308.0));
+        assert_eq!(place_under_bar(720.0, 440.0, 560.0, area), (500.0, 308.0));
+    }
+
+    #[test]
+    fn places_the_panel_under_a_tray_icon_or_above_a_bottom_taskbar() {
+        let screen = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 900.0,
+        };
+        assert_eq!(
+            place_under_icon(
+                Rect {
+                    x: 1200.0,
+                    y: 0.0,
+                    width: 24.0,
+                    height: 24.0,
+                },
+                440.0,
+                560.0,
+                screen,
+            ),
+            (992.0, 32.0)
+        );
+        assert_eq!(
+            place_under_icon(
+                Rect {
+                    x: 100.0,
+                    y: 860.0,
+                    width: 40.0,
+                    height: 32.0,
+                },
+                440.0,
+                200.0,
+                screen,
+            ),
+            (8.0, 652.0)
+        );
     }
 }

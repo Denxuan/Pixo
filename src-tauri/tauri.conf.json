@@ -10,15 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "pixo",
-        "width": 1100,
-        "height": 720,
-        "minWidth": 860,
-        "minHeight": 600
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

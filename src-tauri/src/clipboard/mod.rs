@@ -8,4 +8,4 @@ mod store;
 mod util;
 
 pub use error::ClipboardError;
-pub use service::initialize;
+pub use service::{ClipboardState, initialize};

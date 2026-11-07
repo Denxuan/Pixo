@@ -1,4 +1,8 @@
+import { listen } from "@tauri-apps/api/event";
+
+import { takeClipboardMainRequest } from "@/api/clipboard";
 import { useSettingsStore, type ThemeMode } from "@/stores/settings";
+import { isDesktop } from "@/utils/desktop";
 
 function isThemeMode(value: string): value is ThemeMode {
   return value === "system" || value === "light" || value === "dark";
@@ -13,6 +17,30 @@ export default function AppShell() {
   const language = useSettingsStore((state) => state.language);
   const setLanguage = useSettingsStore((state) => state.setLanguage);
   const selected = location.pathname.startsWith("/clipboard") ? "clipboard" : "";
+
+  useEffect(() => {
+    if (!isDesktop()) return;
+    let stop: (() => void) | undefined;
+    let disposed = false;
+    const open = (request: { path: string; enable: boolean }) => {
+      const path = request.path === "/clipboard/settings" ? "/clipboard/settings" : "/clipboard";
+      navigate(path, { state: request.enable ? { enable: true } : null });
+    };
+    void listen<{ path: string; enable: boolean }>("clipboard://open-main", (event) => {
+      open(event.payload);
+      void takeClipboardMainRequest();
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stop = unlisten;
+    });
+    void takeClipboardMainRequest().then((request) => {
+      if (request) open(request);
+    });
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, [navigate]);
 
   return (
     <Layout className="h-full overflow-hidden">

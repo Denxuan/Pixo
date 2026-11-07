@@ -124,3 +124,13 @@ export function clipboardGetSettings(): Promise<ClipboardSettings> {
 export function clipboardUpdateSettings(settings: ClipboardSettingsUpdate): Promise<ClipboardSettings> {
   return call("clipboard_update_settings", { settings });
 }
+
+export function dismissClipboardPanel() {
+  if (!isDesktop()) return;
+  return invoke("clipboard_dismiss_panel");
+}
+
+export function takeClipboardMainRequest(): Promise<{ path: string; enable: boolean } | null> {
+  if (!isDesktop()) return Promise.resolve(null);
+  return invoke("clipboard_take_main_request");
+}

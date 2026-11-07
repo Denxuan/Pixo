@@ -1,6 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-import { ClipboardRequestError } from "@/api/clipboard";
+import { ClipboardRequestError, dismissClipboardPanel } from "@/api/clipboard";
 import HistoryList from "@/components/clipboard/HistoryList";
 import { useClipboardHistory } from "@/hooks/useClipboard";
 import { clipboardErrorText } from "@/utils/clipboardMessage";
@@ -8,7 +8,10 @@ import { clipboardErrorText } from "@/utils/clipboardMessage";
 function focusSearch() {
   const field = document.getElementById("clipboard-panel-search");
   const input = field instanceof HTMLInputElement ? field : field?.querySelector("input");
-  if (input instanceof HTMLInputElement) input.focus({ preventScroll: true });
+  if (!(input instanceof HTMLInputElement)) return;
+  input.focus({ preventScroll: true });
+  const end = input.value.length;
+  input.setSelectionRange(end, end);
 }
 
 export default function ClipboardPanel() {
@@ -46,6 +49,8 @@ export default function ClipboardPanel() {
       window.clearTimeout(hideTimer);
       window.clearTimeout(armTimer);
       armed = false;
+      focusSearch();
+      window.setTimeout(focusSearch, 30);
       armTimer = window.setTimeout(() => {
         armed = document.hasFocus();
       }, 600);
@@ -57,13 +62,17 @@ export default function ClipboardPanel() {
       armed = false;
       hideTimer = window.setTimeout(() => {
         if (document.hasFocus()) return;
-        void getCurrentWindow().hide();
+        dismissClipboardPanel();
       }, 200);
     };
+    const unlisten = getCurrentWindow().onFocusChanged(({ payload }) => {
+      if (payload) onFocus();
+    });
     window.addEventListener("focus", onFocus);
     window.addEventListener("blur", onBlur);
     if (document.hasFocus()) onFocus();
     return () => {
+      void unlisten.then((stop) => stop());
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("blur", onBlur);
       window.clearTimeout(hideTimer);
@@ -87,7 +96,7 @@ export default function ClipboardPanel() {
       const result = await history.copyItem(id);
       setMessage(result.missing.length > 0 ? t("zdx.text.clipboard.fileMissing", { count: result.missing.length }) : t("zdx.text.clipboard.panelHint"));
       window.setTimeout(() => {
-        void getCurrentWindow().hide();
+        dismissClipboardPanel();
       }, 600);
     } catch (error) {
       if (error instanceof ClipboardRequestError) setMessage(clipboardErrorText(t, error));
@@ -97,7 +106,7 @@ export default function ClipboardPanel() {
   function onKeyDown(event: React.KeyboardEvent) {
     if (event.key === "Escape") {
       event.preventDefault();
-      void getCurrentWindow().hide();
+      dismissClipboardPanel();
     } else if (event.key === "ArrowDown") {
       event.preventDefault();
       setIndex((current) => Math.min(current + 1, history.items.length - 1));
@@ -127,7 +136,7 @@ export default function ClipboardPanel() {
     >
       <Flex justify="space-between" align="center" data-tauri-drag-region style={{ padding: "12px 16px", borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
         <Typography.Title level={5} data-tauri-drag-region style={{ margin: 0 }}>{t("zdx.label.clipboard.title")}</Typography.Title>
-        <Button type="text" aria-label={t("zdx.label.clipboard.close")} onClick={() => void getCurrentWindow().hide()}>{t("zdx.label.clipboard.close")}</Button>
+        <Button type="text" aria-label={t("zdx.label.clipboard.close")} onClick={() => dismissClipboardPanel()}>{t("zdx.label.clipboard.close")}</Button>
       </Flex>
       <Flex vertical gap={8} style={{ padding: "12px 16px 8px" }}>
         <Input

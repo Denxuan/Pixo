@@ -21,6 +21,7 @@ function isFilter(value: string | number): value is ClipFilter {
 export default function ClipboardPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const location = useLocation();
   const history = useClipboardHistory();
   const [activeId, setActiveId] = useState<number | null>(null);
   const [notice, setNotice] = useState("");
@@ -29,6 +30,13 @@ export default function ClipboardPage() {
   const [keepPinned, setKeepPinned] = useState(true);
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
   const desktop = isDesktop();
+
+  useEffect(() => {
+    const state = location.state as { enable?: boolean } | null;
+    if (!state?.enable) return;
+    setEnableOpen(true);
+    navigate("/clipboard", { replace: true, state: null });
+  }, [location.state, navigate]);
 
   useEffect(() => {
     if (history.items.length === 0) {
