@@ -1,6 +1,7 @@
 import AppShell from "@/layout/AppShell";
 import ClipboardPage from "@/pages/Clipboard";
 import ClipboardSettingsPage from "@/pages/ClipboardSettings";
+import SystemSettingsPage from "@/pages/SystemSettings";
 
 export default function AppRouter() {
   return (
@@ -10,6 +11,7 @@ export default function AppRouter() {
           <Route index element={<Navigate to="/clipboard" replace />} />
           <Route path="/clipboard" element={<ClipboardPage />} />
           <Route path="/clipboard/settings" element={<ClipboardSettingsPage />} />
+          <Route path="/settings" element={<SystemSettingsPage />} />
           <Route path="*" element={<Navigate to="/clipboard" replace />} />
         </Route>
       </Routes>

@@ -3,6 +3,7 @@ mod panel_anchor;
 mod permissions;
 mod shortcut;
 mod tray;
+mod system_settings;
 
 use tauri::window::Color;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
@@ -20,7 +21,10 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_opener::init())
+        .manage(system_settings::BackgroundMode::default())
+        .on_window_event(system_settings::hide_on_close)
         .setup(|app| {
             let state = clipboard::initialize(app.handle().clone()).map_err(|error| {
                 eprintln!("clipboard init: {error}");
@@ -31,10 +35,10 @@ pub fn run() {
             if let Err(error) = shortcut::prepare_panel(app.handle()) {
                 eprintln!("clipboard panel: {error}");
             }
-            ensure_main_window(app.handle())?;
             if let Err(error) = tray::install(app.handle()) {
                 eprintln!("clipboard tray: {error}");
             }
+            ensure_main_window(app.handle())?;
             if std::env::args().any(|arg| arg == "--clipboard-panel") {
                 shortcut::show_panel(app.handle());
                 permissions::prepare();
@@ -62,6 +66,9 @@ pub fn run() {
             permissions::permissions_status,
             permissions::permissions_prepare,
             permissions::permissions_open,
+            system_settings::system_autostart_enabled,
+            system_settings::system_set_autostart,
+            system_settings::system_set_background,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

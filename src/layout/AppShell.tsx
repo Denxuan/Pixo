@@ -26,8 +26,9 @@ export default function AppShell() {
   const { token } = antdTheme.useToken();
   const [collapsed, setCollapsed] = useState(false);
   const reduceMotion = useSyncExternalStore(subscribeMotion, () => motionQuery.matches);
-  const selected = location.pathname.startsWith("/clipboard") ? "clipboard" : "";
+  const selected = location.pathname.startsWith("/clipboard") ? "clipboard" : location.pathname === "/settings" ? "settings" : "";
   const clipboardItem = { key: "clipboard", icon: <HistoryOutlined />, label: t("zdx.label.nav.clipboard") };
+  const settingsItem = { key: "settings", icon: <SettingOutlined />, label: t("zdx.label.system.title") };
 
   useEffect(() => {
     if (!isDesktop()) return;
@@ -87,8 +88,9 @@ export default function AppShell() {
             style={{ borderInlineEnd: 0, background: "transparent" }}
             onClick={({ key }) => {
               if (key === "clipboard") navigate("/clipboard");
+              if (key === "settings") navigate("/settings");
             }}
-            items={collapsed ? [clipboardItem] : [{ type: "group", label: t("zdx.label.nav.workspace"), children: [clipboardItem] }]}
+            items={collapsed ? [clipboardItem, settingsItem] : [{ type: "group", label: t("zdx.label.nav.workspace"), children: [clipboardItem, settingsItem] }]}
           />
           {!collapsed && <Typography.Text style={{ marginTop: "auto", padding: "12px 20px", color: token.colorTextSecondary }}>{t("zdx.text.app.local")}</Typography.Text>}
         </Flex>

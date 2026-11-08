@@ -28,6 +28,7 @@ arboard = "3"
 rusqlite = { version = "0.37", features = ["bundled"] }
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "tiff"] }
 sha2 = "0.10"
+tauri-plugin-autostart = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

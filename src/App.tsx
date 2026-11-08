@@ -1,4 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { setBackground } from "@/api/system";
 
 import BootScreen from "@/components/BootScreen";
 import { useSharedSettings } from "@/hooks/useSharedSettings";
@@ -39,6 +40,14 @@ export default function App() {
   const panel = isClipboardPanel();
   const hydrated = useSettingsHydrated();
   useSharedSettings(!panel);
+
+  useEffect(() => {
+    if (!isDesktop() || panel || !hydrated) return;
+    void setBackground(useSettingsStore.getState().background).catch((error) => {
+      console.error("Failed to apply background mode", error);
+      useSettingsStore.getState().setBackground(false);
+    });
+  }, [hydrated, panel]);
 
   useEffect(() => {
     if (!isDesktop() || panel || !hydrated) return;
