@@ -50,9 +50,9 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: "-"
         run: |
-          pnpm tauri build --target universal-apple-darwin --bundles app
+          pnpm tauri build --target universal-apple-darwin --bundles dmg
           mkdir -p release-assets
-          ditto -c -k --sequesterRsrc --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/pixo.app release-assets/pixo-macos-universal.zip
+          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg release-assets/pixo-macos-universal.dmg
       - name: Build Linux packages
         if: matrix.platform == 'linux'
         run: |
@@ -87,26 +87,29 @@ jobs:
       - name: Publish release and update Homebrew cask
         env:
           GH_TOKEN: ${{ github.token }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           set -euo pipefail
           version=$(node .github/scripts/release-version.mjs)
-          test -f release-assets/pixo-macos-universal.zip
+          test -f release-assets/pixo-macos-universal.dmg
           (cd release-assets && sha256sum * > SHA256SUMS.txt)
-          (cd "$RUNNER_TEMP" && node "$GITHUB_WORKSPACE/.github/scripts/generate-cask.mjs" "$GITHUB_WORKSPACE/release-assets/pixo-macos-universal.zip" "$version" "$GITHUB_REPOSITORY")
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             echo "Release already exists; refusing to overwrite assets." >&2
             exit 1
           fi
           gh release create "$GITHUB_REF_NAME" release-assets/* --title "Pixo $version" --generate-notes --verify-tag
-          git fetch origin "$DEFAULT_BRANCH"
-          git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
-          mkdir -p Casks
-          cp "$RUNNER_TEMP/Casks/pixo.rb" Casks/pixo.rb
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Casks/pixo.rb
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: update Homebrew cask for $GITHUB_REF_NAME"
-            git push origin "HEAD:$DEFAULT_BRANCH"
+          if [ -n "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            (cd "$RUNNER_TEMP" && node "$GITHUB_WORKSPACE/.github/scripts/generate-cask.mjs" "$GITHUB_WORKSPACE/release-assets/pixo-macos-universal.dmg" "$version" "$GITHUB_REPOSITORY")
+            git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/Denxuan/homebrew-pixo.git" "$RUNNER_TEMP/homebrew-pixo"
+            cp "$RUNNER_TEMP/Casks/pixo.rb" "$RUNNER_TEMP/homebrew-pixo/Casks/pixo.rb"
+            cd "$RUNNER_TEMP/homebrew-pixo"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+users.noreply.github.com"
+            git add Casks/pixo.rb
+            if ! git diff --cached --quiet; then
+              git commit -m "Update Pixo cask for $GITHUB_REF_NAME"
+              git push
+            fi
+          else
+            echo "HOMEBREW_TAP_TOKEN is not configured; skipping automatic tap update."
           fi

@@ -10,7 +10,7 @@ const cask = `cask "pixo" do
   version "${version}"
   sha256 "${sha}"
 
-  url "https://github.com/${repository}/releases/download/v#{version}/pixo-macos-universal.zip"
+  url "https://github.com/${repository}/releases/download/v#{version}/pixo-macos-universal.dmg"
   name "Pixo"
   desc "Desktop clipboard and productivity toolbox"
   homepage "https://github.com/${repository}"

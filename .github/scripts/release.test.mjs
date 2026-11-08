@@ -18,13 +18,13 @@ test("release tag must match all project versions", () => {
 test("cask includes the actual archive checksum and release URL", () => {
   const dir = mkdtempSync(join(tmpdir(), "pixo-cask-"));
   try {
-    const archive = join(dir, "package.zip");
+    const archive = join(dir, "package.dmg");
     writeFileSync(archive, "test archive");
     const script = resolve(".github/scripts/generate-cask.mjs");
     execFileSync(process.execPath, [script, archive, "1.2.3", "owner/Pixo"], { cwd: dir });
     const cask = readFileSync(join(dir, "Casks/pixo.rb"), "utf8");
     assert.ok(cask.includes(createHash("sha256").update("test archive").digest("hex")));
-    assert.ok(cask.includes("https://github.com/owner/Pixo/releases/download/v#{version}/pixo-macos-universal.zip"));
+    assert.ok(cask.includes("https://github.com/owner/Pixo/releases/download/v#{version}/pixo-macos-universal.dmg"));
     assert.throws(() => execFileSync(process.execPath, [script, archive, "1.2.3", "invalid/repo/extra"], { cwd: dir, stdio: "pipe" }));
   } finally {
     rmSync(dir, { recursive: true, force: true });
