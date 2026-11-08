@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macos
+          - os: ubuntu-22.04
+            platform: linux
+          - os: windows-latest
+            platform: windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.3.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libwayland-dev libxkbcommon-dev libssl-dev libfuse2
+      - run: node .github/scripts/release-version.mjs
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: node --test .github/scripts/release.test.mjs
+      - name: Build macOS universal app
+        if: matrix.platform == 'macos'
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: |
+          pnpm tauri build --target universal-apple-darwin --bundles app
+          mkdir -p release-assets
+          ditto -c -k --sequesterRsrc --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/pixo.app release-assets/pixo-macos-universal.zip
+      - name: Build Linux packages
+        if: matrix.platform == 'linux'
+        run: |
+          pnpm tauri build --bundles deb,appimage
+          mkdir -p release-assets
+          cp src-tauri/target/release/bundle/deb/*.deb src-tauri/target/release/bundle/appimage/*.AppImage release-assets/
+      - name: Build Windows installers
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          pnpm tauri build --bundles nsis,msi
+          mkdir -p release-assets
+          cp src-tauri/target/release/bundle/nsis/*.exe src-tauri/target/release/bundle/msi/*.msi release-assets/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pixo-${{ matrix.platform }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pixo-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish release and update Homebrew cask
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          version=$(node .github/scripts/release-version.mjs)
+          test -f release-assets/pixo-macos-universal.zip
+          (cd release-assets && sha256sum * > SHA256SUMS.txt)
+          node .github/scripts/generate-cask.mjs release-assets/pixo-macos-universal.zip "$version" "$GITHUB_REPOSITORY"
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            echo "Release already exists; refusing to overwrite assets." >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" release-assets/* --title "Pixo $version" --generate-notes --verify-tag
+          cp Casks/pixo.rb "$RUNNER_TEMP/pixo-cask.rb"
+          git fetch origin "$DEFAULT_BRANCH"
+          git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
+          mkdir -p Casks
+          cp "$RUNNER_TEMP/pixo-cask.rb" Casks/pixo.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/pixo.rb
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update Homebrew cask for $GITHUB_REF_NAME"
+            git push origin "HEAD:$DEFAULT_BRANCH"
+          fi
