@@ -8,7 +8,7 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::System::DataExchange::{
     AddClipboardFormatListener, CloseClipboard, EmptyClipboard, GetClipboardData,
-    IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW,
+    GetClipboardOwner, IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW,
     RemoveClipboardFormatListener, SetClipboardData,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -18,9 +18,9 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClipboardOwner, GetMessageW,
-    GetWindowThreadProcessId, HWND_MESSAGE, MSG, PostQuitMessage, RegisterClassW, TranslateMessage,
-    WM_CLIPBOARDUPDATE, WM_QUIT, WNDCLASSW,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetWindowThreadProcessId,
+    HWND_MESSAGE, MSG, PostQuitMessage, RegisterClassW, TranslateMessage, WM_CLIPBOARDUPDATE,
+    WM_QUIT, WNDCLASSW,
 };
 use windows::core::w;
 
@@ -39,7 +39,7 @@ const CF_DIBV5: u32 = 17;
 struct ListenerState {
     events: Mutex<Option<Sender<MonitorEvent>>>,
     recording: AtomicBool,
-    hwnd: Mutex<Option<HWND>>,
+    hwnd: Mutex<Option<usize>>,
     kinds: KindGate,
 }
 
@@ -130,7 +130,11 @@ fn listen() -> Result<(), ClipboardError> {
         let class_name = w!("PixoClipboardListener");
         let class = WNDCLASSW {
             lpfnWndProc: Some(window_proc),
-            hInstance: windows::Win32::Foundation::HINSTANCE(GetModuleHandleW(None)?.0),
+            hInstance: windows::Win32::Foundation::HINSTANCE(
+                GetModuleHandleW(None)
+                    .map_err(|_| ClipboardError::new("unsupported"))?
+                    .0,
+            ),
             lpszClassName: class_name,
             ..WNDCLASSW::default()
         };
@@ -150,11 +154,12 @@ fn listen() -> Result<(), ClipboardError> {
             None,
             None,
             None,
-        )?;
-        *lock(&state().hwnd) = Some(hwnd);
-        AddClipboardFormatListener(hwnd)?;
+        )
+        .map_err(|_| ClipboardError::new("unsupported"))?;
+        *lock(&state().hwnd) = Some(hwnd.0 as usize);
+        AddClipboardFormatListener(hwnd).map_err(|_| ClipboardError::new("unsupported"))?;
         let mut message = MSG::default();
-        while GetMessageW(&mut message, None, 0, 0) > 0 {
+        while GetMessageW(&mut message, None, 0, 0).0 > 0 {
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
         }
@@ -401,7 +406,7 @@ unsafe fn clipboard_owner() -> Option<String> {
 
 fn write_rich_open(text: &RichText) -> Result<(), ClipboardError> {
     unsafe {
-        EmptyClipboard()?;
+        EmptyClipboard().map_err(|_| ClipboardError::new("busy"))?;
         set_unicode_text(&text.plain)?;
         if let Some(html) = &text.html {
             let format = RegisterClipboardFormatW(w!("HTML Format"));
@@ -429,7 +434,7 @@ unsafe fn read_registered(name: windows::core::PCWSTR) -> Result<Option<Vec<u8>>
 
 fn write_files_open(paths: &[String]) -> Result<(), ClipboardError> {
     unsafe {
-        EmptyClipboard()?;
+        EmptyClipboard().map_err(|_| ClipboardError::new("busy"))?;
         set_unicode_text(&paths.join("\n"))?;
         set_hdrop(paths)?;
         Ok(())
@@ -508,7 +513,7 @@ impl Drop for WindowsPlatform {
         if let Some(hwnd) = lock(&state().hwnd).take() {
             unsafe {
                 let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
-                    Some(hwnd),
+                    Some(HWND(hwnd as *mut _)),
                     WM_QUIT,
                     WPARAM(0),
                     LPARAM(0),

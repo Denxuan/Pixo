@@ -14,6 +14,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
+use x11rb::x11_utils::Serialize;
 use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
 use super::{KindGate, MonitorEvent};
@@ -299,7 +300,8 @@ impl Context {
                 let result = self
                     .conn
                     .set_selection_owner(self.window, self.atoms.clipboard, CURRENT_TIME)
-                    .and_then(|cookie| cookie.check())
+                    .map_err(|_| ())
+                    .and_then(|cookie| cookie.check().map_err(|_| ()))
                     .map_err(|_| ClipboardError::new("busy"));
                 let _ = self.conn.flush();
                 let _ = reply.send(result);
@@ -320,7 +322,8 @@ impl Context {
                 self.atoms.property,
                 CURRENT_TIME,
             )
-            .and_then(|cookie| cookie.check());
+            .map_err(|_| ())
+            .and_then(|cookie| cookie.check().map_err(|_| ()));
         if result.is_err() {
             if let Some(sink) = sink {
                 let _ = sink.send(Err(ClipboardError::new("busy")));
@@ -519,7 +522,8 @@ impl Context {
                 self.atoms.property,
                 CURRENT_TIME,
             )
-            .and_then(|cookie| cookie.check());
+            .map_err(|_| ())
+            .and_then(|cookie| cookie.check().map_err(|_| ()));
         let _ = self.conn.flush();
     }
 
@@ -644,7 +648,8 @@ impl Context {
         let _ = self
             .conn
             .send_event(false, request.requestor, EventMask::NO_EVENT, padded)
-            .and_then(|cookie| cookie.check());
+            .map_err(|_| ())
+            .and_then(|cookie| cookie.check().map_err(|_| ()));
         let _ = self.conn.flush();
     }
 
@@ -674,7 +679,7 @@ impl Context {
             Owned::Text(text)
                 if target == self.atoms.utf8
                     || target == self.atoms.plain
-                    || target == AtomEnum::STRING.into() =>
+                    || target == u32::from(AtomEnum::STRING) =>
             {
                 Some(text.plain.clone())
             }
@@ -755,7 +760,7 @@ fn payload_from_target(atoms: &Atoms, target: Atom, value: &[u8]) -> Option<Payl
     (!text.is_empty()).then_some(Payload::Text(RichText::plain(text)))
 }
 
-impl X11Backend {
+impl Context {
     fn finish_body(
         &mut self,
         events: &Sender<MonitorEvent>,
@@ -765,7 +770,7 @@ impl X11Backend {
     ) {
         let plain_target = target == self.atoms.utf8
             || target == self.atoms.plain
-            || target == AtomEnum::STRING.into();
+            || target == u32::from(AtomEnum::STRING);
         let html_target = target == self.atoms.html;
         let rtf_target = target == self.atoms.rtf;
         if !(plain_target || html_target || rtf_target) {
