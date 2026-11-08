@@ -21,8 +21,8 @@ This template should help get you started developing with Tauri, React and Types
 首次发行成功后，可通过以下命令安装 macOS 版本（将仓库地址改为实际公开的 GitHub 地址）：
 
 ```sh
-brew tap denxuan/pixo https://github.com/Denxuan/Pixo.git
-brew install --cask denxuan/pixo/pixo
+brew tap denxuan/tab
+brew install --cask pixo
 ```
 
 macOS 发行包使用临时签名，尚未经过 Apple 公证；首次打开时 macOS 可能要求在系统设置中确认。该配置适合测试分发，面向正式用户发布时应配置 Developer ID 签名和公证。

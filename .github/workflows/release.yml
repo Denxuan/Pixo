@@ -84,10 +84,9 @@ jobs:
           pattern: pixo-*
           path: release-assets
           merge-multiple: true
-      - name: Publish release and update Homebrew cask
+      - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           set -euo pipefail
           version=$(node .github/scripts/release-version.mjs)
@@ -98,18 +97,35 @@ jobs:
             exit 1
           fi
           gh release create "$GITHUB_REF_NAME" release-assets/* --title "Pixo $version" --generate-notes --verify-tag
-          if [ -n "${HOMEBREW_TAP_TOKEN:-}" ]; then
-            (cd "$RUNNER_TEMP" && node "$GITHUB_WORKSPACE/.github/scripts/generate-cask.mjs" "$GITHUB_WORKSPACE/release-assets/pixo-macos-universal.dmg" "$version" "$GITHUB_REPOSITORY")
-            git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/Denxuan/homebrew-pixo.git" "$RUNNER_TEMP/homebrew-pixo"
-            cp "$RUNNER_TEMP/Casks/pixo.rb" "$RUNNER_TEMP/homebrew-pixo/Casks/pixo.rb"
-            cd "$RUNNER_TEMP/homebrew-pixo"
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+users.noreply.github.com"
-            git add Casks/pixo.rb
-            if ! git diff --cached --quiet; then
-              git commit -m "Update Pixo cask for $GITHUB_REF_NAME"
-              git push
-            fi
-          else
-            echo "HOMEBREW_TAP_TOKEN is not configured; skipping automatic tap update."
+
+      - name: Verify Homebrew Tap token
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [[ -z "$HOMEBREW_TAP_TOKEN" ]]; then
+            echo "Missing HOMEBREW_TAP_TOKEN repository secret with Contents: Read and write access to Denxuan/homebrew-tab." >&2
+            exit 1
+          fi
+
+      - name: Check out shared Homebrew Tap
+        uses: actions/checkout@v4
+        with:
+          repository: Denxuan/homebrew-tab
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Publish Pixo Cask to shared tap
+        run: |
+          set -euo pipefail
+          version=$(node .github/scripts/release-version.mjs)
+          (cd "$RUNNER_TEMP" && node "$GITHUB_WORKSPACE/.github/scripts/generate-cask.mjs" "$GITHUB_WORKSPACE/release-assets/pixo-macos-universal.dmg" "$version" "$GITHUB_REPOSITORY")
+          mkdir -p homebrew-tap/Casks
+          cp "$RUNNER_TEMP/Casks/pixo.rb" homebrew-tap/Casks/pixo.rb
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+users.noreply.github.com"
+          git add Casks/pixo.rb
+          if ! git diff --cached --quiet; then
+            git commit -m "pixo $GITHUB_REF_NAME"
+            git push
           fi
