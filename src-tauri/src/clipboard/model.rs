@@ -4,6 +4,10 @@ use super::error::ClipboardError;
 
 pub const DEFAULT_SHORTCUT: &str = "CommandOrControl+Shift+V";
 
+fn copy_on_select_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipKind {
     Text,
@@ -152,6 +156,8 @@ pub struct Settings {
     pub shortcut: String,
     pub excluded_apps: Vec<String>,
     pub skip_sensitive: bool,
+    #[serde(default = "copy_on_select_enabled")]
+    pub copy_on_select: bool,
 }
 
 impl Default for Settings {
@@ -169,6 +175,7 @@ impl Default for Settings {
             shortcut: DEFAULT_SHORTCUT.to_string(),
             excluded_apps: Vec::new(),
             skip_sensitive: true,
+            copy_on_select: true,
         }
     }
 }
@@ -187,6 +194,8 @@ pub struct SettingsUpdate {
     pub shortcut: String,
     pub excluded_apps: Vec<String>,
     pub skip_sensitive: bool,
+    #[serde(default = "copy_on_select_enabled")]
+    pub copy_on_select: bool,
     #[serde(default)]
     pub confirm: bool,
 }
@@ -206,6 +215,7 @@ impl SettingsUpdate {
             shortcut: self.shortcut,
             excluded_apps: self.excluded_apps,
             skip_sensitive: self.skip_sensitive,
+            copy_on_select: self.copy_on_select,
         };
         settings.validate()?;
         Ok(settings.normalized())
@@ -308,6 +318,17 @@ mod tests {
         settings.max_text_bytes = 1024;
         settings.excluded_apps = vec!["x".repeat(257)];
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn saved_settings_without_copy_on_select_stay_enabled() {
+        let mut value = serde_json::to_value(Settings::default()).expect("settings serialize");
+        value
+            .as_object_mut()
+            .expect("settings object")
+            .remove("copyOnSelect");
+        let settings: Settings = serde_json::from_value(value).expect("settings parse");
+        assert!(settings.copy_on_select);
     }
 
     #[test]

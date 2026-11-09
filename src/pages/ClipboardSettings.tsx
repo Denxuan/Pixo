@@ -33,7 +33,7 @@ export default function ClipboardSettingsPage() {
     void clipboardGetSettings()
       .then((current) => {
         if (!alive) return;
-        setDraft(current);
+        setDraft({ ...current, copyOnSelect: current.copyOnSelect !== false });
         setTextMb(Number(bytesToMegabytes(current.maxTextBytes)));
         setImageMb(Number(bytesToMegabytes(current.maxImageBytes)));
         setExcluded(current.excludedApps.join("\n"));
@@ -125,6 +125,9 @@ export default function ClipboardSettingsPage() {
           <Form.Item label={t("zdx.label.clipboard.recordImage")}><Switch checked={draft.recordImage} onChange={(checked) => setDraft({ ...draft, recordImage: checked })} /></Form.Item>
           <Form.Item label={t("zdx.label.clipboard.recordFiles")}><Switch checked={draft.recordFiles} onChange={(checked) => setDraft({ ...draft, recordFiles: checked })} /></Form.Item>
           <Form.Item label={t("zdx.label.clipboard.skipSensitive")}><Switch checked={draft.skipSensitive} onChange={(checked) => setDraft({ ...draft, skipSensitive: checked })} /></Form.Item>
+          <Form.Item label={t("zdx.label.clipboard.copyOnSelect")} extra={t("zdx.text.clipboard.copyOnSelect")}>
+            <Switch checked={draft.copyOnSelect} onChange={(checked) => setDraft({ ...draft, copyOnSelect: checked })} />
+          </Form.Item>
           <Form.Item label={t("zdx.label.clipboard.maxItems")}>
             <InputNumber min={1} max={5000} style={{ width: "100%" }} value={draft.maxItems} onChange={(value) => setDraft({ ...draft, maxItems: Number(value) })} />
           </Form.Item>

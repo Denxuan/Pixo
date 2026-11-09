@@ -20,6 +20,14 @@ export default function ClipboardPanel() {
   const history = useClipboardHistory();
   const [index, setIndex] = useState(0);
   const [message, setMessage] = useState("");
+  const copyTimer = useRef(0);
+  const copySeq = useRef(0);
+  const copyOnSelect = history.settings?.copyOnSelect !== false;
+
+  useEffect(() => {
+    void history.loadSettings();
+    return () => window.clearTimeout(copyTimer.current);
+  }, []);
 
   useEffect(() => {
     const nodes = [document.documentElement, document.body, document.getElementById("root")].filter((node): node is HTMLElement => node instanceof HTMLElement);
@@ -91,16 +99,45 @@ export default function ClipboardPanel() {
     document.getElementById(`clip-${active.id}`)?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
-  async function copyById(id: number) {
+  async function copyById(id: number, dismiss: boolean) {
+    const seq = ++copySeq.current;
     try {
+      history.suppressChanged();
       const result = await history.copyItem(id);
-      setMessage(result.missing.length > 0 ? t("zdx.text.clipboard.fileMissing", { count: result.missing.length }) : t("zdx.text.clipboard.panelHint"));
-      window.setTimeout(() => {
-        dismissClipboardPanel();
-      }, 600);
+      if (seq !== copySeq.current) return;
+      if (result.missing.length > 0) {
+        setMessage(t("zdx.text.clipboard.fileMissing", { count: result.missing.length }));
+      } else if (dismiss) {
+        setMessage(t("zdx.text.clipboard.panelHint"));
+      }
+      if (dismiss) {
+        window.setTimeout(() => {
+          if (seq === copySeq.current) dismissClipboardPanel();
+        }, 600);
+      }
     } catch (error) {
+      if (seq !== copySeq.current) return;
       if (error instanceof ClipboardRequestError) setMessage(clipboardErrorText(t, error));
     }
+  }
+
+  function queueCopy(id: number) {
+    window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => void copyById(id, false), 120);
+  }
+
+  function choose(id: number) {
+    const next = history.items.findIndex((item) => item.id === id);
+    if (next >= 0) setIndex(next);
+    if (copyOnSelect) queueCopy(id);
+  }
+
+  function move(delta: number) {
+    const next = Math.min(Math.max(index + delta, 0), Math.max(history.items.length - 1, 0));
+    const item = history.items[next];
+    if (!item || next === index) return;
+    setIndex(next);
+    if (copyOnSelect) queueCopy(item.id);
   }
 
   function onKeyDown(event: React.KeyboardEvent) {
@@ -109,13 +146,14 @@ export default function ClipboardPanel() {
       dismissClipboardPanel();
     } else if (event.key === "ArrowDown") {
       event.preventDefault();
-      setIndex((current) => Math.min(current + 1, history.items.length - 1));
+      move(1);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      setIndex((current) => Math.max(current - 1, 0));
+      move(-1);
     } else if (event.key === "Enter") {
       event.preventDefault();
-      if (active) void copyById(active.id);
+      window.clearTimeout(copyTimer.current);
+      if (active) void copyById(active.id, true);
     } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p") {
       event.preventDefault();
       if (active) void history.pinItem(active.id, !active.pinned);
@@ -134,11 +172,16 @@ export default function ClipboardPanel() {
         border: `1px solid ${token.colorBorderSecondary}`,
       }}
     >
-      <Flex justify="space-between" align="center" data-tauri-drag-region style={{ padding: "12px 16px", borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
-        <Typography.Title level={5} data-tauri-drag-region style={{ margin: 0 }}>{t("zdx.label.clipboard.title")}</Typography.Title>
-        <Button type="text" aria-label={t("zdx.label.clipboard.close")} onClick={() => dismissClipboardPanel()}>{t("zdx.label.clipboard.close")}</Button>
+      <Flex justify="space-between" align="center" data-tauri-drag-region style={{ padding: "10px 12px", borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+        <Flex align="center" gap={4} data-tauri-drag-region className="min-w-0">
+          <Typography.Title level={5} data-tauri-drag-region style={{ margin: 0 }}>{t("zdx.label.clipboard.title")}</Typography.Title>
+          <Tooltip title={t(copyOnSelect ? "zdx.text.clipboard.panelHelpSelect" : "zdx.text.clipboard.panelHelp")}>
+            <Button type="text" size="small" aria-label={t(copyOnSelect ? "zdx.text.clipboard.panelHelpSelect" : "zdx.text.clipboard.panelHelp")} icon={<InfoCircleOutlined />} />
+          </Tooltip>
+        </Flex>
+        <Button type="text" aria-label={t("zdx.label.clipboard.close")} icon={<CloseOutlined />} onClick={() => dismissClipboardPanel()} />
       </Flex>
-      <Flex vertical gap={8} style={{ padding: "12px 16px 8px" }}>
+      <Flex vertical gap={8} style={{ padding: "10px 12px 8px" }}>
         <Input
           id="clipboard-panel-search"
           allowClear
@@ -148,16 +191,18 @@ export default function ClipboardPanel() {
           placeholder={t("zdx.placeholder.clipboard.search")}
           aria-label={t("zdx.label.clipboard.search")}
         />
-        <Typography.Text type="secondary">{t("zdx.text.clipboard.panelHelp")}</Typography.Text>
       </Flex>
-      <div className="min-h-0 flex-1 overflow-auto" style={{ padding: "0 16px 16px" }}>
+      <div className="min-h-0 flex-1 overflow-auto" style={{ padding: "0 12px 12px" }}>
         {history.items.length === 0 && <Empty description={history.query ? t("zdx.text.clipboard.noResults") : t("zdx.text.clipboard.empty")} />}
         {history.items.length > 0 && (
           <HistoryList
             items={history.items}
             activeId={active?.id ?? null}
-            onActive={(id) => setIndex(history.items.findIndex((item) => item.id === id))}
-            onCopy={(id) => void copyById(id)}
+            onActive={choose}
+            onCopy={(id) => {
+              window.clearTimeout(copyTimer.current);
+              void copyById(id, true);
+            }}
             onPin={(id, pinned) => void history.pinItem(id, pinned)}
             onDelete={(id) => void history.deleteItem(id)}
           />

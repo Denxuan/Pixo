@@ -34,6 +34,7 @@ export function useClipboardHistory() {
   const [error, setError] = useState<ClipboardRequestError | null>(null);
   const request = useRef(0);
   const loadRef = useRef<(cursor?: string) => Promise<void>>(async () => {});
+  const suppressChangedUntil = useRef(0);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query), 200);
@@ -80,6 +81,7 @@ export function useClipboardHistory() {
     let alive = true;
     const stops: Array<() => void> = [];
     void listen("clipboard://changed", () => {
+      if (Date.now() < suppressChangedUntil.current) return;
       void loadRef.current();
     }).then((stop) => {
       if (alive) stops.push(stop);
@@ -130,6 +132,9 @@ export function useClipboardHistory() {
       return next;
     }),
     copyItem: (id: number) => run(() => clipboardCopy(id)) as Promise<CopyResult>,
+    suppressChanged: (ms = 1200) => {
+      suppressChangedUntil.current = Date.now() + ms;
+    },
     pinItem: (id: number, pinned: boolean) => run(async () => {
       await clipboardSetPinned(id, pinned);
       setItems((current) => current.map((item) => item.id === id ? { ...item, pinned } : item));

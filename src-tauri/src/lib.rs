@@ -2,8 +2,8 @@ mod clipboard;
 mod panel_anchor;
 mod permissions;
 mod shortcut;
-mod tray;
 mod system_settings;
+mod tray;
 
 use tauri::window::Color;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
@@ -21,7 +21,10 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_opener::init())
         .manage(system_settings::BackgroundMode::default())
         .on_window_event(system_settings::hide_on_close)

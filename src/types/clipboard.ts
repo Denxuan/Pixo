@@ -50,6 +50,7 @@ export interface ClipboardSettings {
   shortcut: string;
   excludedApps: string[];
   skipSensitive: boolean;
+  copyOnSelect: boolean;
 }
 
 export interface ClipboardSettingsUpdate {
@@ -64,6 +65,7 @@ export interface ClipboardSettingsUpdate {
   shortcut: string;
   excludedApps: string[];
   skipSensitive: boolean;
+  copyOnSelect: boolean;
   confirm?: boolean;
 }
 
@@ -100,6 +102,7 @@ export function toSettingsUpdate(settings: ClipboardSettings, confirm = false): 
     shortcut: settings.shortcut,
     excludedApps: settings.excludedApps,
     skipSensitive: settings.skipSensitive,
+    copyOnSelect: settings.copyOnSelect,
     confirm,
   };
 }

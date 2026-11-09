@@ -38,10 +38,22 @@ function SourceApp({ source }: { source: string }) {
   if (loaded === undefined) return null;
   const name = loaded?.name || source;
   return (
-    <span className="inline-flex items-center gap-1">
-      {loaded?.url ? <img src={loaded.url} alt="" aria-hidden="true" width={16} height={16} style={{ borderRadius: 4 }} /> : null}
-      <span>{t("zdx.text.clipboard.sourceApp", { app: name })}</span>
-    </span>
+    <Tooltip title={t("zdx.text.clipboard.sourceApp", { app: name })}>
+      <span role="img" aria-label={t("zdx.text.clipboard.sourceApp", { app: name })} className="inline-flex items-center justify-center w-5 h-5 shrink-0">
+        {loaded?.url ? <img src={loaded.url} alt="" aria-hidden="true" width={18} height={18} style={{ borderRadius: 4 }} /> : <AppstoreOutlined aria-hidden="true" />}
+      </span>
+    </Tooltip>
+  );
+}
+
+function MetaChip({ icon, text, label, shrink = false }: { icon?: ReactNode; text?: string; label: string; shrink?: boolean }) {
+  return (
+    <Tooltip title={label}>
+      <span aria-label={label} className={shrink ? "inline-flex min-w-0 items-center gap-1" : "inline-flex shrink-0 items-center gap-1 whitespace-nowrap"}>
+        {icon}
+        {text ? <span className={shrink ? "truncate" : undefined}>{text}</span> : null}
+      </span>
+    </Tooltip>
   );
 }
 
@@ -72,7 +84,7 @@ function ClipAvatar({ id }: { id: number }) {
     };
   }, [id]);
 
-  return <Avatar shape="square" size={48} src={url || undefined} icon={kindIcon("image")} aria-label={t("zdx.label.clipboard.image")} />;
+  return <Avatar shape="square" size={40} src={url || undefined} icon={kindIcon("image")} aria-label={t("zdx.label.clipboard.image")} />;
 }
 
 export default function HistoryList({
@@ -95,47 +107,59 @@ export default function HistoryList({
 
   return (
     <List
+      split={false}
       dataSource={items}
       rowKey="id"
       aria-label={t("zdx.label.clipboard.list")}
       renderItem={(item) => {
         const active = item.id === activeId;
         const title = item.kind === "files" ? item.fileNames.join(", ") : item.preview;
+        const copiedAt = formatRelativeTime(item.lastCopiedAt, i18n.language);
+        const size = formatBytes(item.sizeBytes, i18n.language);
+        const copied = t("zdx.text.clipboard.copiedTimes", { count: item.copyCount });
         return (
           <List.Item
             id={`clip-${item.id}`}
             aria-selected={active}
             tabIndex={0}
             onClick={() => onActive(item.id)}
-            onFocus={() => onActive(item.id)}
+            onFocus={(event) => {
+              if (event.target instanceof Element && event.target.closest("button")) return;
+              onActive(item.id);
+            }}
             style={{
+              display: "block",
               background: active ? token.colorPrimaryBg : item.pinned ? token.colorWarningBg : token.colorBgContainer,
               border: `1px solid ${active ? token.colorPrimaryBorder : item.pinned ? token.colorWarningBorder : token.colorBorderSecondary}`,
               boxShadow: item.pinned ? `inset 3px 0 0 ${token.colorWarning}` : undefined,
               borderRadius: token.borderRadiusLG,
-              marginBottom: 8,
-              paddingInline: 12,
+              marginBottom: 6,
+              padding: "8px 8px 8px 10px",
               cursor: "pointer",
             }}
-            actions={[
-              <Button key="pin" type="text" aria-label={item.pinned ? t("zdx.label.clipboard.unpin") : t("zdx.label.clipboard.pin")} aria-pressed={item.pinned} icon={item.pinned ? <PushpinFilled /> : <PushpinOutlined />} style={item.pinned ? { color: token.colorWarning } : undefined} onClick={(event) => { event.stopPropagation(); onPin(item.id, !item.pinned); }} />,
-              <Button key="copy" type="text" aria-label={t("zdx.label.clipboard.copy")} icon={<CopyOutlined />} onClick={(event) => { event.stopPropagation(); onCopy(item.id); }} />,
-              <Button key="delete" type="text" danger aria-label={t("zdx.label.clipboard.delete")} icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); onDelete(item.id); }} />,
-            ]}
           >
-            <List.Item.Meta
-              avatar={item.kind === "image" ? <ClipAvatar id={item.id} /> : <Avatar shape="square" size={48} icon={kindIcon(item.kind)} />}
-              title={<Typography.Text ellipsis>{title}</Typography.Text>}
-              description={
-                <Space size={12} wrap>
-                  <span>{formatRelativeTime(item.lastCopiedAt, i18n.language)}</span>
-                  <span>{formatBytes(item.sizeBytes, i18n.language)}</span>
-                  <span>{t("zdx.text.clipboard.copiedTimes", { count: item.copyCount })}</span>
-                  {item.formatted ? <span>{t("zdx.label.clipboard.formatted")}</span> : null}
+            <div className="flex items-center gap-2">
+              <div className="shrink-0">
+                {item.kind === "image" ? <ClipAvatar id={item.id} /> : <Avatar shape="square" size={40} icon={kindIcon(item.kind)} />}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1">
+                  <Typography.Text ellipsis style={{ flex: 1, minWidth: 0, margin: 0 }}>{title}</Typography.Text>
+                  <div className="flex shrink-0 items-center">
+                    <Button type="text" size="small" aria-label={item.pinned ? t("zdx.label.clipboard.unpin") : t("zdx.label.clipboard.pin")} aria-pressed={item.pinned} icon={item.pinned ? <PushpinFilled /> : <PushpinOutlined />} style={item.pinned ? { color: token.colorWarning } : undefined} onClick={(event) => { event.stopPropagation(); onPin(item.id, !item.pinned); }} />
+                    <Button type="text" size="small" aria-label={t("zdx.label.clipboard.copy")} icon={<CopyOutlined />} onClick={(event) => { event.stopPropagation(); onCopy(item.id); }} />
+                    <Button type="text" size="small" danger aria-label={t("zdx.label.clipboard.delete")} icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); onDelete(item.id); }} />
+                  </div>
+                </div>
+                <div className="mt-1 flex min-w-0 items-center gap-3" style={{ color: token.colorTextSecondary, fontSize: token.fontSizeSM }}>
+                  <MetaChip shrink icon={<ClockCircleOutlined />} text={copiedAt} label={copiedAt} />
+                  <MetaChip text={size} label={size} />
+                  <MetaChip icon={<HistoryOutlined />} text={String(item.copyCount)} label={copied} />
+                  {item.formatted ? <MetaChip icon={<FontColorsOutlined />} label={t("zdx.label.clipboard.formatted")} /> : null}
                   {item.sourceApp ? <SourceApp source={item.sourceApp} /> : null}
-                </Space>
-              }
-            />
+                </div>
+              </div>
+            </div>
           </List.Item>
         );
       }}

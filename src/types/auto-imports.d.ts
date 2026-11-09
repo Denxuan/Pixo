@@ -14,6 +14,8 @@ declare global {
   const Avatar: typeof import('antd').Avatar
   const Button: typeof import('antd').Button
   const Checkbox: typeof import('antd').Checkbox
+  const ClockCircleOutlined: typeof import('@ant-design/icons').ClockCircleOutlined
+  const CloseOutlined: typeof import('@ant-design/icons').CloseOutlined
   const CodeOutlined: typeof import('@ant-design/icons').CodeOutlined
   const ConfigProvider: typeof import('antd').ConfigProvider
   const CopyOutlined: typeof import('@ant-design/icons').CopyOutlined
@@ -22,12 +24,14 @@ declare global {
   const FileImageOutlined: typeof import('@ant-design/icons').FileImageOutlined
   const FileOutlined: typeof import('@ant-design/icons').FileOutlined
   const Flex: typeof import('antd').Flex
+  const FontColorsOutlined: typeof import('@ant-design/icons').FontColorsOutlined
   const FontSizeOutlined: typeof import('@ant-design/icons').FontSizeOutlined
   const Form: typeof import('antd').Form
   const Fragment: typeof import('react').Fragment
   const GlobalOutlined: typeof import('@ant-design/icons').GlobalOutlined
   const HashRouter: typeof import('react-router').HashRouter
   const HistoryOutlined: typeof import('@ant-design/icons').HistoryOutlined
+  const InfoCircleOutlined: typeof import('@ant-design/icons').InfoCircleOutlined
   const Input: typeof import('antd').Input
   const InputNumber: typeof import('antd').InputNumber
   const Layout: typeof import('antd').Layout
@@ -56,6 +60,7 @@ declare global {
   const StrictMode: typeof import('react').StrictMode
   const Suspense: typeof import('react').Suspense
   const Switch: typeof import('antd').Switch
+  const Tooltip: typeof import('antd').Tooltip
   const Trans: typeof import('react-i18next').Trans
   const Typography: typeof import('antd').Typography
   const antdTheme: typeof import('antd').theme
@@ -95,4 +100,10 @@ declare global {
   const useSyncExternalStore: typeof import('react').useSyncExternalStore
   const useTransition: typeof import('react').useTransition
   const useTranslation: typeof import('react-i18next').useTranslation
+}
+// for type re-export
+declare global {
+  // @ts-ignore
+  export type { ReactNode } from 'react'
+  import('react')
 }

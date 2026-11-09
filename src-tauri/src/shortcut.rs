@@ -20,7 +20,7 @@ use objc2::runtime::AnyClass;
 use objc2::{MainThreadMarker, Message, msg_send, sel};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSResponder, NSScreenSaverWindowLevel, NSView,
+    NSApplication, NSApplicationActivationPolicy, NSFloatingWindowLevel, NSResponder, NSView,
     NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 #[cfg(target_os = "macos")]
@@ -312,7 +312,8 @@ fn raise_overlay(window: &WebviewWindow) {
             | NSWindowCollectionBehavior::IgnoresCycle
             | NSWindowCollectionBehavior::FullScreenDisallowsTiling,
     );
-    ns_window.setLevel(NSScreenSaverWindowLevel);
+    // Floating sits above the app in front, and stays under screenshot UI and the menu bar.
+    ns_window.setLevel(NSFloatingWindowLevel);
     ns_window.setAnimationBehavior(NSWindowAnimationBehavior::None);
     ns_window.setHidesOnDeactivate(false);
 }
@@ -322,7 +323,7 @@ static MADE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "macos")]
 fn keep_on_top(ns_window: &NSWindow) {
-    ns_window.setLevel(NSScreenSaverWindowLevel);
+    ns_window.setLevel(NSFloatingWindowLevel);
     ns_window.orderFrontRegardless();
 }
 
@@ -477,8 +478,8 @@ unsafe extern "C" fn key_tap_callback(
     let flags = unsafe { CGEventGetFlags(event) };
     let command = flags & 0x0010_0000 != 0;
     let shift = flags & 0x0002_0000 != 0;
-    // Leave the global shortcut alone so it can still close the panel.
-    if command && shift && (event_type == 12 || keycode == 9) {
+    // Leave the panel toggle and system screenshot shortcuts for macOS.
+    if releases_to_system(event_type, keycode, command, shift) {
         return event;
     }
     if event_type == 10 && keycode == 53 {
@@ -566,6 +567,19 @@ unsafe extern "C" {
     fn CFRunLoopAddSource(run_loop: *mut c_void, source: *mut c_void, mode: *const c_void);
     fn CFRunLoopRemoveSource(run_loop: *mut c_void, source: *mut c_void, mode: *const c_void);
     fn CFRelease(value: *const c_void);
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn releases_to_system(event_type: u32, keycode: i64, command: bool, shift: bool) -> bool {
+    if !command || !shift {
+        return false;
+    }
+    // Command-Shift-V toggles the panel. The modifier event has to pass through too.
+    if event_type == 12 || keycode == 9 {
+        return true;
+    }
+    // Command-Shift-3, 4, and 5 start a screenshot. Control may also be held.
+    matches!(keycode, 20 | 21 | 23)
 }
 
 #[cfg(target_os = "macos")]
@@ -760,4 +774,19 @@ fn place_near_cursor(window: &WebviewWindow) {
         y = y.clamp(top, max_y.max(top));
     }
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn screenshot_shortcuts_reach_the_system() {
+        assert!(super::releases_to_system(10, 20, true, true));
+        assert!(super::releases_to_system(10, 21, true, true));
+        assert!(super::releases_to_system(11, 23, true, true));
+        assert!(super::releases_to_system(10, 9, true, true));
+        assert!(super::releases_to_system(12, 0, true, true));
+        assert!(!super::releases_to_system(10, 20, true, false));
+        assert!(!super::releases_to_system(10, 0, true, true));
+        assert!(!super::releases_to_system(10, 53, false, false));
+    }
 }
