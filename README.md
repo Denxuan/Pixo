@@ -16,7 +16,7 @@ This template should help get you started developing with Tauri, React and Types
 
 ## 发行与 Homebrew
 
-将 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 中的版本统一后，推送对应的稳定版本标签（例如 `v0.1.0`）。GitHub Actions 会构建 macOS 通用版、Windows 安装包和 Linux 安装包，创建 GitHub Release，并将 Homebrew Cask 更新到共享 tap `Denxuan/homebrew-tab`。主仓库需配置 `HOMEBREW_TAP_TOKEN`，并授予其对 tap 仓库的 Contents 写权限。macOS 发行还需要配置 Developer ID 签名与公证凭据（`APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`），保证系统权限在应用更新后仍能识别同一开发者签名。
+将 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 中的版本统一后，推送对应的稳定版本标签（例如 `v0.1.0`）。GitHub Actions 会构建 macOS 通用版、Windows 安装包和 Linux 安装包，创建 GitHub Release，并将 Homebrew Cask 更新到共享 tap `Denxuan/homebrew-tab`。主仓库需配置 `HOMEBREW_TAP_TOKEN`，并授予其对 tap 仓库的 Contents 写权限。macOS 使用 ad hoc 临时签名，不需要 Apple Developer 凭据；由于每个版本的签名哈希可能变化，系统权限在更新后可能需要重新授权。
 
 首次发行成功后，可通过以下命令安装 macOS 版本（将仓库地址改为实际公开的 GitHub 地址）：
 
@@ -25,7 +25,7 @@ brew tap denxuan/tab
 brew install --cask pixo
 ```
 
-macOS 发行包使用临时签名，尚未经过 Apple 公证；首次打开时 macOS 可能要求在系统设置中确认。该配置适合测试分发，面向正式用户发布时应配置 Developer ID 签名和公证。
+macOS 发行包使用 ad hoc 签名且未经 Apple 公证；首次打开时 macOS 可能要求在系统设置中确认。辅助功能等权限可能在更新后需要重新授权。
 
 ## Recommended IDE Setup
 
