@@ -16,7 +16,7 @@ This template should help get you started developing with Tauri, React and Types
 
 ## 发行与 Homebrew
 
-将 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 中的版本统一后，推送对应的稳定版本标签（例如 `v0.1.0`）。GitHub Actions 会构建 macOS 通用版、Windows 安装包和 Linux 安装包，创建 GitHub Release，并将 Homebrew Cask 更新到共享 tap `Denxuan/homebrew-tab`。主仓库需配置 `HOMEBREW_TAP_TOKEN`，并授予其对 tap 仓库的 Contents 写权限。macOS 使用 ad hoc 临时签名，不需要 Apple Developer 凭据；由于每个版本的签名哈希可能变化，系统权限在更新后可能需要重新授权。
+将 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml` 中的版本统一后，推送对应的稳定版本标签（例如 `v0.1.0`）。GitHub Actions 会构建 macOS 通用版、Windows 安装包和 Linux 安装包，创建 GitHub Release，并将 Homebrew Cask 更新到共享 tap `Denxuan/homebrew-tab`。主仓库需配置 `HOMEBREW_TAP`，并授予其对 tap 仓库的 Contents 写权限。macOS 使用 ad hoc 临时签名，不需要 Apple Developer 凭据；由于每个版本的签名哈希可能变化，系统权限在更新后可能需要重新授权。
 
 首次发行成功后，可通过以下命令安装 macOS 版本（将仓库地址改为实际公开的 GitHub 地址）：
 

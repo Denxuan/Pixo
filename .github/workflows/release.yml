@@ -100,10 +100,10 @@ jobs:
 
       - name: Verify Homebrew Tap token
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP: ${{ secrets.HOMEBREW_TAP }}
         run: |
-          if [[ -z "$HOMEBREW_TAP_TOKEN" ]]; then
-            echo "Missing HOMEBREW_TAP_TOKEN repository secret with Contents: Read and write access to Denxuan/homebrew-tab." >&2
+          if [[ -z "$HOMEBREW_TAP" ]]; then
+            echo "Missing HOMEBREW_TAP repository secret with Contents: Read and write access to Denxuan/homebrew-tab." >&2
             exit 1
           fi
 
@@ -111,7 +111,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Denxuan/homebrew-tab
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          token: ${{ secrets.HOMEBREW_TAP }}
           path: homebrew-tap
 
       - name: Publish Pixo Cask to shared tap
