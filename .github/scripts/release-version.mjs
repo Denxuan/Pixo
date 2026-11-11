@@ -16,5 +16,5 @@ function stamp(path, pattern) {
 stamp("package.json", /("version"\s*:\s*")[^"]+(")/);
 stamp("src-tauri/tauri.conf.json", /("version"\s*:\s*")[^"]+(")/);
 stamp("src-tauri/Cargo.toml", /^(\[package\][\s\S]*?^version\s*=\s*")[^"]+(")/m);
-stamp("src-tauri/Cargo.lock", /(name = "pixo"\nversion = ")[^"]+(")/);
+stamp("src-tauri/Cargo.lock", /(name = "pixo"\r?\nversion = ")[^"]+(")/);
 console.log(version);

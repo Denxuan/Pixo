@@ -25,6 +25,9 @@ test("release tag writes its version into the project files", () => {
     assert.match(readFileSync(join(tauriDir, "Cargo.toml"), "utf8"), /\[package\][\s\S]*?^version = "1\.4\.0"/m);
     assert.match(readFileSync(join(tauriDir, "Cargo.toml"), "utf8"), /serde = \{ version = "1" \}/);
     assert.match(readFileSync(join(tauriDir, "Cargo.lock"), "utf8"), /name = "pixo"\nversion = "1\.4\.0"/);
+    writeFileSync(join(tauriDir, "Cargo.lock"), '[[package]]\r\nname = "pixo"\r\nversion = "0.0.1"\r\n');
+    assert.equal(run("v1.5.0"), "1.5.0");
+    assert.match(readFileSync(join(tauriDir, "Cargo.lock"), "utf8"), /name = "pixo"\r\nversion = "1\.5\.0"/);
     assert.throws(() => run("v1.2.3-rc1"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
