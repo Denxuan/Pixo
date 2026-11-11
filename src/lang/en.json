@@ -85,6 +85,8 @@
       },
       "system": {
         "title": "General settings",
+        "general": "General",
+        "clipboard": "Clipboard",
         "autostart": "Start at login",
         "background": "Run in background"
       }
@@ -112,6 +114,7 @@
       "clipboard": {
         "description": "Keep text, images, and file paths on this computer so you can copy them again.",
         "settingsDescription": "Choose what to record, how long to keep it, and the shortcut for the quick panel.",
+        "saved": "Clipboard settings saved.",
         "privacy": "History stays on this computer and is never uploaded. You can review what is stored, and where, before turning it on.",
         "empty": "Nothing here yet. Copied items will show up after you turn history on.",
         "disabled": "Clipboard history is off.",
@@ -127,8 +130,8 @@
         "copied": "Copied",
         "panelHint": "Copied. You can paste it now.",
         "panelHelp": "Use arrow keys to choose, Enter to copy, Esc to close, and Ctrl or Command+P to pin.",
-        "panelHelpSelect": "Arrow keys or a click select an item and copy it. Enter closes the panel, Esc closes it, and Ctrl or Command+P pins.",
-        "copyOnSelect": "Applies in the quick panel. Selecting an item copies it to the clipboard. Enter closes the panel.",
+        "panelHelpSelect": "Click an item to copy it and close the panel. Arrow keys select an item and copy it, Enter closes the panel, Esc closes it, and Ctrl or Command+P pins.",
+        "copyOnSelect": "Applies in the quick panel. Clicking an item copies it to the clipboard and closes the panel. Arrow keys copy the selected item, and Enter closes the panel.",
         "enableTitle": "Turn on clipboard history",
         "enableBody": "Pixo stores copied text, images, and file paths locally, and skips content the system marks as sensitive. You can pause, delete, or clear it at any time.",
         "storagePath": "Stored in {{path}}",
@@ -179,7 +182,7 @@
         }
       },
       "system": {
-        "description": "Manage how Pixo starts and closes.",
+        "description": "Manage how Pixo starts, closes, and records the clipboard.",
         "autostart": "Start Pixo automatically when you sign in.",
         "background": "Keep Pixo running after closing the window. On macOS, hide the Dock icon and use the menu bar to reopen or quit.",
         "error": "Could not update the setting. Check system permissions and the menu bar icon, then try again.",

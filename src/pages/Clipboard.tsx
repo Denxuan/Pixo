@@ -85,7 +85,7 @@ export default function ClipboardPage() {
             {status?.enabled && !status.paused && <Button icon={<PauseOutlined />} onClick={() => void history.setPaused(true)}>{t("zdx.label.clipboard.pause")}</Button>}
             {status?.enabled && status.paused && <Button icon={<PlayCircleOutlined />} onClick={() => void history.setPaused(false)}>{t("zdx.label.clipboard.resume")}</Button>}
             <Button icon={<SearchOutlined />} onClick={() => void history.readNow()}>{t("zdx.label.clipboard.readNow")}</Button>
-            <Button icon={<SettingOutlined />} onClick={() => navigate("/clipboard/settings")}>{t("zdx.label.clipboard.settings")}</Button>
+            <Button icon={<SettingOutlined />} onClick={() => navigate("/settings/clipboard")}>{t("zdx.label.clipboard.settings")}</Button>
             <Button danger onClick={() => setClearOpen(true)}>{t("zdx.label.clipboard.clear")}</Button>
           </Space>
         )}

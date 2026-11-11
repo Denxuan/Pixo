@@ -60,6 +60,7 @@ declare global {
   const StrictMode: typeof import('react').StrictMode
   const Suspense: typeof import('react').Suspense
   const Switch: typeof import('antd').Switch
+  const Tabs: typeof import('antd').Tabs
   const Tooltip: typeof import('antd').Tooltip
   const Trans: typeof import('react-i18next').Trans
   const Typography: typeof import('antd').Typography

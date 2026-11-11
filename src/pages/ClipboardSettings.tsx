@@ -9,7 +9,6 @@ import { bytesToMegabytes, megabytesToBytes } from "@/utils/time";
 
 export default function ClipboardSettingsPage() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const desktop = isDesktop();
   const [draft, setDraft] = useState<ClipboardSettings | null>(null);
   const [status, setStatus] = useState<ClipboardStatus | null>(null);
@@ -20,6 +19,7 @@ export default function ClipboardSettingsPage() {
   const [error, setError] = useState("");
   const [confirmCount, setConfirmCount] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(desktop);
   const translate = useRef(t);
   translate.current = t;
@@ -58,6 +58,7 @@ export default function ClipboardSettingsPage() {
     const maxTextBytes = megabytesToBytes(textMb == null ? "" : String(textMb));
     const maxImageBytes = megabytesToBytes(imageMb == null ? "" : String(imageMb));
     if (!Number.isFinite(maxItems) || !Number.isFinite(retentionDays) || !Number.isFinite(maxTextBytes) || !Number.isFinite(maxImageBytes)) {
+      setSaved(false);
       setError(t("zdx.text.clipboard.error.invalid_input"));
       return;
     }
@@ -70,9 +71,12 @@ export default function ClipboardSettingsPage() {
       excludedApps: status?.platform.includes("macos") ? excludedApps : excluded.split("\n"),
     };
     setSaving(true);
+    setSaved(false);
     try {
       await clipboardUpdateSettings(toSettingsUpdate(next, confirm));
-      navigate("/clipboard");
+      setConfirmCount(null);
+      setError("");
+      setSaved(true);
     } catch (caught) {
       if (caught instanceof ClipboardRequestError && caught.code === "needs_confirm") {
         setConfirmCount(Number(caught.params.count ?? 0));
@@ -88,17 +92,13 @@ export default function ClipboardSettingsPage() {
   }
 
   return (
-    <Flex vertical gap={16} className="min-h-0 flex-1 overflow-hidden">
+    <Flex vertical gap={16}>
       <Flex justify="space-between" align="flex-start" gap={16} wrap>
         <div>
-          <Typography.Title level={3} style={{ margin: 0 }}>{t("zdx.label.clipboard.settings")}</Typography.Title>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("zdx.text.clipboard.settingsDescription")}</Typography.Paragraph>
           {status && <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("zdx.text.clipboard.storagePath", { path: status.storagePath })}</Typography.Paragraph>}
         </div>
-        <Space>
-          <Button onClick={() => navigate("/clipboard")}>{t("zdx.label.clipboard.back")}</Button>
-          {desktop && <Button type="primary" htmlType="submit" form="clipboard-settings" loading={saving} disabled={!draft}>{t("zdx.label.clipboard.save")}</Button>}
-        </Space>
+        {desktop && <Button type="primary" htmlType="submit" form="clipboard-settings" loading={saving} disabled={!draft}>{t("zdx.label.clipboard.save")}</Button>}
       </Flex>
 
       {confirmCount !== null && (
@@ -110,6 +110,7 @@ export default function ClipboardSettingsPage() {
         />
       )}
       {status?.platform.includes("macos") && <Alert type="info" showIcon message={t("zdx.text.clipboard.macosAccess")} />}
+      {saved && <Alert type="success" showIcon message={t("zdx.text.clipboard.saved")} />}
       {error && <Alert type="error" showIcon message={error} />}
       {!desktop && <Alert type="info" showIcon message={t("zdx.text.clipboard.error.desktop_only")} />}
       {desktop && loading && (
@@ -120,7 +121,7 @@ export default function ClipboardSettingsPage() {
       )}
 
       {desktop && draft && (
-        <Form id="clipboard-settings" layout="vertical" requiredMark={false} onFinish={() => void save(false)} className="min-h-0 max-w-xl flex-1 overflow-auto">
+        <Form id="clipboard-settings" layout="vertical" requiredMark={false} onFinish={() => void save(false)} className="max-w-xl">
           <Form.Item label={t("zdx.label.clipboard.recordText")}><Switch checked={draft.recordText} onChange={(checked) => setDraft({ ...draft, recordText: checked })} /></Form.Item>
           <Form.Item label={t("zdx.label.clipboard.recordImage")}><Switch checked={draft.recordImage} onChange={(checked) => setDraft({ ...draft, recordImage: checked })} /></Form.Item>
           <Form.Item label={t("zdx.label.clipboard.recordFiles")}><Switch checked={draft.recordFiles} onChange={(checked) => setDraft({ ...draft, recordFiles: checked })} /></Form.Item>

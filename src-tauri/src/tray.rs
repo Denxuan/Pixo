@@ -171,7 +171,7 @@ fn on_menu(app: &AppHandle, event: &MenuEvent) {
         }
         "tray-record" => toggle_record(app),
         "tray-history" => open_main(app, "/clipboard", false),
-        "tray-settings" => open_main(app, "/clipboard/settings", false),
+        "tray-settings" => open_main(app, "/settings/clipboard", false),
         "tray-quit" => app.exit(0),
         _ => {}
     }
@@ -190,12 +190,16 @@ fn toggle_record(app: &AppHandle) {
     let _ = clipboard.set_paused(!status.paused);
 }
 
-fn open_main(app: &AppHandle, path: &str, enable: bool) {
-    let path = if path == "/clipboard/settings" {
-        "/clipboard/settings"
+fn main_request_path(path: &str) -> &'static str {
+    if path == "/settings/clipboard" || path == "/clipboard/settings" {
+        "/settings/clipboard"
     } else {
         "/clipboard"
-    };
+    }
+}
+
+fn open_main(app: &AppHandle, path: &str, enable: bool) {
+    let path = main_request_path(path);
     if let Ok(mut pending) = PENDING_MAIN.lock() {
         *pending = Some(MainRequest {
             path: path.to_string(),
@@ -386,7 +390,7 @@ fn dist_to_segment(px: f64, py: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f64 
 
 #[cfg(test)]
 mod tests {
-    use super::{Glyph, glyph_alpha};
+    use super::{Glyph, glyph_alpha, main_request_path};
 
     #[test]
     fn paused_mark_is_only_on_the_paused_icon() {
@@ -403,5 +407,19 @@ mod tests {
         }
         assert_eq!(recording, 255);
         assert_eq!(disabled, 96);
+    }
+
+    #[test]
+    fn settings_menu_opens_the_clipboard_tab() {
+        assert_eq!(
+            main_request_path("/settings/clipboard"),
+            "/settings/clipboard"
+        );
+        assert_eq!(
+            main_request_path("/clipboard/settings"),
+            "/settings/clipboard"
+        );
+        assert_eq!(main_request_path("/clipboard"), "/clipboard");
+        assert_eq!(main_request_path("/other"), "/clipboard");
     }
 }

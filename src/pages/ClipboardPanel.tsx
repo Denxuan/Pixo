@@ -22,6 +22,7 @@ export default function ClipboardPanel() {
   const [message, setMessage] = useState("");
   const copyTimer = useRef(0);
   const copySeq = useRef(0);
+  const pendingClose = useRef<number | null>(null);
   const copyOnSelect = history.settings?.copyOnSelect !== false;
 
   useEffect(() => {
@@ -106,17 +107,14 @@ export default function ClipboardPanel() {
       const result = await history.copyItem(id);
       if (seq !== copySeq.current) return;
       if (result.missing.length > 0) {
+        pendingClose.current = null;
         setMessage(t("zdx.text.clipboard.fileMissing", { count: result.missing.length }));
-      } else if (dismiss) {
-        setMessage(t("zdx.text.clipboard.panelHint"));
+        return;
       }
-      if (dismiss) {
-        window.setTimeout(() => {
-          if (seq === copySeq.current) dismissClipboardPanel();
-        }, 600);
-      }
+      if (dismiss) dismissClipboardPanel();
     } catch (error) {
       if (seq !== copySeq.current) return;
+      pendingClose.current = null;
       if (error instanceof ClipboardRequestError) setMessage(clipboardErrorText(t, error));
     }
   }
@@ -129,7 +127,10 @@ export default function ClipboardPanel() {
   function choose(id: number) {
     const next = history.items.findIndex((item) => item.id === id);
     if (next >= 0) setIndex(next);
-    if (copyOnSelect) queueCopy(id);
+    if (!copyOnSelect || pendingClose.current === id) return;
+    pendingClose.current = id;
+    window.clearTimeout(copyTimer.current);
+    void copyById(id, true);
   }
 
   function move(delta: number) {

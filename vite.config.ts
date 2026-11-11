@@ -41,6 +41,7 @@ export default defineConfig(() => ({
             "Space",
             "Spin",
             "Switch",
+            "Tabs",
             "Typography",
             "Tooltip",
             ["theme", "antdTheme"],

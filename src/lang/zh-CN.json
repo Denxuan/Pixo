@@ -85,6 +85,8 @@
       },
       "system": {
         "title": "常用设置",
+        "general": "常规",
+        "clipboard": "剪贴板",
         "autostart": "开机自启动",
         "background": "后台运行"
       }
@@ -112,6 +114,7 @@
       "clipboard": {
         "description": "在本机保存文本、图片和文件路径，方便再次复制。",
         "settingsDescription": "选择记录哪些内容、保留多久，以及打开快速面板的快捷键。",
+        "saved": "剪贴板设置已保存。",
         "privacy": "记录只保存在这台电脑上，不会上传。开启前可以先看保存位置和记录范围。",
         "empty": "还没有记录。复制一些内容后会显示在这里。",
         "disabled": "剪贴板记录尚未开启。",
@@ -127,8 +130,8 @@
         "copied": "已复制",
         "panelHint": "已复制，可直接粘贴",
         "panelHelp": "方向键选择，Enter 复制，Esc 关闭，Ctrl 或 Command 加 P 固定。",
-        "panelHelpSelect": "方向键或点击选中后会自动复制，Enter 关闭，Esc 关闭，Ctrl 或 Command 加 P 固定。",
-        "copyOnSelect": "只在快速面板里生效。选中一条记录就把它复制到剪贴板，按 Enter 会关闭面板。",
+        "panelHelpSelect": "点击一条记录会复制并关闭面板。方向键选中后会自动复制，Enter 关闭，Esc 关闭，Ctrl 或 Command 加 P 固定。",
+        "copyOnSelect": "只在快速面板里生效。点选一条记录会复制到剪贴板并关闭面板。方向键选中后会复制，按 Enter 关闭。",
         "enableTitle": "开启剪贴板记录",
         "enableBody": "Pixo 会在本地保存你复制的文本、图片和文件路径，并跳过系统标记为敏感的内容。可以随时暂停、删除或清空。",
         "storagePath": "保存位置：{{path}}",
@@ -179,7 +182,7 @@
         }
       },
       "system": {
-        "description": "管理 Pixo 的启动和窗口行为。",
+        "description": "管理 Pixo 的启动、窗口和剪贴板。",
         "autostart": "登录系统后自动启动 Pixo。",
         "background": "关闭窗口后继续运行；macOS 隐藏 Dock 图标，可从菜单栏打开或退出。",
         "error": "设置未能更新，请检查系统权限和菜单栏图标后重试。",

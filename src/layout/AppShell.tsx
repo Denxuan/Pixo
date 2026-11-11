@@ -26,7 +26,7 @@ export default function AppShell() {
   const { token } = antdTheme.useToken();
   const [collapsed, setCollapsed] = useState(false);
   const reduceMotion = useSyncExternalStore(subscribeMotion, () => motionQuery.matches);
-  const selected = location.pathname.startsWith("/clipboard") ? "clipboard" : location.pathname === "/settings" ? "settings" : "";
+  const selected = location.pathname.startsWith("/settings") ? "settings" : location.pathname.startsWith("/clipboard") ? "clipboard" : "";
   const clipboardItem = { key: "clipboard", icon: <HistoryOutlined />, label: t("zdx.label.nav.clipboard") };
   const settingsItem = { key: "settings", icon: <SettingOutlined />, label: t("zdx.label.system.title") };
 
@@ -35,7 +35,7 @@ export default function AppShell() {
     let stop: (() => void) | undefined;
     let disposed = false;
     const open = (request: { path: string; enable: boolean }) => {
-      const path = request.path === "/clipboard/settings" ? "/clipboard/settings" : "/clipboard";
+      const path = request.path === "/settings/clipboard" || request.path === "/clipboard/settings" ? "/settings/clipboard" : "/clipboard";
       navigate(path, { state: request.enable ? { enable: true } : null });
     };
     void listen<{ path: string; enable: boolean }>("clipboard://open-main", (event) => {
