@@ -3,10 +3,12 @@ import { formatShortcut, shortcutFromEvent } from "@/utils/shortcut";
 export default function ShortcutField({
   value,
   macos,
+  label,
   onChange,
 }: {
   value: string;
   macos: boolean;
+  label?: string;
   onChange: (shortcut: string) => void;
 }) {
   const { t } = useTranslation();
@@ -40,7 +42,7 @@ export default function ShortcutField({
       <Input
         readOnly
         value={recording ? t("zdx.text.clipboard.shortcutRecording") : formatShortcut(value, macos)}
-        aria-label={t("zdx.label.clipboard.shortcut")}
+        aria-label={label ?? t("zdx.label.clipboard.shortcut")}
         onFocus={() => {
           setRecording(true);
           setNeedsModifier(false);

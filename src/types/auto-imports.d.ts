@@ -14,6 +14,7 @@ declare global {
   const Avatar: typeof import('antd').Avatar
   const Button: typeof import('antd').Button
   const Checkbox: typeof import('antd').Checkbox
+  const ClearOutlined: typeof import('@ant-design/icons').ClearOutlined
   const ClockCircleOutlined: typeof import('@ant-design/icons').ClockCircleOutlined
   const CloseOutlined: typeof import('@ant-design/icons').CloseOutlined
   const CodeOutlined: typeof import('@ant-design/icons').CodeOutlined
@@ -46,6 +47,7 @@ declare global {
   const Outlet: typeof import('react-router').Outlet
   const PauseOutlined: typeof import('@ant-design/icons').PauseOutlined
   const PlayCircleOutlined: typeof import('@ant-design/icons').PlayCircleOutlined
+  const Popconfirm: typeof import('antd').Popconfirm
   const PushpinFilled: typeof import('@ant-design/icons').PushpinFilled
   const PushpinOutlined: typeof import('@ant-design/icons').PushpinOutlined
   const Route: typeof import('react-router').Route

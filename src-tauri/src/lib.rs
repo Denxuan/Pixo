@@ -65,6 +65,7 @@ pub fn run() {
             clipboard::commands::clipboard_update_settings,
             shortcut::clipboard_dismiss_panel,
             tray::clipboard_set_tray_labels,
+            tray::clipboard_set_tray_icon,
             tray::clipboard_take_main_request,
             permissions::permissions_status,
             permissions::permissions_prepare,
@@ -72,6 +73,7 @@ pub fn run() {
             system_settings::system_autostart_enabled,
             system_settings::system_set_autostart,
             system_settings::system_set_background,
+            system_settings::system_check_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

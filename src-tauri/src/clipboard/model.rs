@@ -8,6 +8,14 @@ fn copy_on_select_enabled() -> bool {
     true
 }
 
+fn default_pin_shortcut() -> String {
+    "CommandOrControl+P".to_string()
+}
+
+fn default_delete_shortcut() -> String {
+    "CommandOrControl+Backspace".to_string()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipKind {
     Text,
@@ -158,6 +166,10 @@ pub struct Settings {
     pub skip_sensitive: bool,
     #[serde(default = "copy_on_select_enabled")]
     pub copy_on_select: bool,
+    #[serde(default = "default_pin_shortcut")]
+    pub pin_shortcut: String,
+    #[serde(default = "default_delete_shortcut")]
+    pub delete_shortcut: String,
 }
 
 impl Default for Settings {
@@ -168,7 +180,7 @@ impl Default for Settings {
             record_text: true,
             record_image: true,
             record_files: true,
-            max_items: 500,
+            max_items: 200,
             retention_days: 30,
             max_text_bytes: 1024 * 1024,
             max_image_bytes: 20 * 1024 * 1024,
@@ -176,6 +188,8 @@ impl Default for Settings {
             excluded_apps: Vec::new(),
             skip_sensitive: true,
             copy_on_select: true,
+            pin_shortcut: default_pin_shortcut(),
+            delete_shortcut: default_delete_shortcut(),
         }
     }
 }
@@ -196,6 +210,10 @@ pub struct SettingsUpdate {
     pub skip_sensitive: bool,
     #[serde(default = "copy_on_select_enabled")]
     pub copy_on_select: bool,
+    #[serde(default = "default_pin_shortcut")]
+    pub pin_shortcut: String,
+    #[serde(default = "default_delete_shortcut")]
+    pub delete_shortcut: String,
     #[serde(default)]
     pub confirm: bool,
 }
@@ -216,6 +234,8 @@ impl SettingsUpdate {
             excluded_apps: self.excluded_apps,
             skip_sensitive: self.skip_sensitive,
             copy_on_select: self.copy_on_select,
+            pin_shortcut: self.pin_shortcut,
+            delete_shortcut: self.delete_shortcut,
         };
         settings.validate()?;
         Ok(settings.normalized())
@@ -230,6 +250,13 @@ impl Settings {
             || !(1024 * 1024..=100 * 1024 * 1024).contains(&self.max_image_bytes)
             || self.shortcut.trim().is_empty()
             || self.shortcut.chars().count() > 80
+            || self.pin_shortcut.trim().is_empty()
+            || self.pin_shortcut.chars().count() > 80
+            || self.delete_shortcut.trim().is_empty()
+            || self.delete_shortcut.chars().count() > 80
+            || self.pin_shortcut.trim() == self.delete_shortcut.trim()
+            || self.pin_shortcut.trim() == self.shortcut.trim()
+            || self.delete_shortcut.trim() == self.shortcut.trim()
             || self.excluded_apps.len() > 100
             || self
                 .excluded_apps
@@ -251,6 +278,8 @@ impl Settings {
         }
         self.excluded_apps = apps;
         self.shortcut = self.shortcut.trim().to_string();
+        self.pin_shortcut = self.pin_shortcut.trim().to_string();
+        self.delete_shortcut = self.delete_shortcut.trim().to_string();
         self
     }
 
@@ -329,6 +358,8 @@ mod tests {
             .remove("copyOnSelect");
         let settings: Settings = serde_json::from_value(value).expect("settings parse");
         assert!(settings.copy_on_select);
+        assert_eq!(settings.pin_shortcut, "CommandOrControl+P");
+        assert_eq!(settings.delete_shortcut, "CommandOrControl+Backspace");
     }
 
     #[test]

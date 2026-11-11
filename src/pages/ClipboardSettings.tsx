@@ -5,6 +5,7 @@ import type { ClipboardSettings, ClipboardStatus } from "@/types/clipboard";
 import { toSettingsUpdate } from "@/types/clipboard";
 import { clipboardErrorText } from "@/utils/clipboardMessage";
 import { isDesktop } from "@/utils/desktop";
+import { DEFAULT_DELETE_SHORTCUT, DEFAULT_PIN_SHORTCUT } from "@/utils/shortcut";
 import { bytesToMegabytes, megabytesToBytes } from "@/utils/time";
 
 export default function ClipboardSettingsPage() {
@@ -33,7 +34,12 @@ export default function ClipboardSettingsPage() {
     void clipboardGetSettings()
       .then((current) => {
         if (!alive) return;
-        setDraft({ ...current, copyOnSelect: current.copyOnSelect !== false });
+        setDraft({
+          ...current,
+          copyOnSelect: current.copyOnSelect !== false,
+          pinShortcut: current.pinShortcut || DEFAULT_PIN_SHORTCUT,
+          deleteShortcut: current.deleteShortcut || DEFAULT_DELETE_SHORTCUT,
+        });
         setTextMb(Number(bytesToMegabytes(current.maxTextBytes)));
         setImageMb(Number(bytesToMegabytes(current.maxImageBytes)));
         setExcluded(current.excludedApps.join("\n"));
@@ -129,8 +135,8 @@ export default function ClipboardSettingsPage() {
           <Form.Item label={t("zdx.label.clipboard.copyOnSelect")} extra={t("zdx.text.clipboard.copyOnSelect")}>
             <Switch checked={draft.copyOnSelect} onChange={(checked) => setDraft({ ...draft, copyOnSelect: checked })} />
           </Form.Item>
-          <Form.Item label={t("zdx.label.clipboard.maxItems")}>
-            <InputNumber min={1} max={5000} style={{ width: "100%" }} value={draft.maxItems} onChange={(value) => setDraft({ ...draft, maxItems: Number(value) })} />
+          <Form.Item label={t("zdx.label.clipboard.maxItems")} extra={t("zdx.text.clipboard.maxItems")}>
+            <InputNumber min={1} max={5000} style={{ width: "100%" }} value={draft.maxItems} onChange={(value) => setDraft({ ...draft, maxItems: typeof value === "number" ? value : draft.maxItems })} />
           </Form.Item>
           <Form.Item label={t("zdx.label.clipboard.retentionDays")} extra={t("zdx.text.clipboard.retentionZero")}>
             <InputNumber min={0} max={3650} style={{ width: "100%" }} value={draft.retentionDays} onChange={(value) => setDraft({ ...draft, retentionDays: Number(value) })} />
@@ -143,6 +149,12 @@ export default function ClipboardSettingsPage() {
           </Form.Item>
           <Form.Item label={t("zdx.label.clipboard.shortcut")} extra={t("zdx.text.clipboard.shortcutHelp")}>
             <ShortcutField value={draft.shortcut} macos={status?.platform.includes("macos") ?? false} onChange={(shortcut) => setDraft({ ...draft, shortcut })} />
+          </Form.Item>
+          <Form.Item label={t("zdx.label.clipboard.pinShortcut")} extra={t("zdx.text.clipboard.pinShortcut")}>
+            <ShortcutField label={t("zdx.label.clipboard.pinShortcut")} value={draft.pinShortcut} macos={status?.platform.includes("macos") ?? false} onChange={(pinShortcut) => setDraft({ ...draft, pinShortcut })} />
+          </Form.Item>
+          <Form.Item label={t("zdx.label.clipboard.deleteShortcut")} extra={t("zdx.text.clipboard.deleteShortcut")}>
+            <ShortcutField label={t("zdx.label.clipboard.deleteShortcut")} value={draft.deleteShortcut} macos={status?.platform.includes("macos") ?? false} onChange={(deleteShortcut) => setDraft({ ...draft, deleteShortcut })} />
           </Form.Item>
           <Form.Item
             label={t("zdx.label.clipboard.excludedApps")}

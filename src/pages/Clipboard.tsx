@@ -1,10 +1,11 @@
-import { ClipboardRequestError, clipboardClear, toClipboardError } from "@/api/clipboard";
+import { ClipboardRequestError } from "@/api/clipboard";
 import HistoryList from "@/components/clipboard/HistoryList";
 import { useClipboardHistory } from "@/hooks/useClipboard";
 import type { ClipFilter } from "@/types/clipboard";
 import { toSettingsUpdate } from "@/types/clipboard";
 import { clipboardErrorText, clipboardReasonText, clipboardStatusText } from "@/utils/clipboardMessage";
 import { isDesktop } from "@/utils/desktop";
+import { DEFAULT_DELETE_SHORTCUT, DEFAULT_PIN_SHORTCUT, eventMatchesShortcut } from "@/utils/shortcut";
 
 const FILTERS: Array<{ id: ClipFilter; label: string }> = [
   { id: "all", label: "zdx.label.clipboard.filter.all" },
@@ -26,8 +27,6 @@ export default function ClipboardPage() {
   const [activeId, setActiveId] = useState<number | null>(null);
   const [notice, setNotice] = useState("");
   const [enableOpen, setEnableOpen] = useState(false);
-  const [clearOpen, setClearOpen] = useState(false);
-  const [keepPinned, setKeepPinned] = useState(true);
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
   const desktop = isDesktop();
 
@@ -61,6 +60,21 @@ export default function ClipboardPage() {
     setEnableOpen(false);
   }
 
+  const pinShortcut = history.settings?.pinShortcut || DEFAULT_PIN_SHORTCUT;
+  const deleteShortcut = history.settings?.deleteShortcut || DEFAULT_DELETE_SHORTCUT;
+
+  function onKeyDown(event: React.KeyboardEvent) {
+    const item = history.items.find((entry) => entry.id === activeId);
+    if (!item) return;
+    if (eventMatchesShortcut(event, pinShortcut)) {
+      event.preventDefault();
+      void history.pinItem(item.id, !item.pinned);
+    } else if (eventMatchesShortcut(event, deleteShortcut) && pendingDelete === null) {
+      event.preventDefault();
+      setPendingDelete(item.id);
+    }
+  }
+
   const status = history.status;
   const reason = clipboardReasonText(t, status?.reason ?? null);
   const details = status ? [
@@ -73,7 +87,7 @@ export default function ClipboardPage() {
   const emptyText = status?.enabled ? (history.query ? t("zdx.text.clipboard.noResults") : t("zdx.text.clipboard.empty")) : t("zdx.text.clipboard.disabled");
 
   return (
-    <Flex vertical gap={16} className="h-full min-h-0 flex-1 overflow-hidden">
+    <Flex vertical gap={16} className="h-full min-h-0 flex-1 overflow-hidden" onKeyDown={onKeyDown}>
       <Flex justify="space-between" align="flex-start" gap={16} wrap>
         <div>
           <Typography.Title level={3} style={{ margin: 0 }}>{t("zdx.label.clipboard.title")}</Typography.Title>
@@ -86,7 +100,17 @@ export default function ClipboardPage() {
             {status?.enabled && status.paused && <Button icon={<PlayCircleOutlined />} onClick={() => void history.setPaused(false)}>{t("zdx.label.clipboard.resume")}</Button>}
             <Button icon={<SearchOutlined />} onClick={() => void history.readNow()}>{t("zdx.label.clipboard.readNow")}</Button>
             <Button icon={<SettingOutlined />} onClick={() => navigate("/settings/clipboard")}>{t("zdx.label.clipboard.settings")}</Button>
-            <Button danger onClick={() => setClearOpen(true)}>{t("zdx.label.clipboard.clear")}</Button>
+            <Popconfirm
+              title={t("zdx.label.clipboard.clear")}
+              description={t("zdx.text.clipboard.clearConfirm")}
+              okText={t("zdx.label.clipboard.confirm")}
+              cancelText={t("zdx.label.clipboard.cancel")}
+              okButtonProps={{ danger: true }}
+              placement="bottomRight"
+              onConfirm={() => history.clearHistory().then(() => setNotice(t("zdx.text.clipboard.cleared")))}
+            >
+              <Button danger>{t("zdx.label.clipboard.clear")}</Button>
+            </Popconfirm>
           </Space>
         )}
       </Flex>
@@ -147,10 +171,6 @@ export default function ClipboardPage() {
       <Modal open={enableOpen} title={t("zdx.text.clipboard.enableTitle")} okText={t("zdx.label.clipboard.enable")} cancelText={t("zdx.label.clipboard.cancel")} onOk={() => void enable()} onCancel={() => setEnableOpen(false)}>
         <Typography.Paragraph>{t("zdx.text.clipboard.enableBody")}</Typography.Paragraph>
         {status && <Typography.Paragraph>{t("zdx.text.clipboard.storagePath", { path: status.storagePath })}</Typography.Paragraph>}
-      </Modal>
-      <Modal open={clearOpen} title={t("zdx.label.clipboard.clear")} okText={t("zdx.label.clipboard.confirm")} cancelText={t("zdx.label.clipboard.cancel")} onOk={() => clipboardClear(keepPinned).then(() => history.reload()).then(() => setClearOpen(false)).catch((error) => history.setError(toClipboardError(error)))} onCancel={() => setClearOpen(false)}>
-        <Typography.Paragraph>{t("zdx.text.clipboard.clearConfirm")}</Typography.Paragraph>
-        <Checkbox checked={keepPinned} onChange={(event) => setKeepPinned(event.target.checked)}>{t("zdx.label.clipboard.keepPinned")}</Checkbox>
       </Modal>
       <Modal open={pendingDelete !== null} title={t("zdx.label.clipboard.delete")} okText={t("zdx.label.clipboard.confirm")} cancelText={t("zdx.label.clipboard.cancel")} onOk={() => { if (pendingDelete !== null) void history.deleteItem(pendingDelete).then(() => setPendingDelete(null)); }} onCancel={() => setPendingDelete(null)}>
         <Typography.Paragraph>{t("zdx.text.clipboard.deleteConfirm")}</Typography.Paragraph>

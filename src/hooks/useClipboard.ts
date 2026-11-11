@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 
 import {
+  clipboardClear,
   clipboardCopy,
   clipboardDelete,
   clipboardGetSettings,
@@ -55,7 +56,7 @@ export function useClipboardHistory() {
         kind: selected.kind,
         pinnedOnly: selected.pinnedOnly,
         cursor,
-        limit: 50,
+        limit: settings?.maxItems && settings.maxItems > 0 ? settings.maxItems : 200,
       });
       if (token !== request.current) return;
       setItems((current) => cursor ? [...current, ...page.items] : page.items);
@@ -68,7 +69,7 @@ export function useClipboardHistory() {
     } finally {
       if (token === request.current) setLoading(false);
     }
-  }, [debouncedQuery, filter]);
+  }, [debouncedQuery, filter, settings?.maxItems]);
 
   loadRef.current = load;
 
@@ -80,6 +81,9 @@ export function useClipboardHistory() {
     if (!isDesktop()) return;
     let alive = true;
     const stops: Array<() => void> = [];
+    void clipboardGetSettings().then((current) => {
+      if (alive) setSettings(current);
+    }).catch(() => undefined);
     void listen("clipboard://changed", () => {
       if (Date.now() < suppressChangedUntil.current) return;
       void loadRef.current();
@@ -142,6 +146,10 @@ export function useClipboardHistory() {
     deleteItem: (id: number) => run(async () => {
       await clipboardDelete([id]);
       setItems((current) => current.filter((item) => item.id !== id));
+    }),
+    clearHistory: () => run(async () => {
+      await clipboardClear(true);
+      await load();
     }),
     readNow: () => run(() => clipboardReadNow()),
     setPaused: (paused: boolean) => run(async () => {

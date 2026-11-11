@@ -1,9 +1,10 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { setBackground } from "@/api/system";
+import { setBackground, setTrayIcon } from "@/api/system";
 
 import BootScreen from "@/components/BootScreen";
 import { useSharedSettings } from "@/hooks/useSharedSettings";
 import { useSettingsStore } from "@/stores/settings";
+import { isTrayIcon } from "@/components/icons/TrayMark";
 import { isDesktop } from "@/utils/desktop";
 import { isDarkTheme } from "@/utils/theme";
 
@@ -46,6 +47,10 @@ export default function App() {
     void setBackground(useSettingsStore.getState().background).catch((error) => {
       console.error("Failed to apply background mode", error);
       useSettingsStore.getState().setBackground(false);
+    });
+    const trayIcon = useSettingsStore.getState().trayIcon;
+    void setTrayIcon(isTrayIcon(trayIcon) ? trayIcon : "board").catch((error) => {
+      console.error("Failed to apply taskbar icon", error);
     });
   }, [hydrated, panel]);
 

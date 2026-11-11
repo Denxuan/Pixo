@@ -26,8 +26,8 @@ pub fn clipboard_list(
             Some(ClipKind::parse(kind).ok_or_else(|| ClipboardError::new("invalid_input"))?)
         }
     };
-    let limit = limit.unwrap_or(50);
-    if !(1..=100).contains(&limit) {
+    let limit = limit.unwrap_or(200);
+    if !(1..=5000).contains(&limit) {
         return Err(ClipboardError::new("invalid_input"));
     }
     state.list(

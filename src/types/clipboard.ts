@@ -48,6 +48,8 @@ export interface ClipboardSettings {
   maxTextBytes: number;
   maxImageBytes: number;
   shortcut: string;
+  pinShortcut: string;
+  deleteShortcut: string;
   excludedApps: string[];
   skipSensitive: boolean;
   copyOnSelect: boolean;
@@ -63,6 +65,8 @@ export interface ClipboardSettingsUpdate {
   maxTextBytes: number;
   maxImageBytes: number;
   shortcut: string;
+  pinShortcut: string;
+  deleteShortcut: string;
   excludedApps: string[];
   skipSensitive: boolean;
   copyOnSelect: boolean;
@@ -100,6 +104,8 @@ export function toSettingsUpdate(settings: ClipboardSettings, confirm = false): 
     maxTextBytes: settings.maxTextBytes,
     maxImageBytes: settings.maxImageBytes,
     shortcut: settings.shortcut,
+    pinShortcut: settings.pinShortcut,
+    deleteShortcut: settings.deleteShortcut,
     excludedApps: settings.excludedApps,
     skipSensitive: settings.skipSensitive,
     copyOnSelect: settings.copyOnSelect,

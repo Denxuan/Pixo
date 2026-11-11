@@ -789,4 +789,10 @@ mod tests {
         assert!(!super::releases_to_system(10, 0, true, true));
         assert!(!super::releases_to_system(10, 53, false, false));
     }
+
+    #[test]
+    fn selection_shortcuts_parse_without_registration() {
+        super::parse_shortcut("CommandOrControl+P").unwrap();
+        super::parse_shortcut("CommandOrControl+Backspace").unwrap();
+    }
 }

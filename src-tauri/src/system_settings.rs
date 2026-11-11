@@ -59,6 +59,85 @@ fn should_hide(label: &str, enabled: bool, tray_available: bool) -> bool {
     label == "main" && enabled && tray_available
 }
 
+const LATEST_RELEASE: &str = "https://api.github.com/repos/Denxuan/Pixo/releases/latest";
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateStatus {
+    pub latest: String,
+    pub url: String,
+    pub update_available: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    html_url: String,
+}
+
+#[tauri::command]
+pub fn system_check_update(app: AppHandle) -> Result<UpdateStatus, String> {
+    let current = app.package_info().version.to_string();
+    let response = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .get(LATEST_RELEASE)
+        .set("User-Agent", "Pixo")
+        .set("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|_| "unavailable".to_string())?;
+    let body = response
+        .into_string()
+        .map_err(|_| "unavailable".to_string())?;
+    let release: GitHubRelease =
+        serde_json::from_str(&body).map_err(|_| "unavailable".to_string())?;
+    update_from_release(&current, &release.tag_name, &release.html_url).map_err(str::to_string)
+}
+
+fn update_from_release(
+    current: &str,
+    tag_name: &str,
+    html_url: &str,
+) -> Result<UpdateStatus, &'static str> {
+    let latest = tag_name.strip_prefix('v').unwrap_or(tag_name);
+    if !is_stable(latest) || !html_url.starts_with("https://github.com/Denxuan/Pixo/releases/") {
+        return Err("unavailable");
+    }
+    Ok(UpdateStatus {
+        update_available: is_newer(current, latest),
+        latest: latest.to_string(),
+        url: html_url.to_string(),
+    })
+}
+
+fn is_stable(version: &str) -> bool {
+    version_parts(version).is_some()
+}
+
+fn is_newer(current: &str, latest: &str) -> bool {
+    match (version_parts(current), version_parts(latest)) {
+        (Some(current), Some(latest)) => latest > current,
+        (None, Some(_)) => true,
+        _ => false,
+    }
+}
+
+fn version_parts(version: &str) -> Option<[u64; 3]> {
+    let mut numbers = [0; 3];
+    let mut parts = version.split('.');
+    for number in &mut numbers {
+        let text = parts.next()?;
+        if text.len() > 1 && text.starts_with('0') {
+            return None;
+        }
+        *number = text.parse().ok()?;
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(numbers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::should_hide;
@@ -68,5 +147,40 @@ mod tests {
         assert!(!should_hide("main", false, true));
         assert!(!should_hide("main", true, false));
         assert!(!should_hide("clipboard-panel", true, true));
+    }
+
+    #[test]
+    fn newer_github_release_is_detected_numerically() {
+        let status = super::update_from_release(
+            "0.1.6",
+            "v0.1.10",
+            "https://github.com/Denxuan/Pixo/releases/tag/v0.1.10",
+        )
+        .unwrap();
+        assert!(status.update_available);
+        assert_eq!(status.latest, "0.1.10");
+        let current = super::update_from_release(
+            "0.1.10",
+            "v0.1.9",
+            "https://github.com/Denxuan/Pixo/releases/tag/v0.1.9",
+        )
+        .unwrap();
+        assert!(!current.update_available);
+        assert!(
+            super::update_from_release(
+                "0.1.6",
+                "v0.1.7-beta",
+                "https://github.com/Denxuan/Pixo/releases/tag/v0.1.7-beta"
+            )
+            .is_err()
+        );
+        assert!(
+            super::update_from_release(
+                "0.1.6",
+                "v0.1.7",
+                "https://example.com/releases/tag/v0.1.7"
+            )
+            .is_err()
+        );
     }
 }

@@ -266,6 +266,8 @@ impl ClipboardState {
         let current = lock(&self.inner.settings).clone();
         let proposed = update.into_settings(current.paused)?;
         crate::shortcut::parse_shortcut(&proposed.shortcut)?;
+        crate::shortcut::parse_shortcut(&proposed.pin_shortcut)?;
+        crate::shortcut::parse_shortcut(&proposed.delete_shortcut)?;
         let plan = lock(&self.inner.store).prune_plan(&proposed, now_millis())?;
         if plan.count > 0 && !confirm {
             return Err(ClipboardError::with_params(

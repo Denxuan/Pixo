@@ -78,6 +78,16 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
 }
 
 #[tauri::command]
+pub fn clipboard_set_tray_icon(app: AppHandle, icon: String) -> Result<(), String> {
+    let mark = TrayMark::parse(icon.trim()).ok_or("invalid_input")?;
+    if let Ok(mut current) = TRAY_MARK.lock() {
+        *current = mark;
+    }
+    refresh(&app);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn clipboard_set_tray_labels(app: AppHandle, labels: TrayLabels) {
     if let Some(host) = app.try_state::<TrayHost>() {
         if let Ok(mut current) = host.labels.lock() {
@@ -147,6 +157,36 @@ struct TrayHost {
 }
 
 static PENDING_MAIN: Mutex<Option<MainRequest>> = Mutex::new(None);
+static TRAY_MARK: Mutex<TrayMark> = Mutex::new(TrayMark::Board);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TrayMark {
+    Board,
+    Clip,
+    Mark,
+    Pages,
+    Pin,
+}
+
+impl TrayMark {
+    fn parse(icon: &str) -> Option<Self> {
+        Some(match icon {
+            "board" => Self::Board,
+            "clip" => Self::Clip,
+            "mark" => Self::Mark,
+            "pages" => Self::Pages,
+            "pin" => Self::Pin,
+            _ => return None,
+        })
+    }
+
+    fn current() -> Self {
+        TRAY_MARK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .to_owned()
+    }
+}
 
 fn on_primary(app: &AppHandle, rect: tauri::Rect) {
     let enabled = app
@@ -288,7 +328,7 @@ fn glyph_image(kind: Glyph) -> Image<'static> {
     };
     for y in 0..SIZE {
         for x in 0..SIZE {
-            let alpha = glyph_alpha(kind, x, y);
+            let alpha = glyph_alpha(kind, TrayMark::current(), x, y);
             if alpha == 0 {
                 continue;
             }
@@ -302,13 +342,10 @@ fn glyph_image(kind: Glyph) -> Image<'static> {
     Image::new_owned(rgba, SIZE, SIZE)
 }
 
-fn glyph_alpha(kind: Glyph, x: u32, y: u32) -> u8 {
+fn glyph_alpha(kind: Glyph, mark: TrayMark, x: u32, y: u32) -> u8 {
     let px = f64::from(x) + 0.5;
     let py = f64::from(y) + 0.5;
-    let mut on = stroke_round(px, py, 11.0, 15.0, 33.0, 39.0, 4.0, 2.2)
-        || inside_round(px, py, 17.0, 8.0, 27.0, 17.0, 2.5)
-        || inside_rect(px, py, 16.0, 23.0, 28.0, 25.0)
-        || inside_rect(px, py, 16.0, 29.0, 24.0, 31.0);
+    let mut on = mark_shape(mark, px, py);
     if kind == Glyph::Paused {
         on = on || dist_to_segment(px, py, 9.0, 7.0, 35.0, 37.0) <= 2.4;
     }
@@ -319,6 +356,62 @@ fn glyph_alpha(kind: Glyph, x: u32, y: u32) -> u8 {
     } else {
         255
     }
+}
+
+fn mark_shape(mark: TrayMark, px: f64, py: f64) -> bool {
+    match mark {
+        TrayMark::Board => {
+            stroke_round(px, py, 11.0, 15.0, 33.0, 39.0, 4.0, 2.2)
+                || inside_round(px, py, 17.0, 8.0, 27.0, 17.0, 2.5)
+                || inside_rect(px, py, 16.0, 23.0, 28.0, 25.0)
+                || inside_rect(px, py, 16.0, 29.0, 24.0, 31.0)
+        }
+        TrayMark::Clip => on_stroke(
+            px,
+            py,
+            &[
+                (20.0, 30.0),
+                (20.0, 16.0),
+                (24.0, 11.0),
+                (29.0, 14.0),
+                (29.0, 32.0),
+                (22.0, 36.0),
+                (15.0, 32.0),
+                (15.0, 18.0),
+            ],
+            1.7,
+        ),
+        TrayMark::Mark => {
+            inside_rect(px, py, 14.0, 11.0, 18.6, 33.0)
+                || (inside_round(px, py, 14.0, 11.0, 31.0, 23.8, 6.2)
+                    && !inside_round(px, py, 18.6, 14.4, 27.4, 20.6, 3.0)
+                    && px >= 16.5)
+        }
+        TrayMark::Pages => {
+            inside_round(px, py, 8.0, 15.0, 26.0, 36.0, 3.2)
+                || inside_round(px, py, 16.0, 8.0, 36.0, 29.0, 3.2)
+        }
+        TrayMark::Pin => {
+            let dx = px - 22.0;
+            let dy = py - 12.0;
+            dx * dx + dy * dy <= 20.0
+                || inside_rect(px, py, 20.6, 15.0, 23.4, 34.5)
+                || inside_rect(px, py, 15.0, 19.0, 29.0, 21.6)
+        }
+    }
+}
+
+fn on_stroke(px: f64, py: f64, points: &[(f64, f64)], width: f64) -> bool {
+    points.windows(2).any(|segment| {
+        dist_to_segment(
+            px,
+            py,
+            segment[0].0,
+            segment[0].1,
+            segment[1].0,
+            segment[1].1,
+        ) <= width
+    })
 }
 
 fn stroke_round(
@@ -390,19 +483,19 @@ fn dist_to_segment(px: f64, py: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f64 
 
 #[cfg(test)]
 mod tests {
-    use super::{Glyph, glyph_alpha, main_request_path};
+    use super::{Glyph, TrayMark, glyph_alpha, main_request_path};
 
     #[test]
     fn paused_mark_is_only_on_the_paused_icon() {
-        assert_eq!(glyph_alpha(Glyph::Recording, 21, 21), 0);
-        assert_eq!(glyph_alpha(Glyph::Disabled, 21, 21), 0);
-        assert!(glyph_alpha(Glyph::Paused, 21, 21) > 200);
+        assert_eq!(glyph_alpha(Glyph::Recording, TrayMark::Board, 21, 21), 0);
+        assert_eq!(glyph_alpha(Glyph::Disabled, TrayMark::Board, 21, 21), 0);
+        assert!(glyph_alpha(Glyph::Paused, TrayMark::Board, 21, 21) > 200);
         let mut recording = 0u8;
         let mut disabled = 0u8;
         for y in 0..44 {
             for x in 0..44 {
-                recording = recording.max(glyph_alpha(Glyph::Recording, x, y));
-                disabled = disabled.max(glyph_alpha(Glyph::Disabled, x, y));
+                recording = recording.max(glyph_alpha(Glyph::Recording, TrayMark::Board, x, y));
+                disabled = disabled.max(glyph_alpha(Glyph::Disabled, TrayMark::Board, x, y));
             }
         }
         assert_eq!(recording, 255);
@@ -421,5 +514,26 @@ mod tests {
         );
         assert_eq!(main_request_path("/clipboard"), "/clipboard");
         assert_eq!(main_request_path("/other"), "/clipboard");
+    }
+
+    #[test]
+    fn every_taskbar_mark_draws_and_unknown_names_are_rejected() {
+        for mark in [
+            TrayMark::Board,
+            TrayMark::Clip,
+            TrayMark::Mark,
+            TrayMark::Pages,
+            TrayMark::Pin,
+        ] {
+            let mut peak = 0u8;
+            for y in 0..44 {
+                for x in 0..44 {
+                    peak = peak.max(glyph_alpha(Glyph::Recording, mark, x, y));
+                }
+            }
+            assert_eq!(peak, 255);
+        }
+        assert!(TrayMark::parse("board").is_some());
+        assert!(TrayMark::parse("dock").is_none());
     }
 }

@@ -4,6 +4,7 @@ import { ClipboardRequestError, dismissClipboardPanel } from "@/api/clipboard";
 import HistoryList from "@/components/clipboard/HistoryList";
 import { useClipboardHistory } from "@/hooks/useClipboard";
 import { clipboardErrorText } from "@/utils/clipboardMessage";
+import { DEFAULT_DELETE_SHORTCUT, DEFAULT_PIN_SHORTCUT, eventMatchesShortcut, formatShortcut, isApplePlatform } from "@/utils/shortcut";
 
 function focusSearch() {
   const field = document.getElementById("clipboard-panel-search");
@@ -20,10 +21,18 @@ export default function ClipboardPanel() {
   const history = useClipboardHistory();
   const [index, setIndex] = useState(0);
   const [message, setMessage] = useState("");
+  const [clearOpen, setClearOpen] = useState(false);
   const copyTimer = useRef(0);
   const copySeq = useRef(0);
   const pendingClose = useRef<number | null>(null);
   const copyOnSelect = history.settings?.copyOnSelect !== false;
+  const macos = isApplePlatform();
+  const pinShortcut = history.settings?.pinShortcut || DEFAULT_PIN_SHORTCUT;
+  const deleteShortcut = history.settings?.deleteShortcut || DEFAULT_DELETE_SHORTCUT;
+  const shortcutHelp = {
+    pin: formatShortcut(pinShortcut, macos),
+    remove: formatShortcut(deleteShortcut, macos),
+  };
 
   useEffect(() => {
     void history.loadSettings();
@@ -142,6 +151,7 @@ export default function ClipboardPanel() {
   }
 
   function onKeyDown(event: React.KeyboardEvent) {
+    if (clearOpen) return;
     if (event.key === "Escape") {
       event.preventDefault();
       dismissClipboardPanel();
@@ -155,9 +165,13 @@ export default function ClipboardPanel() {
       event.preventDefault();
       window.clearTimeout(copyTimer.current);
       if (active) void copyById(active.id, true);
-    } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p") {
+    } else if (eventMatchesShortcut(event, pinShortcut)) {
       event.preventDefault();
       if (active) void history.pinItem(active.id, !active.pinned);
+    } else if (eventMatchesShortcut(event, deleteShortcut)) {
+      event.preventDefault();
+      window.clearTimeout(copyTimer.current);
+      if (active) void history.deleteItem(active.id);
     }
   }
 
@@ -176,11 +190,33 @@ export default function ClipboardPanel() {
       <Flex justify="space-between" align="center" data-tauri-drag-region style={{ padding: "10px 12px", borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
         <Flex align="center" gap={4} data-tauri-drag-region className="min-w-0">
           <Typography.Title level={5} data-tauri-drag-region style={{ margin: 0 }}>{t("zdx.label.clipboard.title")}</Typography.Title>
-          <Tooltip title={t(copyOnSelect ? "zdx.text.clipboard.panelHelpSelect" : "zdx.text.clipboard.panelHelp")}>
-            <Button type="text" size="small" aria-label={t(copyOnSelect ? "zdx.text.clipboard.panelHelpSelect" : "zdx.text.clipboard.panelHelp")} icon={<InfoCircleOutlined />} />
+          <Tooltip title={t(copyOnSelect ? "zdx.text.clipboard.panelHelpSelect" : "zdx.text.clipboard.panelHelp", shortcutHelp)}>
+            <Button type="text" size="small" aria-label={t(copyOnSelect ? "zdx.text.clipboard.panelHelpSelect" : "zdx.text.clipboard.panelHelp", shortcutHelp)} icon={<InfoCircleOutlined />} />
           </Tooltip>
         </Flex>
-        <Button type="text" aria-label={t("zdx.label.clipboard.close")} icon={<CloseOutlined />} onClick={() => dismissClipboardPanel()} />
+        <Flex align="center">
+          <Popconfirm
+            title={t("zdx.label.clipboard.clear")}
+            description={t("zdx.text.clipboard.clearConfirm")}
+            okText={t("zdx.label.clipboard.confirm")}
+            cancelText={t("zdx.label.clipboard.cancel")}
+            okButtonProps={{ danger: true }}
+            placement="bottomRight"
+            onOpenChange={(open) => {
+              if (open) window.clearTimeout(copyTimer.current);
+              setClearOpen(open);
+            }}
+            onConfirm={() => history.clearHistory().then(() => {
+              setMessage(t("zdx.text.clipboard.cleared"));
+            }).catch((error) => {
+              if (error instanceof ClipboardRequestError) setMessage(clipboardErrorText(t, error));
+              throw error;
+            })}
+          >
+            <Button type="text" danger aria-label={t("zdx.label.clipboard.clear")} icon={<ClearOutlined />} />
+          </Popconfirm>
+          <Button type="text" aria-label={t("zdx.label.clipboard.close")} icon={<CloseOutlined />} onClick={() => dismissClipboardPanel()} />
+        </Flex>
       </Flex>
       <Flex vertical gap={8} style={{ padding: "10px 12px 8px" }}>
         <Input

@@ -2,17 +2,33 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-test("release tag must match all project versions", () => {
-  const run = (tag) => execFileSync(process.execPath, [".github/scripts/release-version.mjs"], {
-    env: { ...process.env, GITHUB_REF_NAME: tag }, stdio: "pipe",
-  }).toString().trim();
-  assert.ok(run(`v${JSON.parse(readFileSync("package.json", "utf8")).version}`));
-  assert.throws(() => run("v999.999.999"));
-  assert.throws(() => run("v1.2.3-rc1"));
+test("release tag writes its version into the project files", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pixo-version-"));
+  try {
+    const tauriDir = join(dir, "src-tauri");
+    mkdirSync(tauriDir);
+    writeFileSync(join(dir, "package.json"), '{\n  "name": "pixo",\n  "version": "0.0.1"\n}\n');
+    writeFileSync(join(tauriDir, "tauri.conf.json"), '{\n  "productName": "pixo",\n  "version": "0.0.1"\n}\n');
+    writeFileSync(join(tauriDir, "Cargo.toml"), '[package]\nname = "pixo"\nversion = "0.0.1"\n\n[dependencies]\nserde = { version = "1" }\n');
+    writeFileSync(join(tauriDir, "Cargo.lock"), '[[package]]\nname = "pixo"\nversion = "0.0.1"\n');
+    const script = resolve(".github/scripts/release-version.mjs");
+    const run = (tag) => execFileSync(process.execPath, [script], {
+      cwd: dir, env: { ...process.env, GITHUB_REF_NAME: tag }, stdio: "pipe",
+    }).toString().trim();
+    assert.equal(run("v1.4.0"), "1.4.0");
+    assert.equal(JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).version, "1.4.0");
+    assert.equal(JSON.parse(readFileSync(join(tauriDir, "tauri.conf.json"), "utf8")).version, "1.4.0");
+    assert.match(readFileSync(join(tauriDir, "Cargo.toml"), "utf8"), /\[package\][\s\S]*?^version = "1\.4\.0"/m);
+    assert.match(readFileSync(join(tauriDir, "Cargo.toml"), "utf8"), /serde = \{ version = "1" \}/);
+    assert.match(readFileSync(join(tauriDir, "Cargo.lock"), "utf8"), /name = "pixo"\nversion = "1\.4\.0"/);
+    assert.throws(() => run("v1.2.3-rc1"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("cask includes the actual archive checksum and release URL", () => {

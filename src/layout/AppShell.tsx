@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import { takeClipboardMainRequest } from "@/api/clipboard";
 import PermissionPrompt from "@/components/PermissionPrompt";
+import UpdatePrompt from "@/components/UpdatePrompt";
 import { useSettingsStore, type ThemeMode } from "@/stores/settings";
 import { isDesktop } from "@/utils/desktop";
 
@@ -130,6 +131,7 @@ export default function AppShell() {
           <Outlet />
         </Layout.Content>
         <PermissionPrompt />
+        <UpdatePrompt />
       </Layout>
     </Layout>
   );
