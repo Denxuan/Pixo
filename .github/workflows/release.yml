@@ -89,10 +89,12 @@ jobs:
             echo "macOS build was ad hoc signed." >&2
             exit 1
           fi
-          actual="$(codesign -d -r- "$app" 2>&1 | sed -n 's/.*certificate leaf = \(H"[0-9A-F]*"\).*/\1/p')"
-          expected='H"0C8919D845D4DB02FBE57A62A8455D1ECD170353"'
+          requirement="$(codesign -d -r- "$app" 2>&1 || true)"
+          actual="$(printf '%s\n' "$requirement" | sed -n 's/.*certificate leaf = \(H"[0-9A-Fa-f]*"\).*/\1/p' | tr '[:upper:]' '[:lower:]')"
+          expected='h"0c8919d845d4db02fbe57a62a8455d1ecd170353"'
           if [[ "$actual" != "$expected" ]]; then
             echo "Signing certificate leaf changed: ${actual:-missing}" >&2
+            printf '%s\n' "$requirement" >&2
             exit 1
           fi
           cleanup
