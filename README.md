@@ -16,7 +16,7 @@ This template should help get you started developing with Tauri, React and Types
 
 ## 发行与 Homebrew
 
-推送稳定版本标签（例如 `v0.1.0`）即可。GitHub Actions 会把标签版本写入安装包，不需要再手工修改 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml`。构建会生成 macOS 通用版、Windows 安装包和 Linux 安装包，创建 GitHub Release，并将 Homebrew Cask 更新到共享 tap `Denxuan/homebrew-tab`。主仓库需配置 `HOMEBREW_TAP`，并授予其对 tap 仓库的 Contents 写权限。macOS 使用 ad hoc 临时签名，不需要 Apple Developer 凭据；由于每个版本的签名哈希可能变化，系统权限在更新后可能需要重新授权。
+推送稳定版本标签（例如 `v0.1.0`）即可。GitHub Actions 会把标签版本写入安装包，不需要再手工修改 `package.json`、`src-tauri/tauri.conf.json` 和 `src-tauri/Cargo.toml`。构建会生成 macOS 通用版、Windows 安装包和 Linux 安装包，创建 GitHub Release，并将 Homebrew Cask 更新到共享 tap `Denxuan/homebrew-tab`。主仓库需配置 `HOMEBREW_TAP`，并授予其对 tap 仓库的 Contents 写权限。macOS 使用长期固定的自签名证书 `Pixo Self-Signed`，不需要 Apple Developer 凭据。发布仓库还需配置 `MACOS_CERTIFICATE`（p12 的 base64）和 `MACOS_CERTIFICATE_PASSWORD`。Bundle ID 与这张证书不变时，覆盖更新 `/Applications/pixo.app` 可以保留辅助功能授权。
 
 首次发行成功后，可通过以下命令安装 macOS 版本（将仓库地址改为实际公开的 GitHub 地址）：
 
@@ -25,7 +25,7 @@ brew tap denxuan/tab
 brew install --cask pixo
 ```
 
-macOS 发行包使用 ad hoc 签名且未经 Apple 公证；首次打开时 macOS 可能要求在系统设置中确认。辅助功能等权限可能在更新后需要重新授权。
+macOS 发行包使用固定自签名且未经 Apple 公证。首次打开时 macOS 仍可能要求在系统设置中确认。第一次换用这张证书后需要重新允许一次辅助功能；之后在原位置覆盖更新可以继续使用该授权。
 
 ## Recommended IDE Setup
 
