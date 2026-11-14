@@ -77,7 +77,13 @@ jobs:
         run: |
           set -euo pipefail
           pnpm tauri build --target universal-apple-darwin --bundles dmg
-          app="src-tauri/target/universal-apple-darwin/release/bundle/macos/pixo.app"
+          dmg="$(echo src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg)"
+          mount_point="$RUNNER_TEMP/pixo-dmg"
+          mkdir -p "$mount_point"
+          cleanup() { hdiutil detach "$mount_point" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount_point"
+          app="$mount_point/pixo.app"
           codesign --verify --deep --strict --verbose=2 "$app"
           if codesign -dvvv "$app" 2>&1 | grep -q "Signature=adhoc"; then
             echo "macOS build was ad hoc signed." >&2
@@ -89,8 +95,10 @@ jobs:
             echo "Signing certificate leaf changed: ${actual:-missing}" >&2
             exit 1
           fi
+          cleanup
+          trap - EXIT
           mkdir -p release-assets
-          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg release-assets/pixo-macos-universal.dmg
+          cp "$dmg" release-assets/pixo-macos-universal.dmg
       - name: Build Linux packages
         if: matrix.platform == 'linux'
         run: |
