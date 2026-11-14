@@ -57,7 +57,6 @@ jobs:
             exit 1
           fi
           cert_path="$RUNNER_TEMP/certificate.p12"
-          cer_path="$RUNNER_TEMP/certificate.cer"
           keychain_path="$RUNNER_TEMP/signing.keychain-db"
           keychain_password="$(openssl rand -base64 32)"
           printf '%s' "$MACOS_CERTIFICATE" | base64 -D > "$cert_path"
@@ -66,17 +65,15 @@ jobs:
           security unlock-keychain -p "$keychain_password" "$keychain_path"
           security import "$cert_path" -k "$keychain_path" -P "$MACOS_CERTIFICATE_PASSWORD" -A -f pkcs12 -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain_path"
-          security find-certificate -c "Pixo Self-Signed" -p "$keychain_path" > "$cer_path"
-          security add-trusted-cert -d -r trustRoot -p codeSign -k "$keychain_path" "$cer_path" || true
-          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$cer_path"
           security list-keychains -d user -s "$keychain_path"
           security default-keychain -s "$keychain_path"
-          security find-identity -v -p codesigning | grep -F "Pixo Self-Signed"
+          printf 'sign-probe' > "$RUNNER_TEMP/sign-probe"
+          codesign --force --sign 0C8919D845D4DB02FBE57A62A8455D1ECD170353 --keychain "$keychain_path" "$RUNNER_TEMP/sign-probe"
           rm -f "$cert_path"
       - name: Build macOS universal app
         if: matrix.platform == 'macos'
         env:
-          APPLE_SIGNING_IDENTITY: Pixo Self-Signed
+          APPLE_SIGNING_IDENTITY: 0C8919D845D4DB02FBE57A62A8455D1ECD170353
         run: |
           set -euo pipefail
           pnpm tauri build --target universal-apple-darwin --bundles dmg
