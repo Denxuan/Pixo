@@ -15,6 +15,7 @@ export interface ClipSummary {
   lastCopiedAt: number;
   copyCount: number;
   formatted: boolean;
+  pinKey: string | null;
 }
 
 export interface ClipDetail {
@@ -53,6 +54,8 @@ export interface ClipboardSettings {
   excludedApps: string[];
   skipSensitive: boolean;
   copyOnSelect: boolean;
+  pasteAutomatically: boolean;
+  ignoredTypes: string[];
 }
 
 export interface ClipboardSettingsUpdate {
@@ -70,6 +73,8 @@ export interface ClipboardSettingsUpdate {
   excludedApps: string[];
   skipSensitive: boolean;
   copyOnSelect: boolean;
+  pasteAutomatically: boolean;
+  ignoredTypes: string[];
   confirm?: boolean;
 }
 
@@ -84,6 +89,8 @@ export interface ClipboardStatus {
   skippedSensitive: number;
   skippedTooLarge: number;
   skippedExcluded: number;
+  skippedIgnored: number;
+  ignoreNext: boolean;
   reason: string | null;
   storagePath: string;
   access: string | null;
@@ -91,6 +98,8 @@ export interface ClipboardStatus {
 
 export interface CopyResult {
   missing: string[];
+  pasted: boolean;
+  pasteError: string | null;
 }
 
 export function toSettingsUpdate(settings: ClipboardSettings, confirm = false): ClipboardSettingsUpdate {
@@ -109,6 +118,8 @@ export function toSettingsUpdate(settings: ClipboardSettings, confirm = false): 
     excludedApps: settings.excludedApps,
     skipSensitive: settings.skipSensitive,
     copyOnSelect: settings.copyOnSelect,
+    pasteAutomatically: settings.pasteAutomatically,
+    ignoredTypes: settings.ignoredTypes,
     confirm,
   };
 }

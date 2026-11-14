@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -16,7 +17,7 @@ use super::monitor::{self, MonitorEvent};
 use super::store::{self, Store, UpsertRequest, UpsertResult};
 use super::util::{
     app_excluded, decode_png, encode_png, files_size_bytes, hash_files, hash_image, image_rgba_len,
-    now_millis, thumbnail_png,
+    now_millis, thumbnail_png, type_ignored,
 };
 use crate::shortcut;
 
@@ -36,6 +37,7 @@ struct Inner {
     storage_path: String,
     last_error: Mutex<Option<&'static str>>,
     registered_shortcut: Mutex<Option<String>>,
+    ignore_next: AtomicBool,
 }
 
 pub struct ClipboardState {
@@ -81,6 +83,7 @@ pub fn initialize(app: AppHandle) -> Result<ClipboardState, ClipboardError> {
         storage_path,
         last_error: Mutex::new(None),
         registered_shortcut: Mutex::new(None),
+        ignore_next: AtomicBool::new(false),
     });
     if let Err(error) = inner.sync_shortcut() {
         eprintln!("clipboard shortcut: {}", error.code);
@@ -136,19 +139,21 @@ impl ClipboardState {
         fs::read(&path).map_err(|_| ClipboardError::new("not_found"))
     }
 
-    pub fn copy(&self, id: i64) -> Result<CopyOutcome, ClipboardError> {
+    pub fn copy(&self, id: i64, plain: bool) -> Result<CopyOutcome, ClipboardError> {
         let detail = lock(&self.inner.store).get(id)?;
         match detail.kind.as_str() {
             "text" => {
-                let text = lock(&self.inner.store).rich_text(id)?;
+                let mut text = lock(&self.inner.store).rich_text(id)?;
+                if plain {
+                    text.html = None;
+                    text.rtf = None;
+                }
                 self.arm(&crate::clipboard::util::hash_rich(&text));
                 if let Err(error) = self.inner.platform.write_text(&text) {
                     self.disarm();
                     return Err(error);
                 }
-                Ok(CopyOutcome {
-                    missing: Vec::new(),
-                })
+                Ok(CopyOutcome::copied(Vec::new()))
             }
             "files" => {
                 let mut writable = Vec::new();
@@ -180,7 +185,7 @@ impl ClipboardState {
                     self.disarm();
                     return Err(error);
                 }
-                Ok(CopyOutcome { missing })
+                Ok(CopyOutcome::copied(missing))
             }
             "image" => {
                 let hash = lock(&self.inner.store).image_hash(id)?;
@@ -195,9 +200,7 @@ impl ClipboardState {
                     self.disarm();
                     return Err(error);
                 }
-                Ok(CopyOutcome {
-                    missing: Vec::new(),
-                })
+                Ok(CopyOutcome::copied(Vec::new()))
             }
             _ => Err(ClipboardError::new("not_found")),
         }
@@ -312,6 +315,15 @@ impl ClipboardState {
         Ok(proposed)
     }
 
+    pub fn arm_ignore_next(&self) {
+        self.inner.ignore_next.store(true, Ordering::SeqCst);
+        self.inner.emit_status();
+    }
+
+    pub fn ignore_next_armed(&self) -> bool {
+        self.inner.ignore_next.load(Ordering::SeqCst)
+    }
+
     fn arm(&self, hash: &str) {
         *lock(&self.inner.self_write) = Some(SelfWrite {
             hash: hash.to_string(),
@@ -330,7 +342,16 @@ impl Inner {
         if !manual && (!settings.enabled || settings.paused) {
             return Ok(None);
         }
+        if !manual && type_ignored(&capture.types, &settings.ignored_types) {
+            self.consume_ignore_next();
+            lock(&self.counters).ignored += 1;
+            self.emit_status();
+            return Ok(None);
+        }
         if capture.sensitive {
+            if !manual {
+                self.consume_ignore_next();
+            }
             if settings.skip_sensitive {
                 lock(&self.counters).sensitive += 1;
                 self.emit_status();
@@ -350,6 +371,9 @@ impl Inner {
             return Ok(None);
         }
         if app_excluded(capture.source_app.as_deref(), &settings.excluded_apps) {
+            if !manual {
+                self.consume_ignore_next();
+            }
             lock(&self.counters).excluded += 1;
             self.emit_status();
             return Ok(None);
@@ -369,6 +393,9 @@ impl Inner {
         }
         if let Some(bytes) = payload_limit_bytes(&payload) {
             if bytes > limit_for(&settings, payload.kind()) {
+                if !manual {
+                    self.consume_ignore_next();
+                }
                 lock(&self.counters).too_large += 1;
                 self.emit_status();
                 log_clipboard("too_large", payload.kind().as_str(), bytes);
@@ -379,10 +406,13 @@ impl Inner {
             }
         }
         let prepared = prepare_payload(&payload)?;
+        let self_write = self.take_self_write(&prepared.hash);
+        if !manual && !self_write && self.consume_ignore_next() {
+            return Ok(None);
+        }
         if let (Some(png), Some(thumb)) = (&prepared.png, &prepared.thumb) {
             store::write_image_files(&self.images_dir, &prepared.hash, png, thumb)?;
         }
-        let self_write = self.take_self_write(&prepared.hash);
         let result = lock(&self.store).upsert(UpsertRequest {
             kind: prepared.kind,
             hash: &prepared.hash,
@@ -468,9 +498,20 @@ impl Inner {
             skipped_sensitive: counters.sensitive,
             skipped_too_large: counters.too_large,
             skipped_excluded: counters.excluded,
+            skipped_ignored: counters.ignored,
+            ignore_next: self.ignore_next.load(Ordering::SeqCst),
             reason: caps.reason,
             storage_path: self.storage_path.clone(),
             access,
+        }
+    }
+
+    fn consume_ignore_next(&self) -> bool {
+        if self.ignore_next.swap(false, Ordering::SeqCst) {
+            self.emit_status();
+            true
+        } else {
+            false
         }
     }
 

@@ -21,18 +21,39 @@ export default function ClipboardPanel() {
   const history = useClipboardHistory();
   const [index, setIndex] = useState(0);
   const [message, setMessage] = useState("");
+  const [messageTone, setMessageTone] = useState<"success" | "warning">("success");
   const [clearOpen, setClearOpen] = useState(false);
+  const [clearAll, setClearAll] = useState(false);
   const copyTimer = useRef(0);
   const copySeq = useRef(0);
   const pendingClose = useRef<number | null>(null);
   const copyOnSelect = history.settings?.copyOnSelect !== false;
+  const pasteAutomatically = history.settings?.pasteAutomatically !== false;
   const macos = isApplePlatform();
   const pinShortcut = history.settings?.pinShortcut || DEFAULT_PIN_SHORTCUT;
   const deleteShortcut = history.settings?.deleteShortcut || DEFAULT_DELETE_SHORTCUT;
   const shortcutHelp = {
     pin: formatShortcut(pinShortcut, macos),
     remove: formatShortcut(deleteShortcut, macos),
+    option: macos ? "⌥" : "Alt",
+    command: macos ? "⌘" : "Ctrl",
   };
+  const hintKeys = {
+    paste: formatShortcut("Alt+Enter", macos),
+    plain: formatShortcut("Alt+Shift+Enter", macos),
+    option: shortcutHelp.option,
+    numberCopy: macos ? "⌘1–9" : "Ctrl+1–9",
+    numberPaste: macos ? "⌥1–9" : "Alt+1–9",
+  };
+  const panelHelpKey = pasteAutomatically ? "zdx.text.clipboard.panelHelpPaste" : copyOnSelect ? "zdx.text.clipboard.panelHelpSelect" : "zdx.text.clipboard.panelHelp";
+  const panelHelp = t(panelHelpKey, { ...shortcutHelp, plain: hintKeys.plain });
+  const numberShortcuts = Array.from({ length: 9 }, (_, index) => {
+    const number = String(index + 1);
+    return {
+      copy: formatShortcut(`CommandOrControl+${number}`, macos),
+      paste: formatShortcut(`Alt+${number}`, macos),
+    };
+  });
 
   useEffect(() => {
     void history.loadSettings();
@@ -49,6 +70,19 @@ export default function ClipboardPanel() {
       });
     };
   }, []);
+
+  useEffect(() => {
+    const onShown = () => {
+      history.clearQuery();
+      setIndex(0);
+      setMessage("");
+      setMessageTone("success");
+      window.requestAnimationFrame(focusSearch);
+      window.setTimeout(focusSearch, 30);
+    };
+    window.addEventListener("clipboard-panel-shown", onShown);
+    return () => window.removeEventListener("clipboard-panel-shown", onShown);
+  }, [history.clearQuery]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(focusSearch);
@@ -109,37 +143,52 @@ export default function ClipboardPanel() {
     document.getElementById(`clip-${active.id}`)?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
-  async function copyById(id: number, dismiss: boolean) {
+  async function useItem(id: number, mode: "copy" | "paste" | "plain", dismiss: boolean) {
     const seq = ++copySeq.current;
     try {
       history.suppressChanged();
-      const result = await history.copyItem(id);
+      const result = await history.copyItem(id, { plain: mode === "plain", paste: mode !== "copy" });
       if (seq !== copySeq.current) return;
       if (result.missing.length > 0) {
         pendingClose.current = null;
+        setMessageTone("warning");
         setMessage(t("zdx.text.clipboard.fileMissing", { count: result.missing.length }));
+        return;
+      }
+      if (result.pasteError) {
+        pendingClose.current = null;
+        setMessageTone("warning");
+        setMessage(t(result.pasteError === "permission_denied" ? "zdx.text.clipboard.pasteNeedsAccess" : "zdx.text.clipboard.pasteUnsupported"));
         return;
       }
       if (dismiss) dismissClipboardPanel();
     } catch (error) {
       if (seq !== copySeq.current) return;
       pendingClose.current = null;
+      setMessageTone("warning");
       if (error instanceof ClipboardRequestError) setMessage(clipboardErrorText(t, error));
     }
   }
 
   function queueCopy(id: number) {
     window.clearTimeout(copyTimer.current);
-    copyTimer.current = window.setTimeout(() => void copyById(id, false), 120);
+    copyTimer.current = window.setTimeout(() => void useItem(id, "copy", false), 120);
   }
 
-  function choose(id: number) {
+  function choose(id: number, pointer?: { altKey: boolean; shiftKey: boolean }) {
     const next = history.items.findIndex((item) => item.id === id);
     if (next >= 0) setIndex(next);
-    if (!copyOnSelect || pendingClose.current === id) return;
+    const mode = selectedMode(pointer);
+    if (mode === "copy" && (!copyOnSelect || pendingClose.current === id)) return;
     pendingClose.current = id;
     window.clearTimeout(copyTimer.current);
-    void copyById(id, true);
+    void useItem(id, mode, true);
+  }
+
+  function selectedMode(pointer?: { altKey: boolean; shiftKey: boolean }) {
+    if (pointer?.altKey && pointer.shiftKey) return "plain" as const;
+    if (pointer?.altKey) return pasteAutomatically ? "copy" as const : "paste" as const;
+    return pasteAutomatically ? "paste" as const : "copy" as const;
   }
 
   function move(delta: number) {
@@ -150,8 +199,16 @@ export default function ClipboardPanel() {
     if (copyOnSelect) queueCopy(item.id);
   }
 
+  function askClear(all: boolean) {
+    window.clearTimeout(copyTimer.current);
+    setClearAll(all);
+    setClearOpen(true);
+  }
+
   function onKeyDown(event: React.KeyboardEvent) {
-    if (clearOpen) return;
+    if (clearOpen || event.nativeEvent.isComposing) return;
+    const digit = /^Digit([1-9])$/.exec(event.code) ?? /^Numpad([1-9])$/.exec(event.code);
+    const position = digit ? Number(digit[1]) - 1 : null;
     if (event.key === "Escape") {
       event.preventDefault();
       dismissClipboardPanel();
@@ -161,10 +218,31 @@ export default function ClipboardPanel() {
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       move(-1);
+    } else if (event.key === "Backspace" && event.altKey && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      askClear(event.shiftKey);
+    } else if (position !== null && (event.metaKey || event.ctrlKey) && !event.altKey) {
+      const item = history.items[position];
+      if (!item) return;
+      event.preventDefault();
+      window.clearTimeout(copyTimer.current);
+      void useItem(item.id, "copy", true);
+    } else if (position !== null && event.altKey && !event.metaKey && !event.ctrlKey) {
+      const item = history.items[position];
+      if (!item) return;
+      event.preventDefault();
+      window.clearTimeout(copyTimer.current);
+      void useItem(item.id, event.shiftKey ? "plain" : "paste", true);
     } else if (event.key === "Enter") {
       event.preventDefault();
       window.clearTimeout(copyTimer.current);
-      if (active) void copyById(active.id, true);
+      if (active) void useItem(active.id, selectedMode({ altKey: event.altKey, shiftKey: event.shiftKey }), true);
+    } else if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.repeat && history.query.length === 0 && event.key.length === 1) {
+      const item = history.items.find((entry) => entry.pinKey === event.key.toLowerCase());
+      if (!item) return;
+      event.preventDefault();
+      window.clearTimeout(copyTimer.current);
+      void useItem(item.id, pasteAutomatically ? "paste" : "copy", true);
     } else if (eventMatchesShortcut(event, pinShortcut)) {
       event.preventDefault();
       if (active) void history.pinItem(active.id, !active.pinned);
@@ -179,7 +257,7 @@ export default function ClipboardPanel() {
     <Flex
       vertical
       className="h-screen overflow-hidden"
-      onKeyDown={onKeyDown}
+      onKeyDownCapture={onKeyDown}
       style={{
         background: token.colorBgElevated,
         color: token.colorText,
@@ -190,30 +268,35 @@ export default function ClipboardPanel() {
       <Flex justify="space-between" align="center" data-tauri-drag-region style={{ padding: "10px 12px", borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
         <Flex align="center" gap={4} data-tauri-drag-region className="min-w-0">
           <Typography.Title level={5} data-tauri-drag-region style={{ margin: 0 }}>{t("zdx.label.clipboard.title")}</Typography.Title>
-          <Tooltip title={t(copyOnSelect ? "zdx.text.clipboard.panelHelpSelect" : "zdx.text.clipboard.panelHelp", shortcutHelp)}>
-            <Button type="text" size="small" aria-label={t(copyOnSelect ? "zdx.text.clipboard.panelHelpSelect" : "zdx.text.clipboard.panelHelp", shortcutHelp)} icon={<InfoCircleOutlined />} />
+          <Tooltip title={panelHelp}>
+            <Button type="text" size="small" aria-label={panelHelp} icon={<InfoCircleOutlined />} />
           </Tooltip>
         </Flex>
         <Flex align="center">
           <Popconfirm
             title={t("zdx.label.clipboard.clear")}
-            description={t("zdx.text.clipboard.clearConfirm")}
+            description={t(clearAll ? "zdx.text.clipboard.clearAllConfirm" : "zdx.text.clipboard.clearConfirm")}
             okText={t("zdx.label.clipboard.confirm")}
             cancelText={t("zdx.label.clipboard.cancel")}
             okButtonProps={{ danger: true }}
             placement="bottomRight"
+            open={clearOpen}
             onOpenChange={(open) => {
               if (open) window.clearTimeout(copyTimer.current);
               setClearOpen(open);
             }}
-            onConfirm={() => history.clearHistory().then(() => {
-              setMessage(t("zdx.text.clipboard.cleared"));
-            }).catch((error) => {
-              if (error instanceof ClipboardRequestError) setMessage(clipboardErrorText(t, error));
-              throw error;
-            })}
+            onConfirm={() => {
+              setClearOpen(false);
+              return history.clearHistory(!clearAll).then(() => {
+                setMessageTone("success");
+                setMessage(t(clearAll ? "zdx.text.clipboard.clearedAll" : "zdx.text.clipboard.cleared"));
+              }).catch((error) => {
+                if (error instanceof ClipboardRequestError) setMessage(clipboardErrorText(t, error));
+                throw error;
+              });
+            }}
           >
-            <Button type="text" danger aria-label={t("zdx.label.clipboard.clear")} icon={<ClearOutlined />} />
+            <Button type="text" danger aria-label={t("zdx.label.clipboard.clear")} icon={<ClearOutlined />} onMouseDown={(event) => setClearAll(event.altKey && event.shiftKey)} />
           </Popconfirm>
           <Button type="text" aria-label={t("zdx.label.clipboard.close")} icon={<CloseOutlined />} onClick={() => dismissClipboardPanel()} />
         </Flex>
@@ -238,14 +321,21 @@ export default function ClipboardPanel() {
             onActive={choose}
             onCopy={(id) => {
               window.clearTimeout(copyTimer.current);
-              void copyById(id, true);
+              void useItem(id, "copy", true);
             }}
             onPin={(id, pinned) => void history.pinItem(id, pinned)}
             onDelete={(id) => void history.deleteItem(id)}
+            numberShortcuts={numberShortcuts}
           />
         )}
       </div>
-      {message && <Alert type="success" showIcon message={message} style={{ margin: 16 }} />}
+      <Flex vertical gap={2} className="shrink-0" aria-label={t("zdx.label.clipboard.shortcutHints")} style={{ padding: "8px 12px 10px", borderTop: `1px solid ${token.colorBorderSecondary}` }}>
+        <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>{t(pasteAutomatically ? "zdx.text.clipboard.hintPasteAuto" : "zdx.text.clipboard.hintPaste", hintKeys)}</Typography.Text>
+        <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>{t("zdx.text.clipboard.hintPlain", hintKeys)}</Typography.Text>
+        <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>{t("zdx.text.clipboard.hintNumbers", hintKeys)}</Typography.Text>
+        {macos && <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>{t("zdx.text.clipboard.hintPasteAccess")}</Typography.Text>}
+      </Flex>
+      {message && <Alert type={messageTone} showIcon message={message} style={{ margin: "0 12px 12px" }} />}
     </Flex>
   );
 }

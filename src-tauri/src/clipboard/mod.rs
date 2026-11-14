@@ -3,6 +3,7 @@ mod error;
 mod io;
 mod model;
 mod monitor;
+pub(crate) mod paste;
 mod rich;
 mod service;
 mod store;

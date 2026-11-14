@@ -8,12 +8,26 @@ fn copy_on_select_enabled() -> bool {
     true
 }
 
+fn paste_automatically_enabled() -> bool {
+    true
+}
+
 fn default_pin_shortcut() -> String {
     "CommandOrControl+P".to_string()
 }
 
 fn default_delete_shortcut() -> String {
     "CommandOrControl+Backspace".to_string()
+}
+
+pub fn default_ignored_types() -> Vec<String> {
+    vec![
+        "com.agilebits.onepassword".into(),
+        "com.typeit4me.clipping".into(),
+        "de.petermaurer.TransientPasteboardType".into(),
+        "Pasteboard generator type".into(),
+        "net.antelle.keeweb".into(),
+    ]
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +104,7 @@ pub struct Capture {
     pub payload: Option<Payload>,
     pub sensitive: bool,
     pub source_app: Option<String>,
+    pub types: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -123,6 +138,7 @@ pub struct Summary {
     pub last_copied_at: i64,
     pub copy_count: i64,
     pub formatted: bool,
+    pub pin_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -166,10 +182,14 @@ pub struct Settings {
     pub skip_sensitive: bool,
     #[serde(default = "copy_on_select_enabled")]
     pub copy_on_select: bool,
+    #[serde(default = "paste_automatically_enabled")]
+    pub paste_automatically: bool,
     #[serde(default = "default_pin_shortcut")]
     pub pin_shortcut: String,
     #[serde(default = "default_delete_shortcut")]
     pub delete_shortcut: String,
+    #[serde(default = "default_ignored_types")]
+    pub ignored_types: Vec<String>,
 }
 
 impl Default for Settings {
@@ -188,8 +208,10 @@ impl Default for Settings {
             excluded_apps: Vec::new(),
             skip_sensitive: true,
             copy_on_select: true,
+            paste_automatically: true,
             pin_shortcut: default_pin_shortcut(),
             delete_shortcut: default_delete_shortcut(),
+            ignored_types: default_ignored_types(),
         }
     }
 }
@@ -210,10 +232,14 @@ pub struct SettingsUpdate {
     pub skip_sensitive: bool,
     #[serde(default = "copy_on_select_enabled")]
     pub copy_on_select: bool,
+    #[serde(default = "paste_automatically_enabled")]
+    pub paste_automatically: bool,
     #[serde(default = "default_pin_shortcut")]
     pub pin_shortcut: String,
     #[serde(default = "default_delete_shortcut")]
     pub delete_shortcut: String,
+    #[serde(default = "default_ignored_types")]
+    pub ignored_types: Vec<String>,
     #[serde(default)]
     pub confirm: bool,
 }
@@ -234,8 +260,10 @@ impl SettingsUpdate {
             excluded_apps: self.excluded_apps,
             skip_sensitive: self.skip_sensitive,
             copy_on_select: self.copy_on_select,
+            paste_automatically: self.paste_automatically,
             pin_shortcut: self.pin_shortcut,
             delete_shortcut: self.delete_shortcut,
+            ignored_types: self.ignored_types,
         };
         settings.validate()?;
         Ok(settings.normalized())
@@ -262,6 +290,11 @@ impl Settings {
                 .excluded_apps
                 .iter()
                 .any(|app| app.chars().count() > 256)
+            || self.ignored_types.len() > 100
+            || self
+                .ignored_types
+                .iter()
+                .any(|kind| kind.chars().count() > 200)
         {
             return Err(ClipboardError::new("invalid_input"));
         }
@@ -277,6 +310,14 @@ impl Settings {
             }
         }
         self.excluded_apps = apps;
+        let mut ignored = Vec::new();
+        for kind in self.ignored_types {
+            let kind = kind.trim().to_string();
+            if !kind.is_empty() && !ignored.iter().any(|existing: &String| existing == &kind) {
+                ignored.push(kind);
+            }
+        }
+        self.ignored_types = ignored;
         self.shortcut = self.shortcut.trim().to_string();
         self.pin_shortcut = self.pin_shortcut.trim().to_string();
         self.delete_shortcut = self.delete_shortcut.trim().to_string();
@@ -305,6 +346,8 @@ pub struct Status {
     pub skipped_sensitive: u64,
     pub skipped_too_large: u64,
     pub skipped_excluded: u64,
+    pub skipped_ignored: u64,
+    pub ignore_next: bool,
     pub reason: Option<String>,
     pub storage_path: String,
     pub access: Option<String>,
@@ -315,12 +358,25 @@ pub struct Counters {
     pub sensitive: u64,
     pub too_large: u64,
     pub excluded: u64,
+    pub ignored: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopyOutcome {
     pub missing: Vec<String>,
+    pub pasted: bool,
+    pub paste_error: Option<String>,
+}
+
+impl CopyOutcome {
+    pub fn copied(missing: Vec<String>) -> Self {
+        Self {
+            missing,
+            pasted: false,
+            paste_error: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -356,8 +412,18 @@ mod tests {
             .as_object_mut()
             .expect("settings object")
             .remove("copyOnSelect");
+        value
+            .as_object_mut()
+            .expect("settings object")
+            .remove("pasteAutomatically");
+        value
+            .as_object_mut()
+            .expect("settings object")
+            .remove("ignoredTypes");
         let settings: Settings = serde_json::from_value(value).expect("settings parse");
         assert!(settings.copy_on_select);
+        assert!(settings.paste_automatically);
+        assert_eq!(settings.ignored_types, default_ignored_types());
         assert_eq!(settings.pin_shortcut, "CommandOrControl+P");
         assert_eq!(settings.delete_shortcut, "CommandOrControl+Backspace");
     }

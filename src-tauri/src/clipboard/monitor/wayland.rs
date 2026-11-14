@@ -179,6 +179,7 @@ fn read_selected(
                 payload: None,
                 sensitive: true,
                 source_app: None,
+                types: mimes.to_vec(),
             });
         }
     }
@@ -187,6 +188,7 @@ fn read_selected(
             payload: None,
             sensitive: false,
             source_app: None,
+            types: mimes.to_vec(),
         });
     };
     let data = read(mime)?;
@@ -209,6 +211,7 @@ fn read_selected(
         payload,
         sensitive: false,
         source_app: None,
+        types: mimes.to_vec(),
     })
 }
 

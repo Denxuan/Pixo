@@ -66,10 +66,25 @@ pub fn clipboard_image(
 
 #[tauri::command]
 pub fn clipboard_copy(
+    app: tauri::AppHandle,
     state: State<'_, ClipboardState>,
     id: i64,
+    plain: Option<bool>,
+    paste: Option<bool>,
 ) -> Result<CopyOutcome, ClipboardError> {
-    state.copy(id)
+    let mut outcome = state.copy(id, plain.unwrap_or(false))?;
+    if paste.unwrap_or(false) && outcome.missing.is_empty() {
+        match super::paste::schedule(&app) {
+            Ok(()) => outcome.pasted = true,
+            Err(code) => outcome.paste_error = Some(code.to_string()),
+        }
+    }
+    Ok(outcome)
+}
+
+#[tauri::command]
+pub fn clipboard_ignore_next(state: State<'_, ClipboardState>) {
+    state.arm_ignore_next();
 }
 
 #[tauri::command]

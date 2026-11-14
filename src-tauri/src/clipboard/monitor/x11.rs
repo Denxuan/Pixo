@@ -483,6 +483,7 @@ impl Context {
                     payload: None,
                     sensitive: true,
                     source_app: self.source_app(owner),
+                    types: Vec::new(),
                 }),
             ),
             Step::Ready {
@@ -501,6 +502,7 @@ impl Context {
                     payload: None,
                     sensitive: false,
                     source_app: self.source_app(owner),
+                    types: Vec::new(),
                 }),
             );
             return;
@@ -780,6 +782,7 @@ impl Context {
                     payload: payload_from_target(&self.atoms, target, &value),
                     sensitive: false,
                     source_app: self.source_app(owner),
+                    types: Vec::new(),
                 }),
             );
             return;
@@ -839,6 +842,7 @@ impl Context {
                 payload,
                 sensitive: false,
                 source_app: self.source_app(owner),
+                types: Vec::new(),
             }),
         );
     }

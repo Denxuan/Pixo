@@ -236,6 +236,7 @@ fn read_open_clipboard() -> Result<Capture, ClipboardError> {
                 payload: None,
                 sensitive: true,
                 source_app,
+                types: Vec::new(),
             });
         }
         let allow_files = state().kinds.files();
@@ -248,6 +249,7 @@ fn read_open_clipboard() -> Result<Capture, ClipboardError> {
                     payload: Some(Payload::Files(files)),
                     sensitive: false,
                     source_app,
+                    types: Vec::new(),
                 });
             }
         }
@@ -257,6 +259,7 @@ fn read_open_clipboard() -> Result<Capture, ClipboardError> {
                     payload: Some(image),
                     sensitive: false,
                     source_app,
+                    types: Vec::new(),
                 });
             }
         }
@@ -271,6 +274,7 @@ fn read_open_clipboard() -> Result<Capture, ClipboardError> {
                     payload: Some(Payload::Text(text)),
                     sensitive: false,
                     source_app,
+                    types: Vec::new(),
                 });
             }
         }
@@ -278,6 +282,7 @@ fn read_open_clipboard() -> Result<Capture, ClipboardError> {
             payload: None,
             sensitive: false,
             source_app,
+            types: Vec::new(),
         })
     }
 }

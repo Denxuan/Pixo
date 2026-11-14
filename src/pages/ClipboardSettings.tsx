@@ -17,6 +17,7 @@ export default function ClipboardSettingsPage() {
   const [imageMb, setImageMb] = useState<number | null>(20);
   const [excluded, setExcluded] = useState("");
   const [excludedApps, setExcludedApps] = useState<string[]>([]);
+  const [ignored, setIgnored] = useState("");
   const [error, setError] = useState("");
   const [confirmCount, setConfirmCount] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
@@ -37,6 +38,7 @@ export default function ClipboardSettingsPage() {
         setDraft({
           ...current,
           copyOnSelect: current.copyOnSelect !== false,
+          pasteAutomatically: current.pasteAutomatically !== false,
           pinShortcut: current.pinShortcut || DEFAULT_PIN_SHORTCUT,
           deleteShortcut: current.deleteShortcut || DEFAULT_DELETE_SHORTCUT,
         });
@@ -44,6 +46,7 @@ export default function ClipboardSettingsPage() {
         setImageMb(Number(bytesToMegabytes(current.maxImageBytes)));
         setExcluded(current.excludedApps.join("\n"));
         setExcludedApps(current.excludedApps);
+        setIgnored((current.ignoredTypes ?? []).join("\n"));
       })
       .catch((caught) => {
         if (!alive) return;
@@ -75,6 +78,7 @@ export default function ClipboardSettingsPage() {
       maxTextBytes,
       maxImageBytes,
       excludedApps: status?.platform.includes("macos") ? excludedApps : excluded.split("\n"),
+      ignoredTypes: ignored.split("\n"),
     };
     setSaving(true);
     setSaved(false);
@@ -132,8 +136,14 @@ export default function ClipboardSettingsPage() {
           <Form.Item label={t("zdx.label.clipboard.recordImage")}><Switch checked={draft.recordImage} onChange={(checked) => setDraft({ ...draft, recordImage: checked })} /></Form.Item>
           <Form.Item label={t("zdx.label.clipboard.recordFiles")}><Switch checked={draft.recordFiles} onChange={(checked) => setDraft({ ...draft, recordFiles: checked })} /></Form.Item>
           <Form.Item label={t("zdx.label.clipboard.skipSensitive")}><Switch checked={draft.skipSensitive} onChange={(checked) => setDraft({ ...draft, skipSensitive: checked })} /></Form.Item>
+          <Form.Item label={t("zdx.label.clipboard.ignoredTypes")} extra={t("zdx.text.clipboard.ignoredTypes")}>
+            <Input.TextArea value={ignored} onChange={(event) => setIgnored(event.target.value)} placeholder={t("zdx.placeholder.clipboard.ignoredTypes")} rows={4} />
+          </Form.Item>
           <Form.Item label={t("zdx.label.clipboard.copyOnSelect")} extra={t("zdx.text.clipboard.copyOnSelect")}>
             <Switch checked={draft.copyOnSelect} onChange={(checked) => setDraft({ ...draft, copyOnSelect: checked })} />
+          </Form.Item>
+          <Form.Item label={t("zdx.label.clipboard.pasteAutomatically")} extra={t("zdx.text.clipboard.pasteAutomatically", { option: status?.platform.includes("macos") ? "Option" : "Alt" })}>
+            <Switch checked={draft.pasteAutomatically} onChange={(checked) => setDraft({ ...draft, pasteAutomatically: checked })} />
           </Form.Item>
           <Form.Item label={t("zdx.label.clipboard.maxItems")} extra={t("zdx.text.clipboard.maxItems")}>
             <InputNumber min={1} max={5000} style={{ width: "100%" }} value={draft.maxItems} onChange={(value) => setDraft({ ...draft, maxItems: typeof value === "number" ? value : draft.maxItems })} />

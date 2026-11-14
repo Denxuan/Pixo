@@ -55,6 +55,7 @@ pub fn run() {
             clipboard::commands::clipboard_source_icon,
             clipboard::commands::clipboard_installed_apps,
             clipboard::commands::clipboard_copy,
+            clipboard::commands::clipboard_ignore_next,
             clipboard::commands::clipboard_set_pinned,
             clipboard::commands::clipboard_delete,
             clipboard::commands::clipboard_clear,

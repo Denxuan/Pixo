@@ -24,6 +24,13 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
+    let ignore = MenuItem::with_id(
+        app,
+        "tray-ignore",
+        &labels.ignore_next,
+        enabled,
+        None::<&str>,
+    )?;
     let history = MenuItem::with_id(app, "tray-history", &labels.history, true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "tray-settings", &labels.settings, true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "tray-quit", &labels.quit, true, None::<&str>)?;
@@ -38,11 +45,14 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &show, &gap_show, &record, &gap_a, &history, &settings, &gap_b, &quit,
+            &show, &gap_show, &record, &ignore, &gap_a, &history, &settings, &gap_b, &quit,
         ],
     )?;
     #[cfg(not(target_os = "linux"))]
-    let menu = Menu::with_items(app, &[&record, &gap_a, &history, &settings, &gap_b, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&record, &ignore, &gap_a, &history, &settings, &gap_b, &quit],
+    )?;
     let icon = TrayIconBuilder::with_id("clipboard-status")
         .icon(glyph_image(glyph_for(enabled, paused)))
         .icon_as_template(cfg!(target_os = "macos"))
@@ -65,6 +75,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     app.manage(TrayHost {
         icon,
         record,
+        ignore,
         history,
         settings,
         quit,
@@ -117,6 +128,10 @@ pub struct TrayLabels {
     pause: String,
     resume: String,
     enable: String,
+    #[serde(default)]
+    ignore_next: String,
+    #[serde(default)]
+    ignore_next_armed: String,
     history: String,
     settings: String,
     quit: String,
@@ -134,6 +149,8 @@ impl Default for TrayLabels {
             pause: "暂停".into(),
             resume: "继续".into(),
             enable: "开启记录".into(),
+            ignore_next: "忽略下一次复制".into(),
+            ignore_next_armed: "将忽略下一次复制".into(),
             history: "打开全部历史".into(),
             settings: "设置".into(),
             quit: "退出 Pixo".into(),
@@ -148,6 +165,7 @@ impl Default for TrayLabels {
 struct TrayHost {
     icon: TrayIcon<Wry>,
     record: MenuItem<Wry>,
+    ignore: MenuItem<Wry>,
     history: MenuItem<Wry>,
     settings: MenuItem<Wry>,
     quit: MenuItem<Wry>,
@@ -192,6 +210,20 @@ fn on_primary(app: &AppHandle, rect: tauri::Rect) {
     let enabled = app
         .try_state::<ClipboardState>()
         .is_some_and(|state| state.status().enabled);
+    #[cfg(target_os = "macos")]
+    if enabled {
+        let (option, shift) = shortcut::click_modifiers();
+        if option && shift {
+            if let Some(clipboard) = app.try_state::<ClipboardState>() {
+                clipboard.arm_ignore_next();
+            }
+            return;
+        }
+        if option {
+            toggle_record(app);
+            return;
+        }
+    }
     if enabled {
         shortcut::show_from_status(app, rect);
     } else {
@@ -210,6 +242,11 @@ fn on_menu(app: &AppHandle, event: &MenuEvent) {
             on_primary(app, rect);
         }
         "tray-record" => toggle_record(app),
+        "tray-ignore" => {
+            if let Some(clipboard) = app.try_state::<ClipboardState>() {
+                clipboard.arm_ignore_next();
+            }
+        }
         "tray-history" => open_main(app, "/clipboard", false),
         "tray-settings" => open_main(app, "/settings/clipboard", false),
         "tray-quit" => app.exit(0),
@@ -262,6 +299,7 @@ fn refresh(app: &AppHandle) {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .clone();
+    let armed = clipboard.ignore_next_armed();
     let _ = host.icon.set_icon_with_as_template(
         Some(glyph_image(glyph_for(status.enabled, status.paused))),
         cfg!(target_os = "macos"),
@@ -272,6 +310,17 @@ fn refresh(app: &AppHandle) {
     let _ = host
         .record
         .set_text(record_label(&labels, status.enabled, status.paused));
+    let ignore_label = if armed && !labels.ignore_next_armed.is_empty() {
+        labels.ignore_next_armed.clone()
+    } else if !labels.ignore_next.is_empty() {
+        labels.ignore_next.clone()
+    } else if armed {
+        "将忽略下一次复制".to_string()
+    } else {
+        "忽略下一次复制".to_string()
+    };
+    let _ = host.ignore.set_text(ignore_label);
+    let _ = host.ignore.set_enabled(status.enabled);
     let _ = host.history.set_text(&labels.history);
     let _ = host.settings.set_text(&labels.settings);
     let _ = host.quit.set_text(&labels.quit);

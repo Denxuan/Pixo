@@ -111,8 +111,8 @@ export async function clipboardSourceIcon(source: string): Promise<{ name: strin
   return { name: value.name, iconPng: toBytes(value.iconPng ?? []) };
 }
 
-export function clipboardCopy(id: number): Promise<CopyResult> {
-  return call("clipboard_copy", { id });
+export function clipboardCopy(id: number, options?: { plain?: boolean; paste?: boolean }): Promise<CopyResult> {
+  return call("clipboard_copy", { id, plain: options?.plain ?? false, paste: options?.paste ?? false });
 }
 
 export function clipboardSetPinned(id: number, pinned: boolean): Promise<void> {

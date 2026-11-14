@@ -26,6 +26,7 @@ export default function ClipboardPage() {
   const history = useClipboardHistory();
   const [activeId, setActiveId] = useState<number | null>(null);
   const [notice, setNotice] = useState("");
+  const [clearAll, setClearAll] = useState(false);
   const [enableOpen, setEnableOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
   const desktop = isDesktop();
@@ -83,6 +84,7 @@ export default function ClipboardPage() {
     status.skippedSensitive > 0 ? t("zdx.text.clipboard.skippedSensitive", { count: status.skippedSensitive }) : "",
     status.skippedTooLarge > 0 ? t("zdx.text.clipboard.skippedTooLarge", { count: status.skippedTooLarge }) : "",
     status.skippedExcluded > 0 ? t("zdx.text.clipboard.skippedExcluded", { count: status.skippedExcluded }) : "",
+    status.skippedIgnored > 0 ? t("zdx.text.clipboard.skippedIgnored", { count: status.skippedIgnored }) : "",
   ].filter((line) => line.length > 0) : [];
   const emptyText = status?.enabled ? (history.query ? t("zdx.text.clipboard.noResults") : t("zdx.text.clipboard.empty")) : t("zdx.text.clipboard.disabled");
 
@@ -102,14 +104,14 @@ export default function ClipboardPage() {
             <Button icon={<SettingOutlined />} onClick={() => navigate("/settings/clipboard")}>{t("zdx.label.clipboard.settings")}</Button>
             <Popconfirm
               title={t("zdx.label.clipboard.clear")}
-              description={t("zdx.text.clipboard.clearConfirm")}
+              description={t(clearAll ? "zdx.text.clipboard.clearAllConfirm" : "zdx.text.clipboard.clearConfirm")}
               okText={t("zdx.label.clipboard.confirm")}
               cancelText={t("zdx.label.clipboard.cancel")}
               okButtonProps={{ danger: true }}
               placement="bottomRight"
-              onConfirm={() => history.clearHistory().then(() => setNotice(t("zdx.text.clipboard.cleared")))}
+              onConfirm={() => history.clearHistory(!clearAll).then(() => setNotice(t(clearAll ? "zdx.text.clipboard.clearedAll" : "zdx.text.clipboard.cleared")))}
             >
-              <Button danger>{t("zdx.label.clipboard.clear")}</Button>
+              <Button danger onMouseDown={(event) => setClearAll(event.altKey && event.shiftKey)}>{t("zdx.label.clipboard.clear")}</Button>
             </Popconfirm>
           </Space>
         )}

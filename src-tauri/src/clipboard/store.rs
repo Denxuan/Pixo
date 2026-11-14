@@ -6,7 +6,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::error::{ClipboardError, log_clipboard};
 use super::model::{ClipKind, Detail, ListPage, Settings, Summary};
-use super::util::kind_preview;
+use super::util::{kind_preview, next_pin_key};
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS clip_items (
@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS clip_items (
   size_bytes INTEGER NOT NULL,
   source_app TEXT,
   pinned INTEGER NOT NULL DEFAULT 0,
+  pin_key TEXT,
   created_at INTEGER NOT NULL,
   last_copied_at INTEGER NOT NULL,
   copy_count INTEGER NOT NULL DEFAULT 1,
@@ -27,13 +28,14 @@ CREATE TABLE IF NOT EXISTS clip_items (
   rtf BLOB
 );
 CREATE INDEX IF NOT EXISTS idx_clip_items_order ON clip_items (pinned DESC, last_copied_at DESC, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_clip_items_pin_key ON clip_items (pin_key) WHERE pin_key IS NOT NULL;
 CREATE TABLE IF NOT EXISTS clip_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
 ";
 
-const SELECT_COLUMNS: &str = "id, kind, content_hash, text, files_json, image_width, image_height, size_bytes, source_app, pinned, created_at, last_copied_at, copy_count, CASE WHEN (html IS NOT NULL AND length(html) > 0) OR (rtf IS NOT NULL AND length(rtf) > 0) THEN 1 ELSE 0 END";
+const SELECT_COLUMNS: &str = "id, kind, content_hash, text, files_json, image_width, image_height, size_bytes, source_app, pinned, created_at, last_copied_at, copy_count, CASE WHEN (html IS NOT NULL AND length(html) > 0) OR (rtf IS NOT NULL AND length(rtf) > 0) THEN 1 ELSE 0 END, pin_key";
 
 #[derive(Debug, Clone)]
 struct ItemRow {
@@ -51,6 +53,7 @@ struct ItemRow {
     last_copied_at: i64,
     copy_count: i64,
     formatted: i64,
+    pin_key: Option<String>,
 }
 
 #[derive(Debug)]
@@ -98,15 +101,26 @@ impl Store {
             .map_err(storage)?;
         if version < 1 {
             conn.execute_batch(SCHEMA).map_err(storage)?;
-            conn.pragma_update(None, "user_version", 2)
+        } else {
+            if version < 2 {
+                conn.execute_batch(
+                    "ALTER TABLE clip_items ADD COLUMN html TEXT;
+                     ALTER TABLE clip_items ADD COLUMN rtf BLOB;",
+                )
                 .map_err(storage)?;
-        } else if version < 2 {
+            }
+            if version < 3 {
+                conn.execute_batch("ALTER TABLE clip_items ADD COLUMN pin_key TEXT;")
+                    .map_err(storage)?;
+            }
+        }
+        if version < 3 {
+            backfill_pin_keys(&conn).map_err(storage)?;
             conn.execute_batch(
-                "ALTER TABLE clip_items ADD COLUMN html TEXT;
-                 ALTER TABLE clip_items ADD COLUMN rtf BLOB;",
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_clip_items_pin_key ON clip_items (pin_key) WHERE pin_key IS NOT NULL;",
             )
             .map_err(storage)?;
-            conn.pragma_update(None, "user_version", 2)
+            conn.pragma_update(None, "user_version", 3)
                 .map_err(storage)?;
         }
         Ok(Self { conn })
@@ -325,17 +339,64 @@ impl Store {
     }
 
     pub fn set_pinned(&mut self, id: i64, pinned: bool) -> Result<(), ClipboardError> {
-        let changed = self
+        let exists: Option<i64> = self
             .conn
-            .execute(
-                "UPDATE clip_items SET pinned = ?1 WHERE id = ?2",
-                params![i64::from(pinned), id],
+            .query_row(
+                "SELECT id FROM clip_items WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
             )
+            .optional()
             .map_err(storage)?;
-        if changed == 0 {
+        if exists.is_none() {
             return Err(ClipboardError::new("not_found"));
         }
+        if !pinned {
+            self.conn
+                .execute(
+                    "UPDATE clip_items SET pinned = 0, pin_key = NULL WHERE id = ?1",
+                    params![id],
+                )
+                .map_err(storage)?;
+            return Ok(());
+        }
+        let current: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT pin_key FROM clip_items WHERE id = ?1 AND pinned = 1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage)?
+            .flatten();
+        if current.as_ref().is_some_and(|key| !key.is_empty()) {
+            return Ok(());
+        }
+        let used = self.pin_keys()?;
+        let key = next_pin_key(&used);
+        self.conn
+            .execute(
+                "UPDATE clip_items SET pinned = 1, pin_key = ?1 WHERE id = ?2",
+                params![key, id],
+            )
+            .map_err(storage)?;
         Ok(())
+    }
+
+    fn pin_keys(&self) -> Result<HashSet<String>, ClipboardError> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT pin_key FROM clip_items WHERE pin_key IS NOT NULL AND pin_key != ''")
+            .map_err(storage)?;
+        let keys = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(storage)?;
+        let mut used = HashSet::new();
+        for key in keys {
+            used.insert(key.map_err(storage)?);
+        }
+        Ok(used)
     }
 
     pub fn replace_files(
@@ -568,6 +629,7 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ItemRow> {
         last_copied_at: row.get(11)?,
         copy_count: row.get(12)?,
         formatted: row.get(13)?,
+        pin_key: row.get(14)?,
     })
 }
 
@@ -597,6 +659,7 @@ impl ItemRow {
             last_copied_at: self.last_copied_at,
             copy_count: self.copy_count,
             formatted: self.formatted != 0,
+            pin_key: self.pin_key.as_ref().filter(|key| !key.is_empty()).cloned(),
         }
     }
 
@@ -640,6 +703,34 @@ fn parse_cursor(cursor: &str) -> Option<(i64, i64, i64)> {
 
 fn like_owned(query: &str) -> String {
     super::util::like_pattern(query)
+}
+
+fn backfill_pin_keys(conn: &Connection) -> rusqlite::Result<()> {
+    let mut existing =
+        conn.prepare("SELECT pin_key FROM clip_items WHERE pin_key IS NOT NULL AND pin_key != ''")?;
+    let mut used = HashSet::new();
+    for key in existing.query_map([], |row| row.get::<_, String>(0))? {
+        used.insert(key?);
+    }
+    drop(existing);
+    let mut pending = conn.prepare(
+        "SELECT id FROM clip_items WHERE pinned = 1 AND IFNULL(pin_key, '') = '' ORDER BY id",
+    )?;
+    let ids = pending
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(pending);
+    for id in ids {
+        let Some(key) = next_pin_key(&used) else {
+            break;
+        };
+        conn.execute(
+            "UPDATE clip_items SET pin_key = ?1 WHERE id = ?2",
+            params![key, id],
+        )?;
+        used.insert(key);
+    }
+    Ok(())
 }
 
 fn storage(error: impl std::fmt::Display) -> ClipboardError {
@@ -832,6 +923,48 @@ mod tests {
         assert!(previews.contains(&"old"));
         assert!(previews.contains(&"new"));
         assert!(!previews.contains(&"mid"));
+        let pinned = page
+            .items
+            .iter()
+            .find(|item| item.preview == "old")
+            .unwrap();
+        assert_eq!(pinned.pin_key.as_deref(), Some("a"));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn pinned_items_keep_distinct_shortcuts() {
+        let (mut store, directory) = test_store();
+        store.upsert(text_request("one", "one", 1)).unwrap();
+        store.upsert(text_request("two", "two", 2)).unwrap();
+        let page = store.list(None, None, false, None, 10).unwrap();
+        let first = page
+            .items
+            .iter()
+            .find(|item| item.preview == "one")
+            .unwrap()
+            .id;
+        let second = page
+            .items
+            .iter()
+            .find(|item| item.preview == "two")
+            .unwrap()
+            .id;
+        store.set_pinned(first, true).unwrap();
+        store.set_pinned(second, true).unwrap();
+        store.set_pinned(first, true).unwrap();
+        let page = store.list(None, None, false, None, 10).unwrap();
+        let keys: Vec<_> = page
+            .items
+            .iter()
+            .filter_map(|item| item.pin_key.clone())
+            .collect();
+        assert_eq!(keys.len(), 2);
+        assert_ne!(keys[0], keys[1]);
+        store.set_pinned(first, false).unwrap();
+        let page = store.list(None, None, false, None, 10).unwrap();
+        let released = page.items.iter().find(|item| item.id == first).unwrap();
+        assert!(released.pin_key.is_none());
         let _ = std::fs::remove_dir_all(directory);
     }
 
@@ -955,7 +1088,7 @@ mod tests {
             .unwrap()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         let store = Store::open(&database).unwrap();
         assert_eq!(
             store.list(None, None, false, None, 10).unwrap().items[0].preview,

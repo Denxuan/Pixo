@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
@@ -171,6 +172,21 @@ pub fn windows_history_excluded(exclude_format_present: bool, can_include: Optio
 
 pub fn app_excluded(source: Option<&str>, excluded: &[String]) -> bool {
     source.is_some_and(|app| excluded.iter().any(|entry| entry == app))
+}
+
+pub const PIN_KEYS: &str = "abcdefghijklmnopqrstuvwxyz123456789";
+
+pub fn next_pin_key(used: &HashSet<String>) -> Option<String> {
+    PIN_KEYS
+        .chars()
+        .map(|key| key.to_string())
+        .find(|key| !used.contains(key))
+}
+
+pub fn type_ignored(types: &[String], ignored: &[String]) -> bool {
+    types
+        .iter()
+        .any(|kind| ignored.iter().any(|entry| entry == kind))
 }
 
 pub fn kind_preview(kind: ClipKind, text: Option<&str>, files: &[String]) -> (String, Vec<String>) {
@@ -448,6 +464,23 @@ mod tests {
             Some("com.example.notes"),
             &["com.example.notes".into()]
         ));
+        assert!(type_ignored(
+            &[
+                "public.utf8-plain-text".into(),
+                "com.agilebits.onepassword".into()
+            ],
+            &["com.agilebits.onepassword".into()]
+        ));
+        assert!(!type_ignored(
+            &["public.utf8-plain-text".into()],
+            &["com.agilebits.onepassword".into()]
+        ));
+        let mut used = std::collections::HashSet::new();
+        let first = next_pin_key(&used).unwrap();
+        used.insert(first.clone());
+        let second = next_pin_key(&used).unwrap();
+        assert_eq!(first, "a");
+        assert_eq!(second, "b");
     }
 
     #[test]

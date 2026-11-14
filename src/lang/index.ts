@@ -12,6 +12,8 @@ function pushTrayLabels() {
       pause: i18n.t("zdx.label.clipboard.pause"),
       resume: i18n.t("zdx.label.clipboard.resume"),
       enable: i18n.t("zdx.label.clipboard.enable"),
+      ignoreNext: i18n.t("zdx.label.clipboard.ignoreNext"),
+      ignoreNextArmed: i18n.t("zdx.label.clipboard.ignoreNextArmed"),
       history: i18n.t("zdx.label.clipboard.openHistory"),
       settings: i18n.t("zdx.label.clipboard.settings"),
       quit: i18n.t("zdx.label.clipboard.quit"),

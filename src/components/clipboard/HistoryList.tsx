@@ -1,4 +1,4 @@
-import { clipboardImage, clipboardSourceIcon } from "@/api/clipboard";
+import { clipboardGet, clipboardImage, clipboardSourceIcon } from "@/api/clipboard";
 import type { ClipSummary } from "@/types/clipboard";
 import { formatBytes, formatRelativeTime } from "@/utils/time";
 
@@ -87,6 +87,46 @@ function ClipAvatar({ id }: { id: number }) {
   return <Avatar shape="square" size={40} src={url || undefined} icon={kindIcon("image")} aria-label={t("zdx.label.clipboard.image")} />;
 }
 
+function ClipTitle({ item }: { item: ClipSummary }) {
+  const { t } = useTranslation();
+  const [full, setFull] = useState("");
+  const [previewUrl, setPreviewUrl] = useState("");
+  const title = item.kind === "files" ? item.fileNames.join(", ") : item.preview || t("zdx.label.clipboard.image");
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
+
+  function load() {
+    if (item.kind === "image") {
+      if (previewUrl) return;
+      void clipboardImage(item.id, true).then((bytes) => {
+        const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+        setPreviewUrl(URL.createObjectURL(new Blob([buffer], { type: "image/png" })));
+      }).catch(() => undefined);
+      return;
+    }
+    if (full) return;
+    void clipboardGet(item.id).then((detail) => {
+      if (detail.text) setFull(detail.text.slice(0, 8000));
+      else if (detail.files.length > 0) setFull(detail.files.join("\n"));
+      else setFull(title);
+    }).catch(() => setFull(title));
+  }
+
+  const tooltip = item.kind === "image"
+    ? (previewUrl ? <img src={previewUrl} alt="" width={180} height={180} style={{ objectFit: "contain" }} /> : undefined)
+    : (full ? <span className="whitespace-pre-wrap break-words" style={{ display: "inline-block", maxWidth: 360 }}>{full}</span> : undefined);
+
+  return (
+    <Tooltip mouseEnterDelay={1} title={tooltip}>
+      <Typography.Text ellipsis style={{ flex: 1, minWidth: 0, margin: 0 }} onMouseEnter={load}>{title}</Typography.Text>
+    </Tooltip>
+  );
+}
+
 export default function HistoryList({
   items,
   activeId,
@@ -94,13 +134,15 @@ export default function HistoryList({
   onCopy,
   onPin,
   onDelete,
+  numberShortcuts,
 }: {
   items: ClipSummary[];
   activeId: number | null;
-  onActive: (id: number) => void;
+  onActive: (id: number, pointer?: { altKey: boolean; shiftKey: boolean }) => void;
   onCopy: (id: number) => void;
   onPin: (id: number, pinned: boolean) => void;
   onDelete: (id: number) => void;
+  numberShortcuts?: Array<{ copy: string; paste: string }>;
 }) {
   const { t, i18n } = useTranslation();
   const { token } = antdTheme.useToken();
@@ -113,7 +155,7 @@ export default function HistoryList({
       aria-label={t("zdx.label.clipboard.list")}
       renderItem={(item) => {
         const active = item.id === activeId;
-        const title = item.kind === "files" ? item.fileNames.join(", ") : item.preview;
+        const rowNumber = numberShortcuts?.[items.findIndex((entry) => entry.id === item.id)];
         const copiedAt = formatRelativeTime(item.lastCopiedAt, i18n.language);
         const size = formatBytes(item.sizeBytes, i18n.language);
         const copied = t("zdx.text.clipboard.copiedTimes", { count: item.copyCount });
@@ -122,7 +164,15 @@ export default function HistoryList({
             id={`clip-${item.id}`}
             aria-selected={active}
             tabIndex={0}
-            onClick={() => onActive(item.id)}
+            onMouseDown={(event) => {
+              if (!event.altKey || (event.target instanceof Element && event.target.closest("button"))) return;
+              event.preventDefault();
+              onActive(item.id, event);
+            }}
+            onClick={(event) => {
+              if (event.altKey || (event.target instanceof Element && event.target.closest("button"))) return;
+              onActive(item.id, event);
+            }}
             onFocus={(event) => {
               if (event.target instanceof Element && event.target.closest("button")) return;
               onActive(item.id);
@@ -144,7 +194,13 @@ export default function HistoryList({
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1">
-                  <Typography.Text ellipsis style={{ flex: 1, minWidth: 0, margin: 0 }}>{title}</Typography.Text>
+                  <ClipTitle item={item} />
+                  {item.pinKey ? <Typography.Text keyboard className="shrink-0" aria-label={t("zdx.label.clipboard.pinKey", { key: item.pinKey })}>{item.pinKey}</Typography.Text> : null}
+                  {rowNumber ? (
+                    <Tooltip title={t("zdx.text.clipboard.hintRow", rowNumber)}>
+                      <Typography.Text type="secondary" className="shrink-0" aria-label={t("zdx.text.clipboard.hintRow", rowNumber)} style={{ fontSize: token.fontSizeSM }}>{rowNumber.copy}</Typography.Text>
+                    </Tooltip>
+                  ) : null}
                   <div className="flex shrink-0 items-center">
                     <Button type="text" size="small" aria-label={item.pinned ? t("zdx.label.clipboard.unpin") : t("zdx.label.clipboard.pin")} aria-pressed={item.pinned} icon={item.pinned ? <PushpinFilled /> : <PushpinOutlined />} style={item.pinned ? { color: token.colorWarning } : undefined} onClick={(event) => { event.stopPropagation(); onPin(item.id, !item.pinned); }} />
                     <Button type="text" size="small" aria-label={t("zdx.label.clipboard.copy")} icon={<CopyOutlined />} onClick={(event) => { event.stopPropagation(); onCopy(item.id); }} />

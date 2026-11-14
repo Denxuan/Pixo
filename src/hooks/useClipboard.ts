@@ -35,6 +35,10 @@ export function useClipboardHistory() {
   const [error, setError] = useState<ClipboardRequestError | null>(null);
   const request = useRef(0);
   const loadRef = useRef<(cursor?: string) => Promise<void>>(async () => {});
+  const clearQuery = useCallback(() => {
+    setQuery("");
+    setDebouncedQuery("");
+  }, []);
   const suppressChangedUntil = useRef(0);
 
   useEffect(() => {
@@ -123,6 +127,7 @@ export function useClipboardHistory() {
     nextCursor,
     query,
     setQuery,
+    clearQuery,
     filter,
     setFilter,
     loading,
@@ -135,20 +140,20 @@ export function useClipboardHistory() {
       setStatus(next);
       return next;
     }),
-    copyItem: (id: number) => run(() => clipboardCopy(id)) as Promise<CopyResult>,
+    copyItem: (id: number, options?: { plain?: boolean; paste?: boolean }) => run(() => clipboardCopy(id, options)) as Promise<CopyResult>,
     suppressChanged: (ms = 1200) => {
       suppressChangedUntil.current = Date.now() + ms;
     },
     pinItem: (id: number, pinned: boolean) => run(async () => {
       await clipboardSetPinned(id, pinned);
-      setItems((current) => current.map((item) => item.id === id ? { ...item, pinned } : item));
+      setItems((current) => current.map((item) => item.id === id ? { ...item, pinned, pinKey: pinned ? item.pinKey : null } : item));
     }),
     deleteItem: (id: number) => run(async () => {
       await clipboardDelete([id]);
       setItems((current) => current.filter((item) => item.id !== id));
     }),
-    clearHistory: () => run(async () => {
-      await clipboardClear(true);
+    clearHistory: (keepPinned = true) => run(async () => {
+      await clipboardClear(keepPinned);
       await load();
     }),
     readNow: () => run(() => clipboardReadNow()),

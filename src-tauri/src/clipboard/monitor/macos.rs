@@ -172,6 +172,7 @@ fn read_pasteboard(
             payload: None,
             sensitive: true,
             source_app,
+            types: types.clone(),
         });
     }
     if files_enabled {
@@ -180,6 +181,7 @@ fn read_pasteboard(
                 payload: Some(image),
                 sensitive: false,
                 source_app,
+                types: types.clone(),
             });
         }
         let files = file_paths(&pasteboard);
@@ -188,6 +190,7 @@ fn read_pasteboard(
                 payload: Some(Payload::Files(files)),
                 sensitive: false,
                 source_app,
+                types: types.clone(),
             });
         }
     }
@@ -203,6 +206,7 @@ fn read_pasteboard(
         payload,
         sensitive: false,
         source_app,
+        types,
     })
 }
 

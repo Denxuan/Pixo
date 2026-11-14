@@ -152,6 +152,10 @@ pub fn clipboard_dismiss_panel(app: AppHandle) {
     let _ = app.clone().run_on_main_thread(move || dismiss(&app));
 }
 
+pub(crate) fn dismiss_panel(app: &AppHandle) {
+    dismiss(app);
+}
+
 fn dismiss(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     resign_keyboard();
@@ -220,9 +224,10 @@ fn build_panel(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 }
 
 fn reveal(app: &AppHandle, window: &WebviewWindow, placement: Placement) {
+    crate::clipboard::paste::remember_target();
     #[cfg(target_os = "macos")]
     if place_panel(app, window, &placement) {
-        focus_search(window);
+        focus_search(window, true);
         return;
     }
     #[cfg(not(target_os = "macos"))]
@@ -233,13 +238,16 @@ fn reveal(app: &AppHandle, window: &WebviewWindow, placement: Placement) {
     }
     let _ = window.show();
     let _ = window.set_focus();
-    focus_search(window);
+    focus_search(window, true);
 }
 
-fn focus_search(window: &WebviewWindow) {
-    let _ = window.eval(
-        "(() => { window.focus(); const field = document.getElementById('clipboard-panel-search'); const input = field instanceof HTMLInputElement ? field : field && field.querySelector('input'); if (!(input instanceof HTMLInputElement)) return; input.focus(); const end = input.value.length; input.setSelectionRange(end, end); })()",
-    );
+fn focus_search(window: &WebviewWindow, reset: bool) {
+    let script = if reset {
+        "(() => { window.dispatchEvent(new Event('clipboard-panel-shown')); window.focus(); const field = document.getElementById('clipboard-panel-search'); const input = field instanceof HTMLInputElement ? field : field && field.querySelector('input'); if (!(input instanceof HTMLInputElement)) return; input.focus(); })()"
+    } else {
+        "(() => { window.focus(); const field = document.getElementById('clipboard-panel-search'); const input = field instanceof HTMLInputElement ? field : field && field.querySelector('input'); if (!(input instanceof HTMLInputElement)) return; input.focus(); })()"
+    };
+    let _ = window.eval(script);
 }
 
 fn panel_is_showing(window: &WebviewWindow) -> bool {
@@ -342,11 +350,20 @@ fn take_keyboard(app: &AppHandle, window: &WebviewWindow, ns_window: &NSWindow) 
     keep_on_top(ns_window);
     ns_window.makeKeyWindow();
     focus_webview(ns_window);
-    focus_search(window);
+    focus_search(window, true);
     start_key_capture(app);
     let later = window.clone();
     let when = DispatchTime::try_from(Duration::from_millis(50)).unwrap_or(DispatchTime::NOW);
     let _ = DispatchQueue::main().after(when, move || refocus(&later));
+}
+
+#[cfg(target_os = "macos")]
+pub fn click_modifiers() -> (bool, bool) {
+    let Some(class) = AnyClass::get(c"NSEvent") else {
+        return (false, false);
+    };
+    let flags: usize = unsafe { msg_send![class, modifierFlags] };
+    (flags & (1 << 19) != 0, flags & (1 << 17) != 0)
 }
 
 #[cfg(target_os = "macos")]
@@ -375,7 +392,7 @@ fn refocus(window: &WebviewWindow) {
         ns_window.makeKeyWindow();
         focus_webview(&ns_window);
     }
-    focus_search(window);
+    focus_search(window, false);
 }
 
 #[cfg(target_os = "macos")]
