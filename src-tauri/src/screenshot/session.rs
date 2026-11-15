@@ -572,14 +572,6 @@ impl ScreenshotState {
         Ok(())
     }
 
-    pub fn has_session(&self) -> bool {
-        self.inner
-            .session
-            .lock()
-            .ok()
-            .is_some_and(|slot| slot.is_some())
-    }
-
     pub fn commit(
         &self,
         base_version: u64,
@@ -916,13 +908,13 @@ impl ScreenshotState {
             truncated,
             mode: mode.to_string(),
         };
+        windows::arm_labels(&self.inner.app, &overlays, &session.frames, id);
         let view = session.view();
         *self
             .inner
             .session
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = Some(session);
-        windows::arm_labels(&self.inner.app, &overlays);
         self.emit_session("live", None);
         publish_windows(Arc::clone(&self.inner), id, monitors);
         Ok(view)

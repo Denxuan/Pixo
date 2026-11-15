@@ -3,9 +3,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
-use windows::Win32::Foundation::{
-    CloseHandle, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, WPARAM,
-};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::DataExchange::{
     AddClipboardFormatListener, CloseClipboard, EmptyClipboard, GetClipboardData,
     GetClipboardOwner, IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW,
@@ -616,9 +614,7 @@ fn collect_uninstall(
     apps: &mut Vec<InstalledApp>,
     seen: &mut std::collections::HashSet<String>,
 ) {
-    use windows::Win32::System::Registry::{
-        KEY_READ, RegCloseKey, RegEnumKeyExW, RegOpenKeyExW,
-    };
+    use windows::Win32::System::Registry::{KEY_READ, RegCloseKey, RegEnumKeyExW, RegOpenKeyExW};
     use windows::core::{PCWSTR, PWSTR};
 
     let path: Vec<u16> = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\0"
@@ -745,7 +741,10 @@ fn expand_env(value: &str) -> String {
         ("%ProgramFiles%", "ProgramFiles"),
         ("%ProgramFiles(x86)%", "ProgramFiles(x86)"),
     ] {
-        if text.to_ascii_lowercase().contains(&token.to_ascii_lowercase()) {
+        if text
+            .to_ascii_lowercase()
+            .contains(&token.to_ascii_lowercase())
+        {
             if let Ok(replacement) = std::env::var(var) {
                 text = text.replace(token, &replacement);
             }
@@ -839,8 +838,8 @@ fn hicon_png(icon: windows::Win32::UI::WindowsAndMessaging::HICON) -> Option<Vec
 
 fn bitmap_png(bitmap: windows::Win32::Graphics::Gdi::HBITMAP) -> Option<Vec<u8>> {
     use windows::Win32::Graphics::Gdi::{
-        BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, GetDC, GetDIBits, GetObjectW, HGDIOBJ,
-        ReleaseDC,
+        BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, GetDC, GetDIBits, GetObjectW,
+        HGDIOBJ, ReleaseDC,
     };
 
     if bitmap.is_invalid() {
@@ -917,6 +916,9 @@ fn bitmap_png(bitmap: windows::Win32::Graphics::Gdi::HBITMAP) -> Option<Vec<u8>>
 }
 
 fn utf16_text(buffer: &[u16]) -> String {
-    let end = buffer.iter().position(|unit| *unit == 0).unwrap_or(buffer.len());
+    let end = buffer
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(buffer.len());
     String::from_utf16_lossy(&buffer[..end]).trim().to_string()
 }

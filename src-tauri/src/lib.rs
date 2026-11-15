@@ -205,11 +205,7 @@ fn startup_dark() -> bool {
     let Some(config) = config else {
         return false;
     };
-    for relative in [
-        "gtk-4.0/settings.ini",
-        "gtk-3.0/settings.ini",
-        "kdeglobals",
-    ] {
+    for relative in ["gtk-4.0/settings.ini", "gtk-3.0/settings.ini", "kdeglobals"] {
         let Ok(text) = std::fs::read_to_string(config.join(relative)) else {
             continue;
         };
@@ -230,8 +226,12 @@ fn config_prefers_dark(text: &str) -> bool {
     let mut settings = false;
     for raw in text.lines() {
         let line = raw.trim();
-        if let Some(name) = line.strip_prefix('[').and_then(|line| line.strip_suffix(']')) {
-            settings = name.eq_ignore_ascii_case("Settings") || name.eq_ignore_ascii_case("General");
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
+            settings =
+                name.eq_ignore_ascii_case("Settings") || name.eq_ignore_ascii_case("General");
             continue;
         }
         if !settings {
@@ -263,10 +263,18 @@ mod tests {
 
     #[test]
     fn gtk_and_kde_dark_settings_are_recognized() {
-        assert!(config_prefers_dark("[Settings]\ngtk-application-prefer-dark-theme=1\n"));
-        assert!(config_prefers_dark("[Settings]\ngtk-theme-name=Adwaita-dark\n"));
+        assert!(config_prefers_dark(
+            "[Settings]\ngtk-application-prefer-dark-theme=1\n"
+        ));
+        assert!(config_prefers_dark(
+            "[Settings]\ngtk-theme-name=Adwaita-dark\n"
+        ));
         assert!(config_prefers_dark("[General]\nColorScheme=BreezeDark\n"));
-        assert!(!config_prefers_dark("[Settings]\ngtk-application-prefer-dark-theme=0\n"));
-        assert!(!config_prefers_dark("dark theme mentioned outside a setting\n"));
+        assert!(!config_prefers_dark(
+            "[Settings]\ngtk-application-prefer-dark-theme=0\n"
+        ));
+        assert!(!config_prefers_dark(
+            "dark theme mentioned outside a setting\n"
+        ));
     }
 }

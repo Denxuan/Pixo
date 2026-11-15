@@ -264,7 +264,11 @@ fn desktop_roots() -> Vec<std::path::PathBuf> {
     roots
 }
 
-fn collect_desktops(dir: &std::path::Path, locale: &str, found: &mut Vec<(String, String, String)>) {
+fn collect_desktops(
+    dir: &std::path::Path,
+    locale: &str,
+    found: &mut Vec<(String, String, String)>,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };

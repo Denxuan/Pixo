@@ -84,8 +84,8 @@ export function screenshotCurrent() {
   return call<SessionView>("screenshot_current");
 }
 
-export function screenshotOverlayReady() {
-  return call<void>("screenshot_overlay_ready");
+export function screenshotOverlayReady(sessionId: number) {
+  return call<void>("screenshot_overlay_ready", { sessionId });
 }
 
 export async function screenshotFrame(index: number) {

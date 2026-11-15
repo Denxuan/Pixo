@@ -228,6 +228,8 @@ export default function ScreenshotOverlay() {
   const shown = previewSelection ?? (view?.document.monitorIndex === index ? view.document.selection : null);
 
   const loadGen = useRef(0);
+  const readySession = useRef<number | null>(null);
+  const acceptPaint = useRef(true);
   const copyingRef = useRef(false);
   const readingRef = useRef(false);
   const scrollingRef = useRef(false);
@@ -289,6 +291,7 @@ export default function ScreenshotOverlay() {
       try {
         const current = await screenshotCurrent();
         if (!alive || gen !== loadGen.current) return;
+        readySession.current = current.id;
         const bytes = await screenshotFrame(index);
         if (!alive || gen !== loadGen.current) return;
         const parsed = parseLoadedFrame(bytes);
@@ -313,6 +316,7 @@ export default function ScreenshotOverlay() {
         setCountdown(null);
         setNotice("");
         setError("");
+        acceptPaint.current = true;
         setImage(parsed);
         const cached = windowsRef.current;
         setView(cached && cached.id === current.id && current.windows.length === 0 ? { ...current, windows: cached.windows } : current);
@@ -328,6 +332,15 @@ export default function ScreenshotOverlay() {
     void listen<{ phase: string; code: string | null }>("screenshot://session", (event) => {
       if (pinnedRef.current) return;
       if (event.payload.phase === "live") {
+        // This window may still be the previous pin. Blank it before the new frame arrives.
+        acceptPaint.current = false;
+        const canvas = canvasRef.current;
+        const ctx = canvas?.getContext("2d");
+        if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (rootRef.current) rootRef.current.style.transform = "";
+        setPinCrop(null);
+        setPinned(false);
+        applyPinZoom(1, { x: 0, y: 0 });
         void load();
         return;
       }
@@ -338,6 +351,9 @@ export default function ScreenshotOverlay() {
       shotModeRef.current = "capture";
       setShotMode("capture");
       loadGen.current += 1;
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext("2d");
+      if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
       setImage(null);
       setView(null);
       setDraft(null);
@@ -395,7 +411,7 @@ export default function ScreenshotOverlay() {
 
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !image || !view || index == null) return;
+    if (!canvas || !image || !view || index == null || !acceptPaint.current) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const owns = view.document.monitorIndex === index;
@@ -414,7 +430,7 @@ export default function ScreenshotOverlay() {
     const reveal = () => {
       if (done) return;
       done = true;
-      void screenshotOverlayReady().catch(() => undefined);
+      void screenshotOverlayReady(sessionId).catch(() => undefined);
     };
     let inner = 0;
     const outer = requestAnimationFrame(() => {
@@ -431,7 +447,9 @@ export default function ScreenshotOverlay() {
 
   useEffect(() => {
     if (!error) return;
-    void screenshotOverlayReady().catch(() => undefined);
+    const session = readySession.current;
+    if (session == null) return;
+    void screenshotOverlayReady(session).catch(() => undefined);
   }, [error]);
 
   useLayoutEffect(() => {
@@ -1386,7 +1404,7 @@ export default function ScreenshotOverlay() {
       tabIndex={0}
       role="application"
       aria-label={t("zdx.label.screenshot.title")}
-      className="relative overflow-hidden bg-black text-white outline-none select-none"
+      className="relative overflow-hidden bg-transparent text-white outline-none select-none"
       style={{ width: fit < 1 ? monitorWidth : frameWidth, height: fit < 1 ? monitorHeight : frameHeight, transform: pinCrop ? `translate(${-pinCrop.x}px, ${-pinCrop.y}px)` : undefined, transformOrigin: "top left" }}
       onKeyDown={onKeyDown}
       onDoubleClick={(event) => {
@@ -1641,10 +1659,10 @@ export default function ScreenshotOverlay() {
           onMouseDown={(event) => event.preventDefault()}
           onPointerDown={(event) => event.stopPropagation()}
         >
-          <ToolButton label={t("zdx.label.screenshot.zoomIn")} disabled={pinScale > 5.99} onClick={() => zoomPinBy(1.25)}><ShotGlyph name="zoomIn" /></ToolButton>
-          <ToolButton label={t("zdx.label.screenshot.zoomOut")} disabled={pinScale <= 1.01} onClick={() => zoomPinBy(1 / 1.25)}><ShotGlyph name="zoomOut" /></ToolButton>
-          <ToolButton label={t("zdx.label.screenshot.pinCopy")} onClick={() => void copyPinned()}><ShotGlyph name="copy" /></ToolButton>
-          <ToolButton label={t("zdx.label.screenshot.pinClose")} onClick={() => void releasePin()}><ShotGlyph name="cancel" /></ToolButton>
+          <ToolButton label={t("zdx.label.screenshot.zoomIn")} disabled={pinScale > 5.99} onMouseDown={(event) => pinToolPress(event, () => zoomPinBy(1.25))}><ShotGlyph name="zoomIn" /></ToolButton>
+          <ToolButton label={t("zdx.label.screenshot.zoomOut")} disabled={pinScale <= 1.01} onMouseDown={(event) => pinToolPress(event, () => zoomPinBy(1 / 1.25))}><ShotGlyph name="zoomOut" /></ToolButton>
+          <ToolButton label={t("zdx.label.screenshot.pinCopy")} onMouseDown={(event) => pinToolPress(event, () => void copyPinned())}><ShotGlyph name="copy" /></ToolButton>
+          <ToolButton label={t("zdx.label.screenshot.pinClose")} onMouseDown={(event) => pinToolPress(event, () => void releasePin())}><ShotGlyph name="cancel" /></ToolButton>
         </div>
       )}
       </div>
@@ -1714,6 +1732,13 @@ function ChoiceButton({
       {label}
     </button>
   );
+}
+
+function pinToolPress(event: React.MouseEvent<HTMLButtonElement>, action: () => void) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.button !== 0 || event.currentTarget.disabled) return;
+  action();
 }
 
 function ToolButton({

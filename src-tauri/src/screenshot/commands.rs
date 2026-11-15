@@ -67,11 +67,10 @@ pub fn screenshot_current(
 pub fn screenshot_overlay_ready(
     window: WebviewWindow,
     state: State<'_, ScreenshotState>,
+    session_id: u64,
 ) -> Result<(), ScreenshotError> {
-    if !window.label().starts_with("screenshot-overlay-") || !state.has_session() {
-        return Ok(());
-    }
-    super::windows::reveal(&window);
+    let active = state.current().ok().map(|view| view.id);
+    super::windows::reveal_armed(&window, session_id, active);
     Ok(())
 }
 

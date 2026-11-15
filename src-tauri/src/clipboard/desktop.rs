@@ -16,7 +16,10 @@ pub fn parse_desktop(text: &str, locale: &str) -> Option<DesktopEntry> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if let Some(name) = line.strip_prefix('[').and_then(|line| line.strip_suffix(']')) {
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
             section = name.trim().to_string();
             continue;
         }
@@ -137,8 +140,16 @@ mod tests {
 
     #[test]
     fn skips_hidden_and_non_applications() {
-        assert!(parse_desktop("[Desktop Entry]\nType=Application\nNoDisplay=true\nName=Hidden\nExec=hidden\n", "en").is_none());
-        assert!(parse_desktop("[Desktop Entry]\nType=Link\nName=Site\nExec=site\n", "en").is_none());
+        assert!(
+            parse_desktop(
+                "[Desktop Entry]\nType=Application\nNoDisplay=true\nName=Hidden\nExec=hidden\n",
+                "en"
+            )
+            .is_none()
+        );
+        assert!(
+            parse_desktop("[Desktop Entry]\nType=Link\nName=Site\nExec=site\n", "en").is_none()
+        );
     }
 
     #[test]

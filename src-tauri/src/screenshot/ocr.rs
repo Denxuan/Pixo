@@ -184,10 +184,7 @@ fn fit_png(bytes: &[u8]) -> Result<Cow<'_, [u8]>, ScreenshotError> {
 
 #[cfg(not(target_os = "macos"))]
 fn unsupported_ocr() -> ScreenshotError {
-    ScreenshotError::with_params(
-        "unsupported",
-        serde_json::json!({ "reason": "ocr" }),
-    )
+    ScreenshotError::with_params("unsupported", serde_json::json!({ "reason": "ocr" }))
 }
 
 #[cfg(target_os = "windows")]
@@ -224,7 +221,9 @@ fn windows_engine() -> Result<windows::Media::Ocr::OcrEngine, ScreenshotError> {
 
 #[cfg(target_os = "windows")]
 fn windows_read_text(job: &Job, bytes: &[u8]) -> Result<String, ScreenshotError> {
-    use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapDecoder, BitmapPixelFormat, SoftwareBitmap};
+    use windows::Graphics::Imaging::{
+        BitmapAlphaMode, BitmapDecoder, BitmapPixelFormat, SoftwareBitmap,
+    };
     use windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream};
 
     if job.stopped() {
@@ -233,7 +232,11 @@ fn windows_read_text(job: &Job, bytes: &[u8]) -> Result<String, ScreenshotError>
     let stream = InMemoryRandomAccessStream::new().map_err(ocr_failed)?;
     let writer = DataWriter::CreateDataWriter(&stream).map_err(ocr_failed)?;
     writer.WriteBytes(bytes).map_err(ocr_failed)?;
-    writer.StoreAsync().map_err(ocr_failed)?.join().map_err(ocr_failed)?;
+    writer
+        .StoreAsync()
+        .map_err(ocr_failed)?
+        .join()
+        .map_err(ocr_failed)?;
     writer.DetachStream().map_err(ocr_failed)?;
     stream.Seek(0).map_err(ocr_failed)?;
     if job.stopped() {
@@ -248,8 +251,12 @@ fn windows_read_text(job: &Job, bytes: &[u8]) -> Result<String, ScreenshotError>
         .map_err(ocr_failed)?
         .join()
         .map_err(ocr_failed)?;
-    let bitmap = SoftwareBitmap::ConvertWithAlpha(&bitmap, BitmapPixelFormat::Bgra8, BitmapAlphaMode::Ignore)
-        .map_err(ocr_failed)?;
+    let bitmap = SoftwareBitmap::ConvertWithAlpha(
+        &bitmap,
+        BitmapPixelFormat::Bgra8,
+        BitmapAlphaMode::Ignore,
+    )
+    .map_err(ocr_failed)?;
     let width = f64::from(bitmap.PixelWidth().map_err(ocr_failed)?.max(1));
     let height = f64::from(bitmap.PixelHeight().map_err(ocr_failed)?.max(1));
     let engine = windows_engine()?;

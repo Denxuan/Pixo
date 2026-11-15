@@ -12,6 +12,9 @@ static PARKED_FRAMES: Mutex<Vec<(String, f64, f64, f64, f64)>> = Mutex::new(Vec:
 /// Desktop frame stashed while the overlay paints off-screen.
 #[cfg(target_os = "macos")]
 static PENDING_FRAMES: Mutex<Vec<(String, f64, f64, f64, f64)>> = Mutex::new(Vec::new());
+/// Where a capture overlay belongs on the desktop. The window itself stays off-screen until reveal.
+#[cfg(target_os = "macos")]
+static HOME_FRAMES: Mutex<Vec<(String, f64, f64, f64, f64)>> = Mutex::new(Vec::new());
 
 /// Far enough left that a full-size overlay is not on any display.
 #[cfg(target_os = "macos")]
@@ -50,6 +53,37 @@ fn forget_pin(label: &str) {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .retain(|item| item != label);
+}
+
+/// The capture session a window was armed for. A reused pin still has the
+/// previous picture painted, so an older ready event must not show it.
+static ARMED_OVERLAYS: Mutex<Vec<(String, u64)>> = Mutex::new(Vec::new());
+
+fn remember_armed(label: &str, session: u64) {
+    let mut armed = ARMED_OVERLAYS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if let Some(existing) = armed.iter_mut().find(|(name, _)| name == label) {
+        existing.1 = session;
+        return;
+    }
+    armed.push((label.to_string(), session));
+}
+
+fn armed_session(label: &str) -> Option<u64> {
+    ARMED_OVERLAYS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(name, _)| name == label)
+        .map(|(_, session)| *session)
+}
+
+fn disarm(label: &str) {
+    ARMED_OVERLAYS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .retain(|(name, _)| name != label);
 }
 
 fn logical_span(pixels: u32, scale: f64) -> f64 {
@@ -156,6 +190,15 @@ fn overlay_label(slot: usize) -> String {
     format!("screenshot-overlay-{}", slot + 1)
 }
 
+fn monitor_slot(label: &str) -> Option<usize> {
+    if let Some(rest) = label.strip_prefix("screenshot-overlay-m") {
+        let slot: usize = rest.split('-').next()?.parse().ok()?;
+        return (slot < 8).then_some(slot);
+    }
+    let slot: usize = label.strip_prefix("screenshot-overlay-")?.parse().ok()?;
+    (1..=8).contains(&slot).then_some(slot - 1)
+}
+
 fn create_overlay(
     app: &AppHandle,
     label: &str,
@@ -175,6 +218,12 @@ fn create_overlay(
         Some(index) => format!("index.html?view=shot&monitor={index}"),
         None => "index.html?view=shot".to_string(),
     };
+    // A new overlay's page is black until the frozen frame is drawn. Build it
+    // off the desktop so window creation cannot flash that page over a pin.
+    #[cfg(target_os = "macos")]
+    let placed_x = OFFSCREEN_X;
+    #[cfg(not(target_os = "macos"))]
+    let placed_x = left;
     let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
         .title("Pixo")
         .decorations(false)
@@ -185,7 +234,10 @@ fn create_overlay(
         .resizable(false)
         .visible(false)
         .focused(false)
-        .position(left, top)
+        // A pin is often not the active window. The click on its close button
+        // must land on the first press, not be spent activating the window.
+        .accept_first_mouse(true)
+        .position(placed_x, top)
         .inner_size(frame_width, frame_height)
         .background_color(tauri::window::Color(0, 0, 0, 255))
         .build()
@@ -200,23 +252,40 @@ fn create_overlay(
 
 fn position_overlay(window: &tauri::WebviewWindow, left: f64, top: f64, width: f64, height: f64) {
     forget_parked_frame(&window.label());
-    raise_overlay(window, left, top, width, height);
+    #[cfg(target_os = "macos")]
+    {
+        prepare_capture_window(window);
+        park_capture_offscreen(window, left, top, width, height);
+    }
     #[cfg(not(target_os = "macos"))]
     {
+        raise_overlay(window, left, top, width, height);
         use tauri::{LogicalPosition, LogicalSize};
         let _ = window.set_position(LogicalPosition::new(left, top));
         let _ = window.set_size(LogicalSize::new(width, height));
     }
 }
 
-pub fn arm_labels(app: &AppHandle, labels: &[String]) {
+pub fn arm_labels(app: &AppHandle, labels: &[String], frames: &[Vec<u8>], session: u64) {
+    #[cfg(not(target_os = "macos"))]
+    let _ = frames;
     for label in labels {
         if is_pinned(label) {
             continue;
         }
-        if let Some(window) = app.get_webview_window(label) {
-            arm(&window);
+        let Some(window) = app.get_webview_window(label) else {
+            continue;
+        };
+        // The page may still be showing the last pin. Remember which session
+        // this window belongs to, and put that session's picture in front.
+        remember_armed(label, session);
+        #[cfg(target_os = "macos")]
+        if let Some(slot) = monitor_slot(label) {
+            if let Some(frame) = frames.get(slot) {
+                install_shot_cover(&window, frame);
+            }
         }
+        arm(&window);
     }
 }
 
@@ -304,6 +373,33 @@ fn forget_pending_frame(label: &str) {
     {
         let _ = label;
     }
+}
+
+#[cfg(target_os = "macos")]
+fn remember_named_frame(
+    frames: &Mutex<Vec<(String, f64, f64, f64, f64)>>,
+    label: &str,
+    frame: (f64, f64, f64, f64),
+) {
+    let mut frames = frames.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(existing) = frames.iter_mut().find(|(name, _, _, _, _)| name == label) {
+        *existing = (label.to_string(), frame.0, frame.1, frame.2, frame.3);
+        return;
+    }
+    frames.push((label.to_string(), frame.0, frame.1, frame.2, frame.3));
+}
+
+#[cfg(target_os = "macos")]
+fn named_frame(
+    frames: &Mutex<Vec<(String, f64, f64, f64, f64)>>,
+    label: &str,
+) -> Option<(f64, f64, f64, f64)> {
+    frames
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(name, _, _, _, _)| name == label)
+        .map(|(_, x, y, width, height)| (*x, *y, *width, *height))
 }
 
 /// Move the opaque capture window off the desktop. orderOut alone can lose
@@ -978,6 +1074,20 @@ fn include_in_capture(window: &tauri::WebviewWindow) {
     }
 }
 
+/// Show the overlay only when the page has painted this capture. A spare
+/// window loads as soon as it is created and would otherwise reveal the
+/// picture that was just pinned.
+pub fn reveal_armed(window: &tauri::WebviewWindow, session_id: u64, active: Option<u64>) {
+    let label = window.label();
+    if !label.starts_with("screenshot-overlay-") || is_pinned(label) {
+        return;
+    }
+    if armed_session(label) != Some(session_id) || active != Some(session_id) {
+        return;
+    }
+    reveal(window);
+}
+
 pub fn reveal(window: &tauri::WebviewWindow) {
     // Scroll keeps the capture layer parked. A late ready event must not
     // bring that full-screen window back over the page.
@@ -992,9 +1102,28 @@ pub fn reveal(window: &tauri::WebviewWindow) {
     show_content(window);
     let _ = window.show();
     order_front(window);
-    if window.label() == "screenshot-overlay-1" {
+    if wants_capture_focus(&window.label()) {
         let _ = window.set_focus();
     }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(ns_window) = retained(window) {
+            ns_window.displayIfNeeded();
+        }
+        // The frozen frame stays in front until the webview has composited.
+        schedule_cover_drop(window);
+    }
+}
+
+fn wants_capture_focus(label: &str) -> bool {
+    if is_pinned(label) {
+        return false;
+    }
+    if label == "screenshot-overlay-1" {
+        return true;
+    }
+    // The monitor's own overlay is the pin, so the spare window takes the keyboard.
+    label.starts_with("screenshot-overlay-m") && is_pinned("screenshot-overlay-1")
 }
 
 fn arm(window: &tauri::WebviewWindow) {
@@ -1006,6 +1135,11 @@ fn arm(window: &tauri::WebviewWindow) {
     // Alpha 0 is not a substitute: on this opaque window it is a black sheet.
     #[cfg(target_os = "macos")]
     {
+        // conceal drops the pending rect. The window is already off-screen,
+        // so the saved home is the only place reveal can put it back.
+        if let Some(home) = named_frame(&HOME_FRAMES, &window.label()) {
+            remember_pending_frame(&window.label(), home);
+        }
         include_in_capture(window);
         show_content(window);
         hold_overlay_offscreen(window);
@@ -1016,7 +1150,9 @@ fn arm(window: &tauri::WebviewWindow) {
 }
 
 fn conceal(window: &tauri::WebviewWindow) {
-    forget_pending_frame(&window.label());
+    let label = window.label();
+    forget_pending_frame(&label);
+    disarm(&label);
     // Recording finishes on a background thread. AppKit throws if these run
     // there, and that exception aborts the process.
     #[cfg(target_os = "macos")]
@@ -1027,6 +1163,7 @@ fn conceal(window: &tauri::WebviewWindow) {
 #[cfg(target_os = "macos")]
 fn order_out_window(window: &tauri::WebviewWindow) {
     if let Some(ns_window) = retained(window) {
+        remove_shot_cover(window);
         ns_window.setAlphaValue(1.0);
         ns_window.orderOut(None);
     }
@@ -1095,7 +1232,7 @@ fn restore_pending_frame(window: &tauri::WebviewWindow) {
             NSPoint::new(x, y),
             NSSize::new(width.max(1.0), height.max(1.0)),
         ),
-        false,
+        true,
     );
     ns_window.setContentMaxSize(NSSize::new(16_000.0, 16_000.0));
 }
@@ -1145,6 +1282,8 @@ pub fn adopt_overlay(
                 let Some(window) = app_for_work.get_webview_window(&label) else {
                     return false;
                 };
+                remove_shot_cover(&window);
+                disarm(&label);
                 // Keep the webview filling the window. The page shifts the selection
                 // to the origin itself, so the window shows that rectangle.
                 raise_pin(&window, left, top, frame_width, frame_height);
@@ -1160,6 +1299,7 @@ pub fn adopt_overlay(
             return Err(ScreenshotError::new("capture_failed"));
         }
         remember_pin(&owned);
+        queue_spare_overlay(app, &owned);
         return Ok(true);
     }
     #[cfg(not(target_os = "macos"))]
@@ -1167,6 +1307,7 @@ pub fn adopt_overlay(
         let Some(window) = app.get_webview_window(label) else {
             return Err(ScreenshotError::new("not_found"));
         };
+        disarm(label);
         raise_pin(&window, left, top, frame_width, frame_height);
         use tauri::{LogicalPosition, LogicalSize};
         let _ = window.set_position(LogicalPosition::new(left, top));
@@ -1174,6 +1315,7 @@ pub fn adopt_overlay(
         let _ = window.show();
         order_front(&window);
         remember_pin(label);
+        queue_spare_overlay(app, label);
         let _ = (crop_x, crop_y, page_w, page_h);
         Ok(false)
     }
@@ -1373,12 +1515,19 @@ fn hold_overlays_above(app: &AppHandle) {
 
 #[cfg(target_os = "macos")]
 fn raise_overlay(window: &tauri::WebviewWindow, x: f64, y: f64, width: f64, height: f64) {
-    use objc2::MainThreadMarker;
+    prepare_capture_window(window);
+    let Some(ns_window) = retained(window) else {
+        return;
+    };
+    place_frame(&ns_window, x, y, width, height);
+}
+
+#[cfg(target_os = "macos")]
+fn prepare_capture_window(window: &tauri::WebviewWindow) {
     use objc2_app_kit::{NSScreenSaverWindowLevel, NSWindowCollectionBehavior};
     let Some(ns_window) = retained(window) else {
         return;
     };
-    let _ = MainThreadMarker::new();
     ns_window.setLevel(NSScreenSaverWindowLevel);
     ns_window.setCollectionBehavior(
         NSWindowCollectionBehavior::CanJoinAllSpaces
@@ -1387,7 +1536,309 @@ fn raise_overlay(window: &tauri::WebviewWindow, x: f64, y: f64, width: f64, heig
     );
     ns_window.setHidesOnDeactivate(false);
     ns_window.setMovable(false);
-    place_frame(&ns_window, x, y, width, height);
+}
+
+/// Remember the desktop rect and move the window off to the left at that size.
+/// A spare overlay's webview is still black here; putting it on the display flashes.
+#[cfg(target_os = "macos")]
+fn park_capture_offscreen(window: &tauri::WebviewWindow, x: f64, y: f64, width: f64, height: f64) {
+    let Some(ns_window) = retained(window) else {
+        return;
+    };
+    let Some((home_x, home_y, home_w, home_h)) = desktop_rect(x, y, width, height) else {
+        place_frame(&ns_window, x, y, width, height);
+        return;
+    };
+    remember_named_frame(
+        &HOME_FRAMES,
+        &window.label(),
+        (home_x, home_y, home_w, home_h),
+    );
+    apply_frame(&ns_window, OFFSCREEN_X, home_y, home_w, home_h, false);
+}
+
+#[cfg(target_os = "macos")]
+const SHOT_COVER_TAG: isize = 910_241;
+
+/// Which cover is current. A late drop must not peel off the next capture.
+#[cfg(target_os = "macos")]
+static COVER_TICKETS: Mutex<Vec<(String, u64)>> = Mutex::new(Vec::new());
+
+#[cfg(target_os = "macos")]
+static COVER_NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+#[cfg(target_os = "macos")]
+fn note_cover(label: &str) -> u64 {
+    let ticket = COVER_NEXT.fetch_add(1, Ordering::Relaxed);
+    let mut tickets = COVER_TICKETS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if let Some(existing) = tickets.iter_mut().find(|(name, _)| name == label) {
+        existing.1 = ticket;
+        return ticket;
+    }
+    tickets.push((label.to_string(), ticket));
+    ticket
+}
+
+#[cfg(target_os = "macos")]
+fn cover_ticket(label: &str) -> Option<u64> {
+    COVER_TICKETS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find(|(name, _)| name == label)
+        .map(|(_, ticket)| *ticket)
+}
+
+/// The current capture, drawn in front of the webview. Clicks pass through.
+/// A reused window still has the last pin in its webview until that view composites.
+#[cfg(target_os = "macos")]
+mod shot_cover {
+    use objc2::rc::Retained;
+    use objc2::{MainThreadOnly, define_class, msg_send};
+    use objc2_app_kit::{NSImage, NSImageView, NSView};
+    use objc2_foundation::{NSPoint, NSRect};
+
+    define_class!(
+        #[unsafe(super(NSImageView))]
+        #[thread_kind = MainThreadOnly]
+        #[name = "PixoShotCover"]
+        pub(super) struct ShotCover;
+
+        impl ShotCover {
+            #[unsafe(method_id(hitTest:))]
+            fn hit_test(&self, _point: NSPoint) -> Option<Retained<NSView>> {
+                None
+            }
+        }
+    );
+
+    impl ShotCover {
+        pub(super) fn new(
+            marker: objc2::MainThreadMarker,
+            frame: NSRect,
+            image: &NSImage,
+        ) -> Retained<Self> {
+            let this = Self::alloc(marker).set_ivars(());
+            let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+            let view: &NSImageView = &this;
+            view.setImage(Some(image));
+            view.setEditable(false);
+            // Fill the window. A gap would show the previous pin underneath.
+            let _: () = unsafe { msg_send![&*this, setImageScaling: 1usize] };
+            this
+        }
+    }
+}
+
+/// Paint this capture in front of the webview. The webview keeps the previous
+/// pin until it composites, and that layer is what used to flash on screen.
+#[cfg(target_os = "macos")]
+fn install_shot_cover(window: &tauri::WebviewWindow, encoded: &[u8]) {
+    use objc2::{AnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSBitmapImageRep, NSDeviceRGBColorSpace, NSImage, NSView};
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+    let Ok((width, height, _)) = super::frame::header(encoded) else {
+        return;
+    };
+    let pixels = &encoded[16..];
+    let Some(marker) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(ns_window) = retained(window) else {
+        return;
+    };
+    let Some(content) = ns_window.contentView() else {
+        return;
+    };
+    remove_shot_cover(window);
+    let row = (width as usize).saturating_mul(4);
+    if height == 0 || pixels.len() != row.saturating_mul(height as usize) {
+        return;
+    }
+    let Some(rep) = (unsafe {
+        NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+            NSBitmapImageRep::alloc(),
+            std::ptr::null_mut(),
+            width as isize,
+            height as isize,
+            8,
+            4,
+            true,
+            false,
+            NSDeviceRGBColorSpace,
+            row as isize,
+            32,
+        )
+    }) else {
+        return;
+    };
+    let dest = rep.bitmapData();
+    if dest.is_null() {
+        return;
+    }
+    let stride = rep.bytesPerRow().max(0) as usize;
+    unsafe {
+        if stride == row {
+            std::ptr::copy_nonoverlapping(pixels.as_ptr(), dest, pixels.len());
+        } else if stride > row {
+            for line in 0..height as usize {
+                std::ptr::copy_nonoverlapping(
+                    pixels.as_ptr().add(line * row),
+                    dest.add(line * stride),
+                    row,
+                );
+            }
+        } else {
+            return;
+        }
+    }
+    let mut bounds = content.bounds();
+    if bounds.size.width < 2.0 || bounds.size.height < 2.0 {
+        let frame = ns_window.frame();
+        bounds.size = frame.size;
+    }
+    let image = NSImage::initWithSize(
+        NSImage::alloc(),
+        NSSize::new(bounds.size.width.max(1.0), bounds.size.height.max(1.0)),
+    );
+    image.addRepresentation(&rep);
+    let frame = NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(bounds.size.width.max(1.0), bounds.size.height.max(1.0)),
+    );
+    let cover = shot_cover::ShotCover::new(marker, frame, &image);
+    let cover_view: &NSView = &cover;
+    cover_view.setAutoresizingMask(
+        objc2_app_kit::NSAutoresizingMaskOptions::ViewWidthSizable
+            | objc2_app_kit::NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    unsafe {
+        let _: () = objc2::msg_send!(&*cover, setTag: SHOT_COVER_TAG);
+    }
+    content.addSubview_positioned_relativeTo(
+        cover_view,
+        objc2_app_kit::NSWindowOrderingMode::Above,
+        None,
+    );
+    note_cover(&window.label());
+    clear_webview_page(&content);
+}
+
+/// Take the stand-in down once the window has been on screen long enough for
+/// the webview to replace it. Until then the stand-in is this capture, not the pin.
+#[cfg(target_os = "macos")]
+fn schedule_cover_drop(window: &tauri::WebviewWindow) {
+    let label = window.label().to_string();
+    let Some(ticket) = cover_ticket(&label) else {
+        return;
+    };
+    let app = window.app_handle().clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let queued = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if cover_ticket(&label) != Some(ticket) || is_pinned(&label) {
+                return;
+            }
+            let Some(window) = queued.get_webview_window(&label) else {
+                return;
+            };
+            remove_shot_cover(&window);
+        });
+    });
+}
+
+/// Let the page show the frozen frame sitting behind the webview. The page
+/// background is transparent, so an opaque under-page color would still be black.
+#[cfg(target_os = "macos")]
+fn clear_webview_page(view: &objc2_app_kit::NSView) {
+    use objc2_foundation::NSObjectProtocol;
+    let setter = objc2::sel!(setUnderPageBackgroundColor:);
+    if view.respondsToSelector(setter) {
+        let color: *mut objc2::runtime::AnyObject =
+            unsafe { objc2::msg_send![objc2::class!(NSColor), clearColor] };
+        if !color.is_null() {
+            unsafe {
+                let _: () = objc2::msg_send![view, setUnderPageBackgroundColor: color];
+            }
+        }
+        let opaque = objc2::sel!(setOpaque:);
+        if view.respondsToSelector(opaque) {
+            unsafe {
+                let _: () = objc2::msg_send![view, setOpaque: false];
+            }
+        }
+        return;
+    }
+    let subviews = view.subviews();
+    let mut index = 0;
+    while index < subviews.count() {
+        clear_webview_page(&subviews.objectAtIndex(index));
+        index += 1;
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn remove_shot_cover(window: &tauri::WebviewWindow) {
+    use objc2::ClassType;
+    use objc2_app_kit::NSImageView;
+    use objc2_foundation::NSObjectProtocol;
+    let Some(ns_window) = retained(window) else {
+        return;
+    };
+    let Some(content) = ns_window.contentView() else {
+        return;
+    };
+    let subviews = content.subviews();
+    let mut index = 0;
+    while index < subviews.count() {
+        let view = subviews.objectAtIndex(index);
+        index += 1;
+        if !view.isKindOfClass(NSImageView::class()) {
+            continue;
+        }
+        let tag: isize = unsafe { objc2::msg_send![&*view, tag] };
+        if tag == SHOT_COVER_TAG {
+            view.removeFromSuperview();
+            return;
+        }
+    }
+}
+
+fn queue_spare_overlay(app: &AppHandle, pinned_label: &str) {
+    let Some(slot) = monitor_slot(pinned_label) else {
+        return;
+    };
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let layout = super::capture::monitor_layout();
+        let Some(monitor) = layout.into_iter().nth(slot) else {
+            return;
+        };
+        let queued = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            warm_spare_window(&queued, slot, &monitor);
+        });
+    });
+}
+
+fn warm_spare_window(app: &AppHandle, slot: usize, monitor: &super::capture::MonitorLayout) {
+    let label = spare_overlay_label(app, slot);
+    if is_pinned(&label) || app.get_webview_window(&label).is_some() {
+        return;
+    }
+    let _ = create_overlay(
+        app,
+        &label,
+        monitor.origin_x,
+        monitor.origin_y,
+        monitor.width,
+        monitor.height,
+        monitor.scale_factor,
+        Some(slot),
+    );
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1413,43 +1864,69 @@ fn raise_pin(window: &tauri::WebviewWindow, _x: f64, _y: f64, _width: f64, _heig
 }
 
 #[cfg(target_os = "macos")]
-fn place_frame(window: &objc2_app_kit::NSWindow, x: f64, y: f64, width: f64, height: f64) {
+fn desktop_rect(x: f64, y: f64, width: f64, height: f64) -> Option<(f64, f64, f64, f64)> {
     use objc2::MainThreadMarker;
     use objc2_app_kit::NSScreen;
+    let main_height = primary_height()?;
+    let origin_y = appkit_origin_y(y, height, main_height);
+    let mut rect = (x, origin_y, width, height);
+    let Some(marker) = MainThreadMarker::new() else {
+        return Some(rect);
+    };
+    let screens = NSScreen::screens(marker);
+    let mut index = 0;
+    while index < screens.count() {
+        let screen = screens.objectAtIndex(index);
+        index += 1;
+        let frame = screen.frame();
+        let same_screen = (frame.origin.x - x).abs() < 1.0
+            && (frame.origin.y - origin_y).abs() < 1.0
+            && (frame.size.width - width).abs() < 1.0
+            && (frame.size.height - height).abs() < 1.0;
+        if same_screen {
+            rect = (
+                frame.origin.x,
+                frame.origin.y,
+                frame.size.width,
+                frame.size.height,
+            );
+            break;
+        }
+    }
+    Some(rect)
+}
+
+#[cfg(target_os = "macos")]
+fn apply_frame(
+    window: &objc2_app_kit::NSWindow,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    display: bool,
+) {
     use objc2_foundation::{NSPoint, NSRect, NSSize};
-    let Some(main_height) = primary_height() else {
+    // A reused window keeps the previous result size unless the content limit
+    // is lowered before setFrame.
+    window.setContentMinSize(NSSize::new(1.0, 1.0));
+    window.setContentMaxSize(NSSize::new(width.max(1.0), height.max(1.0)));
+    window.setFrame_display(
+        NSRect::new(
+            NSPoint::new(x, y),
+            NSSize::new(width.max(1.0), height.max(1.0)),
+        ),
+        display,
+    );
+    window.setContentMaxSize(NSSize::new(16_000.0, 16_000.0));
+}
+
+#[cfg(target_os = "macos")]
+fn place_frame(window: &objc2_app_kit::NSWindow, x: f64, y: f64, width: f64, height: f64) {
+    let Some((x, y, width, height)) = desktop_rect(x, y, width, height) else {
         return;
     };
-    let origin_y = appkit_origin_y(y, height, main_height);
-    let mut rect = NSRect::new(NSPoint::new(x, origin_y), NSSize::new(width, height));
-    if let Some(marker) = MainThreadMarker::new() {
-        let screens = NSScreen::screens(marker);
-        let mut index = 0;
-        while index < screens.count() {
-            let screen = screens.objectAtIndex(index);
-            index += 1;
-            let frame = screen.frame();
-            let same_screen = (frame.origin.x - x).abs() < 1.0
-                && (frame.origin.y - origin_y).abs() < 1.0
-                && (frame.size.width - width).abs() < 1.0
-                && (frame.size.height - height).abs() < 1.0;
-            if same_screen {
-                rect = frame;
-                break;
-            }
-        }
-        // A reused scroll window keeps the previous result size unless the
-        // content limit is lowered before setFrame.
-        window.setContentMinSize(NSSize::new(1.0, 1.0));
-        window.setContentMaxSize(NSSize::new(
-            rect.size.width.max(1.0),
-            rect.size.height.max(1.0),
-        ));
-        window.setFrame_display(rect, true);
-        window.setContentMaxSize(NSSize::new(16_000.0, 16_000.0));
-        return;
-    }
-    window.setFrame_display(rect, false);
+    let display = objc2::MainThreadMarker::new().is_some();
+    apply_frame(window, x, y, width, height, display);
 }
 
 #[cfg(target_os = "macos")]
@@ -1623,5 +2100,37 @@ mod tests {
             None
         );
         assert_eq!(super::capture_home_frame(0.0, 0.0, 1.0, 1.0), None);
+    }
+
+    #[test]
+    fn overlay_ready_follows_the_session_that_armed_the_window() {
+        let label = "screenshot-overlay-arm-test";
+        super::remember_armed(label, 7);
+        assert_eq!(super::armed_session(label), Some(7));
+        super::remember_armed(label, 8);
+        assert_eq!(super::armed_session(label), Some(8));
+        super::disarm(label);
+        assert_eq!(super::armed_session(label), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn shot_cover_class_matches_its_superclass() {
+        use objc2::ClassType;
+        // Registers the class and checks the hitTest override against NSImageView.
+        let _ = super::shot_cover::ShotCover::class();
+    }
+
+    #[test]
+    fn spare_overlay_keeps_its_monitor_slot() {
+        assert_eq!(super::monitor_slot("screenshot-overlay-1"), Some(0));
+        assert_eq!(super::monitor_slot("screenshot-overlay-2"), Some(1));
+        assert_eq!(super::monitor_slot("screenshot-overlay-m0-1"), Some(0));
+        assert_eq!(super::monitor_slot("screenshot-overlay-m2-4"), Some(2));
+        assert_eq!(
+            super::monitor_slot("screenshot-overlay-m0-overflow"),
+            Some(0)
+        );
+        assert_eq!(super::monitor_slot("screenshot-pin-1"), None);
     }
 }

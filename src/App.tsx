@@ -74,7 +74,7 @@ export default function App() {
 
   return (
     <ConfigProvider theme={{ algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm }}>
-      <div className={dark ? "dark h-full overflow-hidden" : "h-full overflow-hidden"} style={{ colorScheme: dark ? "dark" : "light", background: surface === "panel" || surface === "recorder" ? "transparent" : surface === "scroll" ? "#1c1c1c" : appWindow ? undefined : "#000" }}>
+      <div className={dark ? "dark h-full overflow-hidden" : "h-full overflow-hidden"} style={{ colorScheme: dark ? "dark" : "light", background: surface === "panel" || surface === "recorder" || surface === "overlay" ? "transparent" : surface === "scroll" ? "#1c1c1c" : appWindow ? undefined : "#000" }}>
         <Suspense fallback={appWindow ? <BootScreen /> : null}>
           {surface === "recorder" ? <ScreenshotRecorder /> : surface === "scroll" ? <ScreenshotScrollHud /> : surface === "overlay" ? <ScreenshotOverlay /> : surface === "pin" ? <ScreenshotPin /> : surface === "panel" ? <ClipboardPanel /> : <AppRouter />}
         </Suspense>
