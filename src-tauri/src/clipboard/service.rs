@@ -16,8 +16,9 @@ use super::model::{
 use super::monitor::{self, MonitorEvent};
 use super::store::{self, Store, UpsertRequest, UpsertResult};
 use super::util::{
-    app_excluded, decode_png, encode_png, files_size_bytes, hash_files, hash_image, image_rgba_len,
-    now_millis, thumbnail_png, type_ignored,
+    PRODUCED_IMAGE_LIMIT, app_excluded, decode_png, encode_png, files_size_bytes, gif_still_png,
+    hash_files, hash_image, image_rgba_len, is_gif, now_millis, png_dimensions, thumbnail_png,
+    type_ignored,
 };
 use crate::shortcut;
 
@@ -206,6 +207,40 @@ impl ClipboardState {
         }
     }
 
+    pub fn copy_file_path(&self, path: &str) -> Result<(), ClipboardError> {
+        let real = self
+            .inner
+            .platform
+            .prepare_file_path(path)
+            .ok_or_else(|| ClipboardError::new("file_missing"))?;
+        if !Path::new(&real).exists() {
+            return Err(ClipboardError::new("file_missing"));
+        }
+        let paths = vec![real];
+        let hash = hash_files(&paths);
+        let settings = lock(&self.inner.settings).clone();
+        let record_history = settings.enabled && settings.allows(ClipKind::Files);
+        self.arm(&hash);
+        if let Err(error) = self.inner.platform.write_files(&paths) {
+            self.disarm();
+            return Err(error);
+        }
+        if !record_history {
+            return Ok(());
+        }
+        // The monitor ignores a self-write until the file is already stored.
+        self.disarm();
+        let capture = Capture {
+            payload: Some(Payload::Files(paths)),
+            sensitive: false,
+            source_app: Some("Pixo".into()),
+            types: vec!["public.file-url".into()],
+        };
+        self.inner.record(capture, true)?;
+        self.arm(&hash);
+        Ok(())
+    }
+
     pub fn set_pinned(&self, id: i64, pinned: bool) -> Result<(), ClipboardError> {
         lock(&self.inner.store).set_pinned(id, pinned)?;
         self.inner.emit_change(id, "updated");
@@ -260,6 +295,41 @@ impl ClipboardState {
         Ok(self.inner.status())
     }
 
+    pub fn set_enabled(&self, enabled: bool) -> Result<Status, ClipboardError> {
+        let current = lock(&self.inner.settings).clone();
+        if current.enabled == enabled {
+            return Ok(self.inner.status());
+        }
+        let mut proposed = current.clone();
+        proposed.enabled = enabled;
+        let caps = self.inner.platform.capabilities();
+        {
+            let mut registered = lock(&self.inner.registered_shortcut);
+            if let Err(error) = shortcut::sync_shortcut(
+                &self.inner.app,
+                &proposed.shortcut,
+                proposed.enabled && caps.can_global_shortcut,
+                &mut registered,
+            ) {
+                return Err(error);
+            }
+        }
+        if let Err(error) = lock(&self.inner.store).save_settings(&proposed) {
+            let mut registered = lock(&self.inner.registered_shortcut);
+            let _ = shortcut::sync_shortcut(
+                &self.inner.app,
+                &current.shortcut,
+                current.enabled && caps.can_global_shortcut,
+                &mut registered,
+            );
+            return Err(error);
+        }
+        *lock(&self.inner.settings) = proposed.clone();
+        self.inner.apply_recording(&proposed);
+        self.inner.emit_status();
+        Ok(self.inner.status())
+    }
+
     pub fn settings(&self) -> Settings {
         lock(&self.inner.settings).clone()
     }
@@ -271,6 +341,16 @@ impl ClipboardState {
         crate::shortcut::parse_shortcut(&proposed.shortcut)?;
         crate::shortcut::parse_shortcut(&proposed.pin_shortcut)?;
         crate::shortcut::parse_shortcut(&proposed.delete_shortcut)?;
+        if crate::screenshot::conflicts_with(
+            &self.inner.app,
+            &[
+                proposed.shortcut.as_str(),
+                proposed.pin_shortcut.as_str(),
+                proposed.delete_shortcut.as_str(),
+            ],
+        ) {
+            return Err(ClipboardError::new("shortcut_conflict"));
+        }
         let plan = lock(&self.inner.store).prune_plan(&proposed, now_millis())?;
         if plan.count > 0 && !confirm {
             return Err(ClipboardError::with_params(
@@ -324,6 +404,142 @@ impl ClipboardState {
         self.inner.ignore_next.load(Ordering::SeqCst)
     }
 
+    pub fn shortcut_bindings(&self) -> [String; 3] {
+        let settings = self.settings();
+        [
+            settings.shortcut,
+            settings.pin_shortcut,
+            settings.delete_shortcut,
+        ]
+    }
+
+    pub fn record_produced_image(
+        &self,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> Result<crate::clipboard::util::ProducedHistory, ClipboardError> {
+        use crate::clipboard::util::{
+            PRODUCED_IMAGE_LIMIT, ProducedHistory, produced_image_history,
+        };
+
+        let expected =
+            image_rgba_len(width, height).ok_or_else(|| ClipboardError::new("invalid_input"))?;
+        if rgba.len() != expected {
+            return Err(ClipboardError::new("invalid_input"));
+        }
+        let hash = hash_image(width, height, rgba);
+        let settings = lock(&self.inner.settings).clone();
+        let decision = produced_image_history(
+            settings.enabled,
+            settings.allows(ClipKind::Image),
+            rgba.len() as u64,
+        );
+        self.arm(&hash);
+        if let Err(error) = self.inner.platform.write_image(width, height, rgba) {
+            self.disarm();
+            return Err(error);
+        }
+        if decision != ProducedHistory::Added {
+            return Ok(decision);
+        }
+        // A self-write of a hash that is not stored yet is ignored. Insert first,
+        // then arm again so the clipboard monitor updates that row in place.
+        self.disarm();
+        let capture = Capture {
+            payload: Some(Payload::Image {
+                width,
+                height,
+                rgba: rgba.to_vec(),
+            }),
+            sensitive: false,
+            source_app: Some("Pixo".into()),
+            types: vec!["image/png".into()],
+        };
+        self.inner
+            .record_with_image_limit(capture, true, Some(PRODUCED_IMAGE_LIMIT), None)?;
+        self.arm(&hash);
+        Ok(ProducedHistory::Added)
+    }
+
+    pub fn record_produced_png(
+        &self,
+        png: &[u8],
+    ) -> Result<crate::clipboard::util::ProducedHistory, ClipboardError> {
+        use crate::clipboard::util::{ProducedHistory, produced_image_history};
+
+        if !self.inner.platform.accepts_png_bytes() {
+            let (width, height, rgba) = decode_png(png).map_err(|error| {
+                eprintln!("clipboard png: {error}");
+                ClipboardError::new("invalid_input")
+            })?;
+            return self.record_produced_image(width, height, &rgba);
+        }
+        let (width, height) =
+            png_dimensions(png).ok_or_else(|| ClipboardError::new("invalid_input"))?;
+        let raw_len = image_rgba_len(width, height)
+            .ok_or_else(|| ClipboardError::new("invalid_input"))? as u64;
+        let settings = lock(&self.inner.settings).clone();
+        let decision =
+            produced_image_history(settings.enabled, settings.allows(ClipKind::Image), raw_len);
+        // Paste the already compressed PNG. NSImage would rebuild a TIFF on the main thread.
+        self.inner.platform.write_png(png)?;
+        if decision != ProducedHistory::Added {
+            return Ok(decision);
+        }
+        let png = png.to_vec();
+        let inner = Arc::clone(&self.inner);
+        thread::Builder::new()
+            .name("pixo-screenshot-history".into())
+            .spawn(move || {
+                if let Err(error) = inner.persist_produced_png(&png) {
+                    eprintln!("screenshot history: {}", error.code);
+                }
+            })
+            .map_err(|error| {
+                eprintln!("screenshot history thread: {error}");
+                ClipboardError::new("storage")
+            })?;
+        Ok(ProducedHistory::Added)
+    }
+
+    pub fn copy_gif_image(&self, gif: &[u8]) -> Result<(), ClipboardError> {
+        use crate::clipboard::util::{ProducedHistory, produced_image_history};
+
+        if !is_gif(gif) {
+            return Err(ClipboardError::new("invalid_input"));
+        }
+        let png = gif_still_png(gif).map_err(|error| {
+            eprintln!("clipboard gif: {error}");
+            ClipboardError::new("invalid_input")
+        })?;
+        self.inner.platform.write_gif(gif, &png)?;
+        let (width, height) =
+            png_dimensions(&png).ok_or_else(|| ClipboardError::new("invalid_input"))?;
+        let raw_len = image_rgba_len(width, height)
+            .ok_or_else(|| ClipboardError::new("invalid_input"))? as u64;
+        let settings = lock(&self.inner.settings).clone();
+        let decision =
+            produced_image_history(settings.enabled, settings.allows(ClipKind::Image), raw_len);
+        if decision != ProducedHistory::Added {
+            return Ok(());
+        }
+        let png = png.to_vec();
+        let inner = Arc::clone(&self.inner);
+        thread::Builder::new()
+            .name("pixo-gif-history".into())
+            .spawn(move || {
+                if let Err(error) = inner.persist_produced_png(&png) {
+                    eprintln!("gif history: {}", error.code);
+                }
+            })
+            .map_err(|error| {
+                eprintln!("gif history thread: {error}");
+                ClipboardError::new("storage")
+            })?;
+        Ok(())
+    }
+
     fn arm(&self, hash: &str) {
         *lock(&self.inner.self_write) = Some(SelfWrite {
             hash: hash.to_string(),
@@ -338,6 +554,35 @@ impl ClipboardState {
 
 impl Inner {
     fn record(&self, capture: Capture, manual: bool) -> Result<Option<Summary>, ClipboardError> {
+        self.record_with_image_limit(capture, manual, None, None)
+    }
+
+    fn persist_produced_png(&self, png: &[u8]) -> Result<(), ClipboardError> {
+        let (width, height, rgba) = decode_png(png).map_err(|error| {
+            eprintln!("clipboard png: {error}");
+            ClipboardError::new("invalid_input")
+        })?;
+        let capture = Capture {
+            payload: Some(Payload::Image {
+                width,
+                height,
+                rgba,
+            }),
+            sensitive: false,
+            source_app: Some("Pixo".into()),
+            types: vec!["image/png".into()],
+        };
+        self.record_with_image_limit(capture, true, Some(PRODUCED_IMAGE_LIMIT), Some(png))?;
+        Ok(())
+    }
+
+    fn record_with_image_limit(
+        &self,
+        capture: Capture,
+        manual: bool,
+        image_limit: Option<u64>,
+        encoded_png: Option<&[u8]>,
+    ) -> Result<Option<Summary>, ClipboardError> {
         let settings = lock(&self.settings).clone();
         if !manual && (!settings.enabled || settings.paused) {
             return Ok(None);
@@ -392,7 +637,11 @@ impl Inner {
             return Ok(None);
         }
         if let Some(bytes) = payload_limit_bytes(&payload) {
-            if bytes > limit_for(&settings, payload.kind()) {
+            let limit = match payload.kind() {
+                ClipKind::Image => image_limit.unwrap_or(settings.max_image_bytes),
+                kind => limit_for(&settings, kind),
+            };
+            if bytes > limit {
                 if !manual {
                     self.consume_ignore_next();
                 }
@@ -405,7 +654,7 @@ impl Inner {
                 return Ok(None);
             }
         }
-        let prepared = prepare_payload(&payload)?;
+        let prepared = prepare_payload(&payload, encoded_png)?;
         let self_write = self.take_self_write(&prepared.hash);
         if !manual && !self_write && self.consume_ignore_next() {
             return Ok(None);
@@ -429,7 +678,7 @@ impl Inner {
         })?;
         let (summary, reason) = match result {
             UpsertResult::Added(summary) => (summary, "added"),
-            UpsertResult::Updated { summary, .. } => (summary, "updated"),
+            UpsertResult::Updated { summary } => (summary, "updated"),
             UpsertResult::Ignored => return Ok(None),
         };
         if !self_write {
@@ -541,7 +790,10 @@ struct Prepared {
     thumb: Option<Vec<u8>>,
 }
 
-fn prepare_payload(payload: &Payload) -> Result<Prepared, ClipboardError> {
+fn prepare_payload(
+    payload: &Payload,
+    encoded_png: Option<&[u8]>,
+) -> Result<Prepared, ClipboardError> {
     match payload {
         Payload::Text(text) => Ok(Prepared {
             kind: ClipKind::Text,
@@ -579,10 +831,17 @@ fn prepare_payload(payload: &Payload) -> Result<Prepared, ClipboardError> {
             if image_rgba_len(*width, *height) != Some(rgba.len()) {
                 return Err(ClipboardError::new("invalid_input"));
             }
-            let png = encode_png(*width, *height, rgba).map_err(|error| {
-                eprintln!("clipboard png: {error}");
-                ClipboardError::new("storage")
-            })?;
+            let png = if let Some(bytes) = encoded_png {
+                if png_dimensions(bytes).is_none() {
+                    return Err(ClipboardError::new("invalid_input"));
+                }
+                bytes.to_vec()
+            } else {
+                encode_png(*width, *height, rgba).map_err(|error| {
+                    eprintln!("clipboard png: {error}");
+                    ClipboardError::new("storage")
+                })?
+            };
             let thumb = thumbnail_png(*width, *height, rgba).map_err(|error| {
                 eprintln!("clipboard thumb: {error}");
                 ClipboardError::new("storage")

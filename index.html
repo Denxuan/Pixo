@@ -23,12 +23,56 @@
 
       html[data-surface="panel"],
       html[data-surface="panel"] body,
-      html[data-surface="panel"] #root {
+      html[data-surface="panel"] #root,
+      html[data-surface="recorder"],
+      html[data-surface="recorder"] body,
+      html[data-surface="recorder"] #root {
         background: transparent;
+      }
+
+      html[data-surface="recorder"],
+      html[data-surface="recorder"] body,
+      html[data-surface="recorder"] #root,
+      html[data-surface="scroll"],
+      html[data-surface="scroll"] body,
+      html[data-surface="scroll"] #root {
+        overflow: hidden;
+      }
+
+      html[data-surface="scroll"],
+      html[data-surface="scroll"] body,
+      html[data-surface="scroll"] #root {
+        background: #1c1c1c;
+        color-scheme: dark;
+      }
+
+      html[data-surface="shot"],
+      html[data-surface="shot"] body,
+      html[data-surface="shot"] #root {
+        background: #000;
+        color-scheme: dark;
+        overflow: hidden;
+      }
+
+      html[data-surface="shot"] input,
+      html[data-surface="shot"] textarea {
+        -webkit-user-select: text;
+        user-select: text;
       }
     </style>
     <script>
       (function () {
+        if (location.search.indexOf("view=recorder") !== -1) {
+          document.documentElement.setAttribute("data-surface", "recorder");
+          return;
+        }
+        if (location.search.indexOf("view=scroll") !== -1) {
+          document.documentElement.setAttribute("data-surface", "scroll");
+          return;
+        }
+        if (location.search.indexOf("view=shot") !== -1) {
+          document.documentElement.setAttribute("data-surface", "shot");
+        }
         if (location.search.indexOf("view=panel") !== -1) {
           document.documentElement.setAttribute("data-surface", "panel");
           return;

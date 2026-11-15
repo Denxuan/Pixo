@@ -90,9 +90,8 @@ pub fn sync_shortcut(
     registered: &mut Option<String>,
 ) -> Result<(), ClipboardError> {
     if !active {
-        if registered.is_some() {
-            let _ = app.global_shortcut().unregister_all();
-            *registered = None;
+        if let Some(current) = registered.take() {
+            let _ = app.global_shortcut().unregister(current.as_str());
         }
         return Ok(());
     }
@@ -759,14 +758,27 @@ fn place_under_tray(window: &WebviewWindow, rect: tauri::Rect) {
 }
 
 fn place_near_cursor(window: &WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    if let Some(anchor) = crate::panel_anchor::input_anchor() {
+        place_near_point(
+            window,
+            anchor.x + anchor.width,
+            anchor.y + anchor.height / 2.0,
+        );
+        return;
+    }
     let Ok(cursor) = window.cursor_position() else {
         return;
     };
+    place_near_point(window, cursor.x, cursor.y);
+}
+
+fn place_near_point(window: &WebviewWindow, origin_x: f64, origin_y: f64) {
     let Ok(size) = window.outer_size() else {
         return;
     };
-    let mut x = cursor.x + 16.0;
-    let mut y = cursor.y + 16.0;
+    let mut x = origin_x + 16.0;
+    let mut y = origin_y + 16.0;
     let Ok(monitors) = window.available_monitors() else {
         let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
         return;
@@ -776,10 +788,10 @@ fn place_near_cursor(window: &WebviewWindow) {
         let area = monitor.size();
         let left = f64::from(pos.x);
         let top = f64::from(pos.y);
-        cursor.x >= left
-            && cursor.y >= top
-            && cursor.x < left + f64::from(area.width)
-            && cursor.y < top + f64::from(area.height)
+        origin_x >= left
+            && origin_y >= top
+            && origin_x < left + f64::from(area.width)
+            && origin_y < top + f64::from(area.height)
     }) {
         let pos = monitor.position();
         let area = monitor.size();

@@ -13,7 +13,7 @@ use objc2::{AnyThread, ClassType, MainThreadMarker};
 use objc2_app_kit::{
     NSBitmapImageFileType, NSBitmapImageRep, NSCompositingOperation, NSDeviceRGBColorSpace,
     NSGraphicsContext, NSImage, NSPasteboard, NSPasteboardAccessBehavior, NSPasteboardTypeFileURL,
-    NSPasteboardTypeString, NSPasteboardWriting, NSWorkspace,
+    NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardWriting, NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSData, NSDictionary, NSFileManager, NSPoint, NSRect, NSSize, NSString, NSURL,
@@ -84,6 +84,30 @@ impl Platform for MacPlatform {
     fn write_image(&self, width: u32, height: u32, rgba: &[u8]) -> Result<(), ClipboardError> {
         let rgba = rgba.to_vec();
         on_main(move || io::write_image(width, height, &rgba))
+    }
+
+    fn accepts_png_bytes(&self) -> bool {
+        true
+    }
+
+    fn write_png(&self, png: &[u8]) -> Result<(), ClipboardError> {
+        if png.len() < 8 || &png[..8] != b"\x89PNG\r\n\x1a\n" {
+            return Err(ClipboardError::new("invalid_input"));
+        }
+        let png = png.to_vec();
+        on_main(move || write_png_pasteboard(&png))
+    }
+
+    fn write_gif(&self, gif: &[u8], png: &[u8]) -> Result<(), ClipboardError> {
+        if !crate::clipboard::util::is_gif(gif)
+            || png.len() < 8
+            || &png[..8] != b"\x89PNG\r\n\x1a\n"
+        {
+            return Err(ClipboardError::new("invalid_input"));
+        }
+        let gif = gif.to_vec();
+        let png = png.to_vec();
+        on_main(move || write_gif_pasteboard(&gif, &png))
     }
 
     fn write_files(&self, paths: &[String]) -> Result<(), ClipboardError> {
@@ -220,6 +244,42 @@ fn pasteboard_data(pasteboard: &NSPasteboard, name: &str) -> Option<Vec<u8>> {
     let kind = NSString::from_str(name);
     let bytes = pasteboard.dataForType(&kind)?.to_vec();
     (!bytes.is_empty()).then_some(bytes)
+}
+
+fn write_png_pasteboard(png: &[u8]) -> Result<(), ClipboardError> {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
+    let data = unsafe { NSData::dataWithBytes_length(png.as_ptr().cast(), png.len()) };
+    let kind = unsafe { &*NSPasteboardTypePNG };
+    if !pasteboard.setData_forType(Some(&data), kind) {
+        return Err(ClipboardError::new("busy"));
+    }
+    Ok(())
+}
+
+fn write_gif_pasteboard(gif: &[u8], png: &[u8]) -> Result<(), ClipboardError> {
+    write_image_gif(&NSPasteboard::generalPasteboard(), gif, png)
+}
+
+fn write_image_gif(
+    pasteboard: &NSPasteboard,
+    gif: &[u8],
+    png: &[u8],
+) -> Result<(), ClipboardError> {
+    pasteboard.clearContents();
+    let gif_data = unsafe { NSData::dataWithBytes_length(gif.as_ptr().cast(), gif.len()) };
+    for name in ["com.compuserve.gif", "public.gif"] {
+        let kind = NSString::from_str(name);
+        if !pasteboard.setData_forType(Some(&gif_data), &kind) {
+            return Err(ClipboardError::new("busy"));
+        }
+    }
+    let png_data = unsafe { NSData::dataWithBytes_length(png.as_ptr().cast(), png.len()) };
+    let png_type = unsafe { &*NSPasteboardTypePNG };
+    if !pasteboard.setData_forType(Some(&png_data), png_type) {
+        return Err(ClipboardError::new("busy"));
+    }
+    Ok(())
 }
 
 fn write_rich(text: &RichText) -> Result<(), ClipboardError> {
@@ -655,6 +715,7 @@ fn remember_app(
 
 #[cfg(test)]
 mod tests {
+    use objc2_app_kit::NSPasteboard;
     use objc2_foundation::{NSString, NSURL};
 
     use super::filesystem_path;
@@ -747,6 +808,31 @@ mod tests {
                 || pair[0].name.to_lowercase() == pair[1].name.to_lowercase()
                     && pair[0].id <= pair[1].id
         }));
+    }
+
+    #[test]
+    fn gif_copy_is_image_data_without_a_file_url() {
+        let pasteboard = NSPasteboard::pasteboardWithUniqueName();
+        let gif = b"GIF89a-image";
+        let png = crate::clipboard::util::encode_png(1, 1, &[1, 2, 3, 255]).unwrap();
+        super::write_image_gif(&pasteboard, gif, &png).unwrap();
+        let types = super::pasteboard_types(&pasteboard);
+        let joined = types.join("\n").to_lowercase();
+        assert!(
+            joined.contains("com.compuserve.gif"),
+            "gif type missing: {types:?}"
+        );
+        assert!(joined.contains("public.png"), "png type missing: {types:?}");
+        assert!(
+            !joined.contains("file-url") && !joined.contains("filenames"),
+            "file type present: {types:?}"
+        );
+        assert_eq!(
+            super::pasteboard_data(&pasteboard, "com.compuserve.gif").as_deref(),
+            Some(gif.as_slice())
+        );
+        let stored = super::pasteboard_data(&pasteboard, "public.png").unwrap();
+        assert!(stored.starts_with(b"\x89PNG"));
     }
 
     #[test]

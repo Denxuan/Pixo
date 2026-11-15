@@ -139,6 +139,10 @@ export function clipboardSetPaused(paused: boolean): Promise<ClipboardStatus> {
   return call("clipboard_set_paused", { paused });
 }
 
+export function clipboardSetEnabled(enabled: boolean): Promise<ClipboardStatus> {
+  return call("clipboard_set_enabled", { enabled });
+}
+
 export function clipboardGetSettings(): Promise<ClipboardSettings> {
   return call("clipboard_get_settings");
 }

@@ -90,6 +90,39 @@ pub fn place_under_icon(
     (x, y.clamp(min_y, max_y))
 }
 
+#[cfg(target_os = "windows")]
+pub fn input_anchor() -> Option<Rect> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::ClientToScreen;
+    use windows::Win32::UI::WindowsAndMessaging::{GUITHREADINFO, GetGUIThreadInfo};
+
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..GUITHREADINFO::default()
+    };
+    if unsafe { GetGUIThreadInfo(0, &mut info) }.is_err() || info.hwndCaret.is_invalid() {
+        return None;
+    }
+    let width = info.rcCaret.right - info.rcCaret.left;
+    let height = info.rcCaret.bottom - info.rcCaret.top;
+    if height < 1 || height > 240 || width > 1600 {
+        return None;
+    }
+    let mut origin = POINT {
+        x: info.rcCaret.left,
+        y: info.rcCaret.top,
+    };
+    if !unsafe { ClientToScreen(info.hwndCaret, &mut origin) }.as_bool() {
+        return None;
+    }
+    Some(Rect {
+        x: f64::from(origin.x),
+        y: f64::from(origin.y),
+        width: f64::from(width.max(1)),
+        height: f64::from(height),
+    })
+}
+
 #[cfg(target_os = "macos")]
 pub fn focused_input() -> Rect {
     input_rect().unwrap_or_else(mouse_rect)

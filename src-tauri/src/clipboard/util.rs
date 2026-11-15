@@ -3,7 +3,7 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use super::model::{ClipKind, Payload};
+use super::model::ClipKind;
 
 pub fn now_millis() -> i64 {
     std::time::SystemTime::now()
@@ -51,24 +51,41 @@ pub fn hash_files(paths: &[String]) -> String {
     sha256_hex(&raw)
 }
 
+pub const PRODUCED_IMAGE_LIMIT: u64 = 80 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProducedHistory {
+    Added,
+    SkippedDisabled,
+    SkippedTooLarge,
+}
+
+impl ProducedHistory {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Added => "added",
+            Self::SkippedDisabled => "skipped_disabled",
+            Self::SkippedTooLarge => "skipped_too_large",
+        }
+    }
+}
+
+pub fn produced_image_history(enabled: bool, record_image: bool, bytes: u64) -> ProducedHistory {
+    if !enabled || !record_image {
+        ProducedHistory::SkippedDisabled
+    } else if bytes > PRODUCED_IMAGE_LIMIT {
+        ProducedHistory::SkippedTooLarge
+    } else {
+        ProducedHistory::Added
+    }
+}
+
 pub fn hash_image(width: u32, height: u32, rgba: &[u8]) -> String {
     let mut raw = Vec::with_capacity(8 + rgba.len());
     raw.extend(width.to_le_bytes());
     raw.extend(height.to_le_bytes());
     raw.extend(rgba);
     sha256_hex(&raw)
-}
-
-pub fn payload_hash(payload: &Payload) -> String {
-    match payload {
-        Payload::Text(text) => hash_rich(text),
-        Payload::Files(paths) => hash_files(paths),
-        Payload::Image {
-            width,
-            height,
-            rgba,
-        } => hash_image(*width, *height, rgba),
-    }
 }
 
 pub fn image_rgba_len(width: u32, height: u32) -> Option<usize> {
@@ -162,16 +179,26 @@ pub fn macos_sensitive(types: &[String]) -> bool {
         .any(|ty| MARKERS.iter().any(|marker| ty == marker))
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub fn kde_secret(value: &str) -> bool {
     value.trim() == "secret"
 }
 
+#[cfg(any(test, target_os = "windows"))]
 pub fn windows_history_excluded(exclude_format_present: bool, can_include: Option<u32>) -> bool {
     exclude_format_present || can_include == Some(0)
 }
 
 pub fn app_excluded(source: Option<&str>, excluded: &[String]) -> bool {
-    source.is_some_and(|app| excluded.iter().any(|entry| entry == app))
+    source.is_some_and(|app| {
+        excluded.iter().any(|entry| {
+            if cfg!(target_os = "windows") {
+                entry.eq_ignore_ascii_case(app)
+            } else {
+                entry == app
+            }
+        })
+    })
 }
 
 pub const PIN_KEYS: &str = "abcdefghijklmnopqrstuvwxyz123456789";
@@ -198,6 +225,39 @@ pub fn kind_preview(kind: ClipKind, text: Option<&str>, files: &[String]) -> (St
             (preview_text(&names.join(", ")), names)
         }
     }
+}
+
+pub fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 24 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" || &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
+    let height = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
+    if width == 0 || height == 0 {
+        None
+    } else {
+        Some((width, height))
+    }
+}
+
+pub fn is_gif(bytes: &[u8]) -> bool {
+    bytes.len() >= 6 && (bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"))
+}
+
+/// First composited frame of a GIF, encoded as PNG so a paste target that
+/// cannot play animation still receives a picture.
+pub fn gif_still_png(bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
+    use image::AnimationDecoder;
+
+    if !is_gif(bytes) {
+        return Err("gif");
+    }
+    let decoder =
+        image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes)).map_err(|_| "gif")?;
+    let mut frames = decoder.into_frames();
+    let frame = frames.next().ok_or("gif")?.map_err(|_| "gif")?;
+    let image = frame.into_buffer();
+    encode_png(image.width(), image.height(), image.as_raw()).map_err(|_| "gif")
 }
 
 pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, image::ImageError> {
@@ -241,6 +301,7 @@ pub fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), image::ImageError
     Ok((width, height, image.into_raw()))
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub fn percent_decode(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
@@ -262,6 +323,7 @@ pub fn percent_decode(input: &str) -> String {
     String::from_utf8_lossy(&decoded).into_owned()
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub fn file_uri_to_path(uri: &str) -> Option<String> {
     let uri = uri.trim();
     if uri.is_empty() || uri.starts_with('#') {
@@ -284,6 +346,7 @@ pub fn file_uri_to_path(uri: &str) -> Option<String> {
     }
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 pub fn path_to_file_uri(path: &str) -> String {
     let mut uri = String::from("file://");
     #[cfg(windows)]
@@ -304,6 +367,7 @@ pub fn path_to_file_uri(path: &str) -> String {
     uri
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub fn parse_uri_list(data: &str) -> Vec<String> {
     data.lines()
         .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
@@ -311,10 +375,12 @@ pub fn parse_uri_list(data: &str) -> Vec<String> {
         .collect()
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub fn parse_gnome_copied(data: &str) -> Vec<String> {
     data.lines().skip(1).filter_map(file_uri_to_path).collect()
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub fn uri_list(paths: &[String]) -> String {
     let mut list = String::new();
     for path in paths {
@@ -324,7 +390,38 @@ pub fn uri_list(paths: &[String]) -> String {
     list
 }
 
+/// 32-bit bottom-up device-independent bitmap without a file header.
+#[cfg(any(test, target_os = "windows"))]
+pub fn encode_dib(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
+    let pixels = image_rgba_len(width, height)?;
+    if rgba.len() != pixels {
+        return None;
+    }
+    let stride = usize::try_from(width).ok()?.checked_mul(4)?;
+    let size = stride.checked_mul(usize::try_from(height).ok()?)?;
+    let mut dib = vec![0u8; 40 + size];
+    dib[0..4].copy_from_slice(&40u32.to_le_bytes());
+    dib[4..8].copy_from_slice(&width.to_le_bytes());
+    dib[8..12].copy_from_slice(&height.to_le_bytes());
+    dib[12..14].copy_from_slice(&1u16.to_le_bytes());
+    dib[14..16].copy_from_slice(&32u16.to_le_bytes());
+    dib[20..24].copy_from_slice(&u32::try_from(size).ok()?.to_le_bytes());
+    for y in 0..height {
+        let source_y = usize::try_from(height - 1 - y).ok()?;
+        for x in 0..usize::try_from(width).ok()? {
+            let source = source_y * stride + x * 4;
+            let dest = 40 + usize::try_from(y).ok()? * stride + x * 4;
+            dib[dest] = rgba[source + 2];
+            dib[dest + 1] = rgba[source + 1];
+            dib[dest + 2] = rgba[source];
+            dib[dest + 3] = rgba[source + 3];
+        }
+    }
+    Some(dib)
+}
+
 /// Decode a device-independent bitmap stored without a file header.
+#[cfg(any(test, target_os = "windows"))]
 pub fn decode_dib(data: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     if data.len() < 40 {
         return None;
@@ -498,6 +595,14 @@ mod tests {
     }
 
     #[test]
+    fn png_dimensions_read_the_ihdr() {
+        let png = encode_png(3, 5, &vec![0u8; 3 * 5 * 4]).unwrap();
+        assert_eq!(png_dimensions(&png), Some((3, 5)));
+        assert_eq!(png_dimensions(&png[..20]), None);
+        assert_eq!(png_dimensions(b"\x89PNG\r\n\x1a\nnot an ihdr!!!!"), None);
+    }
+
+    #[test]
     fn png_thumbnail_limits_the_long_edge() {
         let rgba = vec![
             255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
@@ -509,6 +614,38 @@ mod tests {
         let thumb = thumbnail_png(400, 10, &wide).unwrap();
         let (width, height, _) = decode_png(&thumb).unwrap();
         assert_eq!(width.max(height), 256);
+    }
+
+    #[test]
+    fn gif_still_png_is_the_first_frame() {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = gif::Encoder::new(&mut bytes, 1, 1, &[]).unwrap();
+            let frame = gif::Frame {
+                width: 1,
+                height: 1,
+                buffer: std::borrow::Cow::Borrowed(&[0]),
+                palette: Some(vec![10, 20, 30]),
+                ..gif::Frame::default()
+            };
+            encoder.write_frame(&frame).unwrap();
+        }
+        assert!(is_gif(&bytes));
+        assert!(!bytes.windows(8).any(|window| window == b"file://"));
+        let png = gif_still_png(&bytes).unwrap();
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+        let (width, height, rgba) = decode_png(&png).unwrap();
+        assert_eq!((width, height), (1, 1));
+        assert_eq!(&rgba[..3], &[10, 20, 30]);
+        assert!(gif_still_png(b"GIF89a").is_err());
+    }
+
+    #[test]
+    fn encodes_bottom_up_32bit_dib() {
+        let dib = encode_dib(1, 1, &[255, 0, 0, 255]).unwrap();
+        let (width, height, rgba) = decode_dib(&dib).unwrap();
+        assert_eq!((width, height), (1, 1));
+        assert_eq!(rgba, vec![255, 0, 0, 255]);
     }
 
     #[test]
@@ -526,5 +663,29 @@ mod tests {
         let (width, height, rgba) = decode_dib(&data).unwrap();
         assert_eq!((width, height), (1, 1));
         assert_eq!(rgba, vec![255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn produced_screenshot_history_uses_a_separate_image_limit() {
+        let under = 5120_u64 * 2880 * 4;
+        let over = 8192_u64 * 2880 * 4;
+        assert!(under < PRODUCED_IMAGE_LIMIT);
+        assert!(over > PRODUCED_IMAGE_LIMIT);
+        assert_eq!(
+            produced_image_history(true, true, under),
+            ProducedHistory::Added
+        );
+        assert_eq!(
+            produced_image_history(true, true, over),
+            ProducedHistory::SkippedTooLarge
+        );
+        assert_eq!(
+            produced_image_history(false, true, under),
+            ProducedHistory::SkippedDisabled
+        );
+        assert_eq!(
+            produced_image_history(true, false, under),
+            ProducedHistory::SkippedDisabled
+        );
     }
 }

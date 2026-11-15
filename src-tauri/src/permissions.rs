@@ -104,6 +104,7 @@ fn settings_url(id: &str) -> Option<String> {
         "accessibility" => "Privacy_Accessibility",
         "inputMonitoring" => "Privacy_ListenEvent",
         "pasteboard" => "Privacy_Pasteboard",
+        "screenRecording" => "Privacy_ScreenCapture",
         _ => return None,
     };
     Some(format!(
@@ -130,7 +131,7 @@ fn prompt_all() {
 }
 
 #[cfg(target_os = "macos")]
-fn accessibility_granted() -> bool {
+pub(crate) fn accessibility_granted() -> bool {
     unsafe { AXIsProcessTrusted() != 0 }
 }
 
@@ -203,6 +204,30 @@ unsafe extern "C" {
 unsafe extern "C" {
     fn CGPreflightListenEventAccess() -> bool;
     fn CGRequestListenEventAccess() -> bool;
+    fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGRequestScreenCaptureAccess() -> bool;
+}
+
+pub fn screen_recording_granted() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        unsafe { CGPreflightScreenCaptureAccess() }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+pub fn request_screen_recording() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        unsafe { CGRequestScreenCaptureAccess() }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
 }
 
 #[tauri::command]
@@ -251,6 +276,12 @@ mod tests {
             settings_url("pasteboard").as_deref(),
             Some(
                 "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Pasteboard"
+            )
+        );
+        assert_eq!(
+            settings_url("screenRecording").as_deref(),
+            Some(
+                "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture"
             )
         );
         assert!(settings_url("screen").is_none());

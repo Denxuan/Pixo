@@ -77,7 +77,7 @@ export default function ClipboardSettingsPage() {
       retentionDays,
       maxTextBytes,
       maxImageBytes,
-      excludedApps: status?.platform.includes("macos") ? excludedApps : excluded.split("\n"),
+      excludedApps: status?.canReadSourceApp ? excludedApps : excluded.split("\n"),
       ignoredTypes: ignored.split("\n"),
     };
     setSaving(true);
@@ -170,14 +170,14 @@ export default function ClipboardSettingsPage() {
             label={t("zdx.label.clipboard.excludedApps")}
             extra={
               <Flex vertical gap={4}>
-                {status?.platform.includes("macos") ? <span>{t("zdx.text.clipboard.excludedPicker")}</span> : status ? <span>{t("zdx.text.clipboard.excludedHelp")}</span> : null}
+                {status?.canReadSourceApp ? <span>{t("zdx.text.clipboard.excludedPicker")}</span> : status ? <span>{t("zdx.text.clipboard.excludedHelp")}</span> : null}
                 {status?.platform.includes("wayland") && <span>{t("zdx.text.clipboard.excludedWayland")}</span>}
               </Flex>
             }
           >
             {status == null ? (
               <Spin size="small" />
-            ) : status.platform.includes("macos") ? (
+            ) : status.canReadSourceApp ? (
               <ExcludedAppsField value={excludedApps} onChange={setExcludedApps} />
             ) : (
               <Input.TextArea value={excluded} onChange={(event) => setExcluded(event.target.value)} placeholder={t("zdx.placeholder.clipboard.excludedApps")} rows={4} />

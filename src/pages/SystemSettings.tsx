@@ -1,8 +1,11 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 
+import { clipboardSetEnabled, clipboardStatus } from "@/api/clipboard";
+import { screenshotGetSettings, screenshotSetEnabled } from "@/api/screenshot";
 import { getAutostart, setAutostart, setBackground, setTrayIcon } from "@/api/system";
 import { TRAY_ICONS, TrayMarkGlyph, type TrayIconId } from "@/components/icons/TrayMark";
 import ClipboardSettingsPage from "@/pages/ClipboardSettings";
+import ScreenshotSettingsPage from "@/pages/ScreenshotSettings";
 import { useSettingsStore, useTrayIcon } from "@/stores/settings";
 import { useUpdateStore } from "@/stores/update";
 import { isDesktop } from "@/utils/desktop";
@@ -106,38 +109,61 @@ export default function SystemSettingsPage() {
   const background = useSettingsStore((state) => state.background);
   const saveBackground = useSettingsStore((state) => state.setBackground);
   const [autostart, setAutostartState] = useState(false);
+  const [clipboardOn, setClipboardOn] = useState(false);
+  const [screenshotOn, setScreenshotOn] = useState(true);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const desktop = isDesktop();
-  const section = location.pathname === "/settings/clipboard" ? "clipboard" : "general";
+  const section = location.pathname === "/settings/clipboard" ? "clipboard" : location.pathname === "/settings/screenshot" ? "screenshot" : "general";
 
   useEffect(() => {
     if (!desktop) { setLoading(false); return; }
     let alive = true;
-    void getAutostart().then((enabled) => { if (alive) setAutostartState(enabled); })
-      .catch(() => { if (alive) setError(true); })
+    void Promise.all([getAutostart(), clipboardStatus(), screenshotGetSettings()]).then(([enabled, clipboard, screenshot]) => {
+      if (!alive) return;
+      setAutostartState(enabled);
+      setClipboardOn(clipboard.enabled);
+      setScreenshotOn(screenshot.enabled);
+    }).catch(() => { if (alive) setError(true); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [desktop]);
 
-  async function update(kind: "autostart" | "background", enabled: boolean) {
+  async function update(kind: "autostart" | "background" | "clipboard" | "screenshot", enabled: boolean) {
     setBusy(true);
     setError(false);
     try {
       if (kind === "autostart") { await setAutostart(enabled); setAutostartState(await getAutostart()); }
-      else { await setBackground(enabled); saveBackground(enabled); }
+      else if (kind === "background") { await setBackground(enabled); saveBackground(enabled); }
+      else if (kind === "clipboard") { setClipboardOn((await clipboardSetEnabled(enabled)).enabled); }
+      else { setScreenshotOn((await screenshotSetEnabled(enabled)).enabled); }
     } catch { setError(true); }
     finally { setBusy(false); }
+  }
+
+  function changeClipboard(enabled: boolean) {
+    if (!enabled) {
+      void update("clipboard", false);
+      return;
+    }
+    Modal.confirm({
+      title: t("zdx.text.clipboard.enableTitle"),
+      content: t("zdx.text.clipboard.enableBody"),
+      okText: t("zdx.label.clipboard.enable"),
+      cancelText: t("zdx.label.clipboard.cancel"),
+      onOk: () => update("clipboard", true),
+    });
   }
 
   return <Flex vertical gap={20} className="min-h-0 flex-1 overflow-auto">
     <Typography.Title level={3} style={{ margin: 0 }}>{t("zdx.label.system.title")}</Typography.Title>
     <Tabs
       activeKey={section}
-      onChange={(key) => navigate(key === "clipboard" ? "/settings/clipboard" : "/settings")}
+      onChange={(key) => navigate(key === "clipboard" ? "/settings/clipboard" : key === "screenshot" ? "/settings/screenshot" : "/settings")}
+      destroyOnHidden
       items={[
         {
           key: "general",
@@ -147,6 +173,8 @@ export default function SystemSettingsPage() {
               {!desktop && <Alert type="info" showIcon message={t("zdx.text.system.desktopOnly")} />}
               {error && <Alert type="error" showIcon message={t("zdx.text.system.error")} />}
               <TrayIconPicker />
+              <Flex align="center" justify="space-between" gap={20}><div><Typography.Text strong>{t("zdx.label.system.clipboardFeature")}</Typography.Text><br /><Typography.Text type="secondary">{t("zdx.text.system.clipboardFeature")}</Typography.Text></div><Switch aria-label={t("zdx.label.system.clipboardFeature")} checked={clipboardOn} disabled={!desktop || loading || busy} onChange={changeClipboard} /></Flex>
+              <Flex align="center" justify="space-between" gap={20}><div><Typography.Text strong>{t("zdx.label.system.screenshotFeature")}</Typography.Text><br /><Typography.Text type="secondary">{t("zdx.text.system.screenshotFeature")}</Typography.Text></div><Switch aria-label={t("zdx.label.system.screenshotFeature")} checked={screenshotOn} disabled={!desktop || loading || busy} onChange={(enabled) => void update("screenshot", enabled)} /></Flex>
               <Flex align="center" justify="space-between" gap={20}><div><Typography.Text strong>{t("zdx.label.system.autostart")}</Typography.Text><br /><Typography.Text type="secondary">{t("zdx.text.system.autostart")}</Typography.Text></div><Switch aria-label={t("zdx.label.system.autostart")} checked={autostart} disabled={!desktop || loading || busy} onChange={(enabled) => void update("autostart", enabled)} /></Flex>
               <Flex align="center" justify="space-between" gap={20}><div><Typography.Text strong>{t("zdx.label.system.background")}</Typography.Text><br /><Typography.Text type="secondary">{t("zdx.text.system.background")}</Typography.Text></div><Switch aria-label={t("zdx.label.system.background")} checked={background} disabled={!desktop || busy} onChange={(enabled) => void update("background", enabled)} /></Flex>
               <VersionCheck desktop={desktop} />
@@ -157,6 +185,11 @@ export default function SystemSettingsPage() {
           key: "clipboard",
           label: t("zdx.label.system.clipboard"),
           children: <ClipboardSettingsPage />,
+        },
+        {
+          key: "screenshot",
+          label: t("zdx.label.system.screenshot"),
+          children: <ScreenshotSettingsPage />,
         },
       ]}
     />

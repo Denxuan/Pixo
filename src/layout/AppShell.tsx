@@ -1,9 +1,11 @@
 import { listen } from "@tauri-apps/api/event";
 
-import { takeClipboardMainRequest } from "@/api/clipboard";
+import { clipboardStatus, takeClipboardMainRequest } from "@/api/clipboard";
+import { screenshotGetSettings } from "@/api/screenshot";
 import PermissionPrompt from "@/components/PermissionPrompt";
 import UpdatePrompt from "@/components/UpdatePrompt";
 import { useSettingsStore, type ThemeMode } from "@/stores/settings";
+import type { ClipboardStatus } from "@/types/clipboard";
 import { isDesktop } from "@/utils/desktop";
 
 const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -12,8 +14,24 @@ const subscribeMotion = (onChange: () => void) => {
   return () => motionQuery.removeEventListener("change", onChange);
 };
 
+function mainWindowPath(path: string) {
+  if (path === "/settings" || path === "/settings/clipboard" || path === "/settings/screenshot") return path;
+  if (path === "/clipboard/settings") return "/settings/clipboard";
+  return "/clipboard";
+}
+
 function isThemeMode(value: string): value is ThemeMode {
   return value === "system" || value === "light" || value === "dark";
+}
+
+function ScreenshotNavIcon() {
+  return (
+    <span className="anticon" aria-hidden="true">
+      <svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M7 3H5a2 2 0 0 0-2 2v2M17 3h2a2 2 0 0 1 2 2v2M7 21H5a2 2 0 0 1-2-2v-2M17 21h2a2 2 0 0 0 2-2v-2M4 12h16" />
+      </svg>
+    </span>
+  );
 }
 
 export default function AppShell() {
@@ -26,18 +44,27 @@ export default function AppShell() {
   const setLanguage = useSettingsStore((state) => state.setLanguage);
   const { token } = antdTheme.useToken();
   const [collapsed, setCollapsed] = useState(false);
+  const [clipboardOn, setClipboardOn] = useState<boolean | null>(null);
+  const [screenshotOn, setScreenshotOn] = useState<boolean | null>(null);
   const reduceMotion = useSyncExternalStore(subscribeMotion, () => motionQuery.matches);
-  const selected = location.pathname.startsWith("/settings") ? "settings" : location.pathname.startsWith("/clipboard") ? "clipboard" : "";
+  const selected = location.pathname.startsWith("/settings") ? "settings" : location.pathname.startsWith("/screenshot") ? "screenshot" : location.pathname.startsWith("/clipboard") ? "clipboard" : "";
   const clipboardItem = { key: "clipboard", icon: <HistoryOutlined />, label: t("zdx.label.nav.clipboard") };
+  const screenshotItem = { key: "screenshot", icon: <ScreenshotNavIcon />, label: t("zdx.label.nav.screenshot") };
   const settingsItem = { key: "settings", icon: <SettingOutlined />, label: t("zdx.label.system.title") };
+  const showClipboard = !isDesktop() || clipboardOn !== false;
+  const showScreenshot = !isDesktop() || screenshotOn !== false;
+  const navItems = [
+    ...(showClipboard ? [clipboardItem] : []),
+    ...(showScreenshot ? [screenshotItem] : []),
+    settingsItem,
+  ];
 
   useEffect(() => {
     if (!isDesktop()) return;
     let stop: (() => void) | undefined;
     let disposed = false;
     const open = (request: { path: string; enable: boolean }) => {
-      const path = request.path === "/settings/clipboard" || request.path === "/clipboard/settings" ? "/settings/clipboard" : "/clipboard";
-      navigate(path, { state: request.enable ? { enable: true } : null });
+      navigate(mainWindowPath(request.path), { state: request.enable ? { enable: true } : null });
     };
     void listen<{ path: string; enable: boolean }>("clipboard://open-main", (event) => {
       open(event.payload);
@@ -54,6 +81,41 @@ export default function AppShell() {
       stop?.();
     };
   }, [navigate]);
+
+  useEffect(() => {
+    if (!isDesktop()) return;
+    let disposed = false;
+    let stopStatus: (() => void) | undefined;
+    let stopScreenshot: (() => void) | undefined;
+    void clipboardStatus().then((status) => {
+      if (!disposed) setClipboardOn(status.enabled);
+    }).catch(() => undefined);
+    void screenshotGetSettings().then((settings) => {
+      if (!disposed) setScreenshotOn(settings.enabled);
+    }).catch(() => undefined);
+    void listen<ClipboardStatus>("clipboard://status", (event) => {
+      setClipboardOn(event.payload.enabled);
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stopStatus = unlisten;
+    });
+    void listen<boolean>("screenshot://enabled", (event) => {
+      setScreenshotOn(event.payload);
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stopScreenshot = unlisten;
+    });
+    return () => {
+      disposed = true;
+      stopStatus?.();
+      stopScreenshot?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isDesktop() || screenshotOn !== false || location.pathname !== "/screenshot") return;
+    navigate("/settings", { replace: true });
+  }, [location.pathname, navigate, screenshotOn]);
 
   return (
     <Layout className="h-full overflow-hidden" style={{ height: "100%" }}>
@@ -89,9 +151,10 @@ export default function AppShell() {
             style={{ borderInlineEnd: 0, background: "transparent" }}
             onClick={({ key }) => {
               if (key === "clipboard") navigate("/clipboard");
+              if (key === "screenshot") navigate("/screenshot");
               if (key === "settings") navigate("/settings");
             }}
-            items={collapsed ? [clipboardItem, settingsItem] : [{ type: "group", label: t("zdx.label.nav.workspace"), children: [clipboardItem, settingsItem] }]}
+            items={collapsed ? navItems : [{ type: "group", label: t("zdx.label.nav.workspace"), children: navItems }]}
           />
           {!collapsed && <Typography.Text style={{ marginTop: "auto", padding: "12px 20px", color: token.colorTextSecondary }}>{t("zdx.text.app.local")}</Typography.Text>}
         </Flex>

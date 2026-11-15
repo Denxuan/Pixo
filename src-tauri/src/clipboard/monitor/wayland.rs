@@ -96,6 +96,24 @@ impl WaylandBackend {
             .map_err(map_copy)
     }
 
+    pub fn write_gif(&self, gif: &[u8], png: &[u8]) -> Result<(), ClipboardError> {
+        if !crate::clipboard::util::is_gif(gif) {
+            return Err(ClipboardError::new("invalid_input"));
+        }
+        Options::new()
+            .copy_multi(vec![
+                MimeSource {
+                    source: Source::Bytes(gif.to_vec().into_boxed_slice()),
+                    mime_type: CopyMime::Specific("image/gif".into()),
+                },
+                MimeSource {
+                    source: Source::Bytes(png.to_vec().into_boxed_slice()),
+                    mime_type: CopyMime::Specific("image/png".into()),
+                },
+            ])
+            .map_err(map_copy)
+    }
+
     pub fn write_files(&self, paths: &[String]) -> Result<(), ClipboardError> {
         let list = uri_list(paths);
         let text = paths.join("\n");

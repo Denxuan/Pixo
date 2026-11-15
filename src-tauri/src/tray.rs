@@ -31,6 +31,13 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         enabled,
         None::<&str>,
     )?;
+    let capture = MenuItem::with_id(
+        app,
+        "tray-screenshot",
+        &labels.screenshot,
+        true,
+        None::<&str>,
+    )?;
     let history = MenuItem::with_id(app, "tray-history", &labels.history, true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "tray-settings", &labels.settings, true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "tray-quit", &labels.quit, true, None::<&str>)?;
@@ -45,13 +52,16 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &show, &gap_show, &record, &ignore, &gap_a, &history, &settings, &gap_b, &quit,
+            &show, &gap_show, &capture, &gap_a, &record, &ignore, &history, &settings, &gap_b,
+            &quit,
         ],
     )?;
     #[cfg(not(target_os = "linux"))]
     let menu = Menu::with_items(
         app,
-        &[&record, &ignore, &gap_a, &history, &settings, &gap_b, &quit],
+        &[
+            &capture, &gap_a, &record, &ignore, &history, &settings, &gap_b, &quit,
+        ],
     )?;
     let icon = TrayIconBuilder::with_id("clipboard-status")
         .icon(glyph_image(glyph_for(enabled, paused)))
@@ -74,6 +84,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         .build(app)?;
     app.manage(TrayHost {
         icon,
+        capture,
         record,
         ignore,
         history,
@@ -85,6 +96,8 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     });
     let handle = app.clone();
     let _ = app.listen("clipboard://status", move |_| refresh(&handle));
+    let handle = app.clone();
+    let _ = app.listen("screenshot://enabled", move |_| refresh(&handle));
     Ok(())
 }
 
@@ -132,6 +145,8 @@ pub struct TrayLabels {
     ignore_next: String,
     #[serde(default)]
     ignore_next_armed: String,
+    #[serde(default = "default_screenshot_label")]
+    screenshot: String,
     history: String,
     settings: String,
     quit: String,
@@ -151,6 +166,7 @@ impl Default for TrayLabels {
             enable: "开启记录".into(),
             ignore_next: "忽略下一次复制".into(),
             ignore_next_armed: "将忽略下一次复制".into(),
+            screenshot: default_screenshot_label(),
             history: "打开全部历史".into(),
             settings: "设置".into(),
             quit: "退出 Pixo".into(),
@@ -162,8 +178,13 @@ impl Default for TrayLabels {
     }
 }
 
+fn default_screenshot_label() -> String {
+    "截图".into()
+}
+
 struct TrayHost {
     icon: TrayIcon<Wry>,
+    capture: MenuItem<Wry>,
     record: MenuItem<Wry>,
     ignore: MenuItem<Wry>,
     history: MenuItem<Wry>,
@@ -247,8 +268,13 @@ fn on_menu(app: &AppHandle, event: &MenuEvent) {
                 clipboard.arm_ignore_next();
             }
         }
+        "tray-screenshot" => {
+            if crate::screenshot::commands::screenshot_is_enabled(app) {
+                crate::screenshot::commands::screenshot_open_capture(app.clone());
+            }
+        }
         "tray-history" => open_main(app, "/clipboard", false),
-        "tray-settings" => open_main(app, "/settings/clipboard", false),
+        "tray-settings" => open_main(app, "/settings", false),
         "tray-quit" => app.exit(0),
         _ => {}
     }
@@ -268,10 +294,11 @@ fn toggle_record(app: &AppHandle) {
 }
 
 fn main_request_path(path: &str) -> &'static str {
-    if path == "/settings/clipboard" || path == "/clipboard/settings" {
-        "/settings/clipboard"
-    } else {
-        "/clipboard"
+    match path {
+        "/settings" => "/settings",
+        "/settings/clipboard" | "/clipboard/settings" => "/settings/clipboard",
+        "/settings/screenshot" => "/settings/screenshot",
+        _ => "/clipboard",
     }
 }
 
@@ -321,6 +348,14 @@ fn refresh(app: &AppHandle) {
     };
     let _ = host.ignore.set_text(ignore_label);
     let _ = host.ignore.set_enabled(status.enabled);
+    let _ = host.capture.set_text(if labels.screenshot.is_empty() {
+        default_screenshot_label()
+    } else {
+        labels.screenshot.clone()
+    });
+    let _ = host
+        .capture
+        .set_enabled(crate::screenshot::commands::screenshot_is_enabled(app));
     let _ = host.history.set_text(&labels.history);
     let _ = host.settings.set_text(&labels.settings);
     let _ = host.quit.set_text(&labels.quit);
@@ -552,7 +587,8 @@ mod tests {
     }
 
     #[test]
-    fn settings_menu_opens_the_clipboard_tab() {
+    fn settings_menu_opens_the_general_tab() {
+        assert_eq!(main_request_path("/settings"), "/settings");
         assert_eq!(
             main_request_path("/settings/clipboard"),
             "/settings/clipboard"
@@ -560,6 +596,10 @@ mod tests {
         assert_eq!(
             main_request_path("/clipboard/settings"),
             "/settings/clipboard"
+        );
+        assert_eq!(
+            main_request_path("/settings/screenshot"),
+            "/settings/screenshot"
         );
         assert_eq!(main_request_path("/clipboard"), "/clipboard");
         assert_eq!(main_request_path("/other"), "/clipboard");

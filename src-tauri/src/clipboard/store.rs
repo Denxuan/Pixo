@@ -41,7 +41,6 @@ const SELECT_COLUMNS: &str = "id, kind, content_hash, text, files_json, image_wi
 struct ItemRow {
     id: i64,
     kind: String,
-    content_hash: String,
     text: Option<String>,
     files_json: Option<String>,
     image_width: Option<i64>,
@@ -75,7 +74,7 @@ pub struct UpsertRequest<'a> {
 #[derive(Debug)]
 pub enum UpsertResult {
     Added(Summary),
-    Updated { summary: Summary, incremented: bool },
+    Updated { summary: Summary },
     Ignored,
 }
 
@@ -193,10 +192,7 @@ impl Store {
             }
             let summary = load_summary(&transaction, id)?;
             transaction.commit().map_err(storage)?;
-            return Ok(UpsertResult::Updated {
-                summary,
-                incremented: !request.self_write,
-            });
+            return Ok(UpsertResult::Updated { summary });
         }
         if request.self_write {
             transaction.commit().map_err(storage)?;
@@ -617,7 +613,6 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ItemRow> {
     Ok(ItemRow {
         id: row.get(0)?,
         kind: row.get(1)?,
-        content_hash: row.get(2)?,
         text: row.get(3)?,
         files_json: row.get(4)?,
         image_width: row.get(5)?,
@@ -870,27 +865,17 @@ mod tests {
             panic!("expected insert");
         };
         let updated = store.upsert(text_request(hash, "alpha", 2_000)).unwrap();
-        let UpsertResult::Updated {
-            summary: updated,
-            incremented,
-        } = updated
-        else {
+        let UpsertResult::Updated { summary: updated } = updated else {
             panic!("expected update");
         };
-        assert!(incremented);
         assert_eq!(updated.id, summary.id);
         assert_eq!(updated.copy_count, 2);
         let mut request = text_request(hash, "alpha", 3_000);
         request.self_write = true;
         let touched = store.upsert(request).unwrap();
-        let UpsertResult::Updated {
-            summary: touched,
-            incremented,
-        } = touched
-        else {
+        let UpsertResult::Updated { summary: touched } = touched else {
             panic!("expected touch");
         };
-        assert!(!incremented);
         assert_eq!(touched.copy_count, 2);
         assert_eq!(touched.last_copied_at, 3_000);
         let _ = std::fs::remove_dir_all(directory);

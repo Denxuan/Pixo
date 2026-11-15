@@ -173,20 +173,77 @@ fn send_ctrl_v() {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+enum PasteTool {
+    Xdotool,
+    Wtype,
+    Ydotool,
+}
+
+#[cfg(target_os = "linux")]
 fn linux_available() -> Result<(), &'static str> {
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_none() {
-        return Err("unsupported");
+    if paste_tool().is_some() {
+        Ok(())
+    } else {
+        Err("unsupported")
     }
-    std::process::Command::new("xdotool")
-        .arg("--version")
-        .output()
-        .map(|_| ())
-        .map_err(|_| "unsupported")
 }
 
 #[cfg(target_os = "linux")]
 fn send_linux_paste() {
-    let _ = std::process::Command::new("xdotool")
-        .args(["key", "--clearmodifiers", "ctrl+v"])
-        .status();
+    let Some(tool) = paste_tool() else {
+        return;
+    };
+    let mut command = std::process::Command::new(match tool {
+        PasteTool::Xdotool => "xdotool",
+        PasteTool::Wtype => "wtype",
+        PasteTool::Ydotool => "ydotool",
+    });
+    match tool {
+        PasteTool::Xdotool => {
+            command.args(["key", "--clearmodifiers", "ctrl+v"]);
+        }
+        PasteTool::Wtype => {
+            command.args(["-M", "ctrl", "v", "-m", "ctrl"]);
+        }
+        PasteTool::Ydotool => {
+            command.args(["key", "29:1", "47:1", "47:0", "29:0"]);
+        }
+    }
+    let _ = command.status();
+}
+
+#[cfg(target_os = "linux")]
+fn paste_tool() -> Option<PasteTool> {
+    static TOOL: std::sync::OnceLock<Option<PasteTool>> = std::sync::OnceLock::new();
+    *TOOL.get_or_init(|| {
+        if wayland_without_x() {
+            if tool_exists("wtype") {
+                return Some(PasteTool::Wtype);
+            }
+            if tool_exists("ydotool") {
+                return Some(PasteTool::Ydotool);
+            }
+            return None;
+        }
+        tool_exists("xdotool").then_some(PasteTool::Xdotool)
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn wayland_without_x() -> bool {
+    std::env::var_os("DISPLAY").is_none()
+        && (std::env::var_os("WAYLAND_DISPLAY").is_some()
+            || std::env::var("XDG_SESSION_TYPE").ok().as_deref() == Some("wayland"))
+}
+
+#[cfg(target_os = "linux")]
+fn tool_exists(name: &str) -> bool {
+    std::process::Command::new(name)
+        .arg("--help")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok()
 }

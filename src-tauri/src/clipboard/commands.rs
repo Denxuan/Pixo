@@ -131,6 +131,14 @@ pub fn clipboard_set_paused(
 }
 
 #[tauri::command]
+pub fn clipboard_set_enabled(
+    state: State<'_, ClipboardState>,
+    enabled: bool,
+) -> Result<Status, ClipboardError> {
+    state.set_enabled(enabled)
+}
+
+#[tauri::command]
 pub fn clipboard_get_settings(
     state: State<'_, ClipboardState>,
 ) -> Result<Settings, ClipboardError> {

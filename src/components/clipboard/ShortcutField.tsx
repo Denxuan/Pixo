@@ -4,11 +4,15 @@ export default function ShortcutField({
   value,
   macos,
   label,
+  recordingText,
+  modifierText,
   onChange,
 }: {
   value: string;
   macos: boolean;
   label?: string;
+  recordingText?: string;
+  modifierText?: string;
   onChange: (shortcut: string) => void;
 }) {
   const { t } = useTranslation();
@@ -41,7 +45,7 @@ export default function ShortcutField({
     <Flex vertical gap={4}>
       <Input
         readOnly
-        value={recording ? t("zdx.text.clipboard.shortcutRecording") : formatShortcut(value, macos)}
+        value={recording ? (recordingText ?? t("zdx.text.clipboard.shortcutRecording")) : formatShortcut(value, macos)}
         aria-label={label ?? t("zdx.label.clipboard.shortcut")}
         onFocus={() => {
           setRecording(true);
@@ -50,7 +54,7 @@ export default function ShortcutField({
         onBlur={() => setRecording(false)}
         onKeyDown={onKeyDown}
       />
-      {needsModifier ? <Typography.Text type="secondary">{t("zdx.text.clipboard.shortcutNeedModifier")}</Typography.Text> : null}
+      {needsModifier ? <Typography.Text type="secondary">{modifierText ?? t("zdx.text.clipboard.shortcutNeedModifier")}</Typography.Text> : null}
     </Flex>
   );
 }

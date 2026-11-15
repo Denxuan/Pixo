@@ -53,6 +53,24 @@ pub trait Platform: Send + Sync {
     fn read_now(&self) -> Result<Capture, ClipboardError>;
     fn write_text(&self, text: &RichText) -> Result<(), ClipboardError>;
     fn write_image(&self, width: u32, height: u32, rgba: &[u8]) -> Result<(), ClipboardError>;
+    fn accepts_png_bytes(&self) -> bool {
+        false
+    }
+    fn write_png(&self, png: &[u8]) -> Result<(), ClipboardError> {
+        let _ = png;
+        Err(ClipboardError::new("unsupported"))
+    }
+    /// Put animated GIF bytes on the clipboard as image data. The still PNG is a
+    /// fallback for targets that only accept a bitmap. This must not offer a file URL.
+    fn write_gif(&self, gif: &[u8], png: &[u8]) -> Result<(), ClipboardError> {
+        let _ = gif;
+        if self.accepts_png_bytes() {
+            return self.write_png(png);
+        }
+        let (width, height, rgba) = crate::clipboard::util::decode_png(png)
+            .map_err(|_| ClipboardError::new("invalid_input"))?;
+        self.write_image(width, height, &rgba)
+    }
     fn write_files(&self, paths: &[String]) -> Result<(), ClipboardError>;
     fn prepare_file_path(&self, path: &str) -> Option<String> {
         let path = path.trim();
@@ -83,7 +101,15 @@ pub fn installed_apps() -> Vec<InstalledApp> {
     {
         macos::installed_apps()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows::installed_apps()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::installed_apps()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         Vec::new()
     }
@@ -94,7 +120,15 @@ pub fn source_mark(source: &str) -> Option<SourceMark> {
     {
         macos::source_mark(source)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows::source_mark(source)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::source_mark(source)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = source;
         None

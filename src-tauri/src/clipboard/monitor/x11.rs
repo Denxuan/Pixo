@@ -39,6 +39,7 @@ enum Owned {
     None,
     Text(OwnedText),
     Png(Vec<u8>),
+    Gif { gif: Vec<u8>, png: Vec<u8> },
     Files { uri_list: Vec<u8>, text: Vec<u8> },
 }
 
@@ -47,6 +48,7 @@ struct Atoms {
     targets: Atom,
     utf8: Atom,
     png: Atom,
+    gif: Atom,
     uri_list: Atom,
     gnome: Atom,
     secret: Atom,
@@ -140,6 +142,16 @@ impl X11Backend {
     pub fn write_image(&self, width: u32, height: u32, rgba: &[u8]) -> Result<(), ClipboardError> {
         let png = encode_png(width, height, rgba).map_err(|_| ClipboardError::new("storage"))?;
         self.write(Owned::Png(png))
+    }
+
+    pub fn write_gif(&self, gif: &[u8], png: &[u8]) -> Result<(), ClipboardError> {
+        if !crate::clipboard::util::is_gif(gif) {
+            return Err(ClipboardError::new("invalid_input"));
+        }
+        self.write(Owned::Gif {
+            gif: gif.to_vec(),
+            png: png.to_vec(),
+        })
     }
 
     pub fn write_files(&self, paths: &[String]) -> Result<(), ClipboardError> {
@@ -263,6 +275,7 @@ impl Context {
             targets: intern(&conn, b"TARGETS")?,
             utf8: intern(&conn, b"UTF8_STRING")?,
             png: intern(&conn, b"image/png")?,
+            gif: intern(&conn, b"image/gif")?,
             uri_list: intern(&conn, b"text/uri-list")?,
             gnome: intern(&conn, b"x-special/gnome-copied-files")?,
             secret: intern(&conn, b"x-kde-passwordManagerHint")?,
@@ -669,6 +682,7 @@ impl Context {
                 }
             }
             Owned::Png(_) => targets.push(self.atoms.png),
+            Owned::Gif { .. } => targets.extend([self.atoms.gif, self.atoms.png]),
             Owned::Files { .. } => {
                 targets.extend([self.atoms.uri_list, self.atoms.utf8, self.atoms.plain])
             }
@@ -688,6 +702,8 @@ impl Context {
             Owned::Text(text) if target == self.atoms.html => text.html.clone(),
             Owned::Text(text) if target == self.atoms.rtf => text.rtf.clone(),
             Owned::Png(bytes) if target == self.atoms.png => Some(bytes.clone()),
+            Owned::Gif { gif, .. } if target == self.atoms.gif => Some(gif.clone()),
+            Owned::Gif { png, .. } if target == self.atoms.png => Some(png.clone()),
             Owned::Files { uri_list, text } if target == self.atoms.uri_list => {
                 Some(uri_list.clone())
             }

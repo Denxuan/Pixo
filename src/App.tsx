@@ -9,6 +9,10 @@ import { isDesktop } from "@/utils/desktop";
 import { isDarkTheme } from "@/utils/theme";
 
 const ClipboardPanel = lazy(() => import("@/pages/ClipboardPanel"));
+const ScreenshotOverlay = lazy(() => import("@/pages/ScreenshotOverlay"));
+const ScreenshotPin = lazy(() => import("@/pages/ScreenshotPin"));
+const ScreenshotRecorder = lazy(() => import("@/pages/ScreenshotRecorder"));
+const ScreenshotScrollHud = lazy(() => import("@/pages/ScreenshotScrollHud"));
 const AppRouter = lazy(() => import("@/router"));
 
 const colorScheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -17,13 +21,19 @@ const subscribe = (onChange: () => void) => {
   return () => colorScheme.removeEventListener("change", onChange);
 };
 
-function isClipboardPanel() {
-  if (!isDesktop()) return false;
+function useSurface(): "app" | "panel" | "overlay" | "pin" | "recorder" | "scroll" {
+  if (!isDesktop()) return "app";
   try {
-    return getCurrentWindow().label === "clipboard-panel";
+    const label = getCurrentWindow().label;
+    if (label === "clipboard-panel") return "panel";
+    if (label === "screenshot-recorder") return "recorder";
+    if (label === "screenshot-scroll") return "scroll";
+    if (label.startsWith("screenshot-overlay-")) return "overlay";
+    if (label.startsWith("screenshot-pin-")) return "pin";
   } catch {
-    return false;
+    return "app";
   }
+  return "app";
 }
 
 function useSettingsHydrated() {
@@ -37,13 +47,14 @@ function useSettingsHydrated() {
 export default function App() {
   const mode = useSettingsStore((state) => state.mode);
   const systemDark = useSyncExternalStore(subscribe, () => colorScheme.matches);
-  const dark = isDarkTheme(mode, systemDark);
-  const panel = isClipboardPanel();
+  const surface = useSurface();
+  const appWindow = surface === "app";
   const hydrated = useSettingsHydrated();
-  useSharedSettings(!panel);
+  useSharedSettings(appWindow);
+  const dark = surface === "overlay" || surface === "pin" || isDarkTheme(mode, systemDark);
 
   useEffect(() => {
-    if (!isDesktop() || panel || !hydrated) return;
+    if (!isDesktop() || !appWindow || !hydrated) return;
     void setBackground(useSettingsStore.getState().background).catch((error) => {
       console.error("Failed to apply background mode", error);
       useSettingsStore.getState().setBackground(false);
@@ -52,20 +63,20 @@ export default function App() {
     void setTrayIcon(isTrayIcon(trayIcon) ? trayIcon : "board").catch((error) => {
       console.error("Failed to apply taskbar icon", error);
     });
-  }, [hydrated, panel]);
+  }, [appWindow, hydrated]);
 
   useEffect(() => {
-    if (!isDesktop() || panel || !hydrated) return;
+    if (!isDesktop() || !appWindow || !hydrated) return;
     const current = getCurrentWindow();
     void current.setTheme(mode === "system" ? null : dark ? "dark" : "light").catch(() => undefined);
     void current.setBackgroundColor(dark ? "#000000" : "#f5f5f5").catch(() => undefined);
-  }, [dark, hydrated, mode, panel]);
+  }, [appWindow, dark, hydrated, mode]);
 
   return (
     <ConfigProvider theme={{ algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm }}>
-      <div className={dark ? "dark h-full overflow-hidden" : "h-full overflow-hidden"} style={{ colorScheme: dark ? "dark" : "light", background: panel ? "transparent" : undefined }}>
-        <Suspense fallback={panel ? null : <BootScreen />}>
-          {panel ? <ClipboardPanel /> : <AppRouter />}
+      <div className={dark ? "dark h-full overflow-hidden" : "h-full overflow-hidden"} style={{ colorScheme: dark ? "dark" : "light", background: surface === "panel" || surface === "recorder" ? "transparent" : surface === "scroll" ? "#1c1c1c" : appWindow ? undefined : "#000" }}>
+        <Suspense fallback={appWindow ? <BootScreen /> : null}>
+          {surface === "recorder" ? <ScreenshotRecorder /> : surface === "scroll" ? <ScreenshotScrollHud /> : surface === "overlay" ? <ScreenshotOverlay /> : surface === "pin" ? <ScreenshotPin /> : surface === "panel" ? <ClipboardPanel /> : <AppRouter />}
         </Suspense>
       </div>
     </ConfigProvider>
