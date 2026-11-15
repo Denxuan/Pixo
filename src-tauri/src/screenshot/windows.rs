@@ -885,6 +885,7 @@ pub fn settle_after_shot(app: &AppHandle, windows: &[(String, bool)], previous: 
         .run_on_main_thread(move || {
             conceal_overlays(&app);
             restore_own_windows(&app, &windows, previous.as_deref());
+            #[cfg(target_os = "macos")]
             if let Some(bundle) = previous.as_deref() {
                 return_to_app(bundle);
             }

@@ -40,7 +40,7 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libwayland-dev libxkbcommon-dev libssl-dev libfuse2
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libwayland-dev libxkbcommon-dev libssl-dev libfuse2 libpipewire-0.3-dev
       - run: node .github/scripts/release-version.mjs
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
