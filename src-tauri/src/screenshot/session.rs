@@ -1226,10 +1226,6 @@ fn load_settings(app: &AppHandle) -> Result<ShotSettings, ScreenshotError> {
     let path = settings_path(app)?;
     if let Ok(bytes) = fs::read(&path) {
         if let Ok(mut settings) = serde_json::from_slice::<ShotSettings>(&bytes) {
-            if settings.shortcut == super::model::REPLACED_SHORTCUT {
-                settings.shortcut = super::model::DEFAULT_SHORTCUT.into();
-                let _ = save_settings(app, &settings);
-            }
             if settings.save_dir.trim().is_empty() {
                 settings.save_dir = default_save_dir(app);
                 let _ = save_settings(app, &settings);

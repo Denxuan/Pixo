@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use super::error::ScreenshotError;
 
 pub const DEFAULT_SHORTCUT: &str = "CommandOrControl+Alt+A";
-pub const REPLACED_SHORTCUT: &str = "CommandOrControl+Shift+A";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
