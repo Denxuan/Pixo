@@ -303,6 +303,20 @@ fn ocr_failed(error: impl std::fmt::Display) -> ScreenshotError {
 }
 
 #[cfg(target_os = "linux")]
+fn png_size(bytes: &[u8]) -> (u32, u32) {
+    if bytes.len() < 24 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" || &bytes[12..16] != b"IHDR" {
+        return (1, 1);
+    }
+    let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap_or([0, 0, 0, 1]));
+    let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap_or([0, 0, 0, 1]));
+    if width == 0 || height == 0 {
+        (1, 1)
+    } else {
+        (width, height)
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn tesseract_installed() -> bool {
     static READY: OnceLock<bool> = OnceLock::new();
     *READY.get_or_init(|| {
@@ -324,7 +338,7 @@ fn linux_read_text(job: &Job, bytes: &[u8]) -> Result<String, ScreenshotError> {
         return Err(unsupported_ocr());
     }
     let languages = tesseract_languages();
-    let (width, height) = crate::clipboard::util::png_dimensions(bytes).unwrap_or((1, 1));
+    let (width, height) = png_size(bytes);
     let table = run_tesseract(bytes, &languages, true)?;
     if job.stopped() {
         return Err(ScreenshotError::new("cancelled"));

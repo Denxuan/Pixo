@@ -417,11 +417,11 @@ impl Context {
             return;
         };
         if reply.value.is_empty() {
-            let (target, data) = match &self.pending {
+            let data = match &self.pending {
                 Some(Pending {
-                    stage: Stage::Incremental { target, data },
+                    stage: Stage::Incremental { data, .. },
                     ..
-                }) => (*target, data.clone()),
+                }) => data.clone(),
                 _ => return,
             };
             self.consume_bytes(events, data);
