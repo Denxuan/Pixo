@@ -1,4 +1,4 @@
-import type { EditorDocument, Mark, Point, Rect, StrokeSize, Watermark } from "@/types/screenshot";
+import type { EditorDocument, Mark, PaletteColor, Point, Rect, StrokeSize, Watermark } from "@/types/screenshot";
 
 export const CLICK_THRESHOLD = 4;
 export const TOOLBAR_HEIGHT = 40;
@@ -13,8 +13,13 @@ export const PALETTE = {
   green: "#30A46C",
   blue: "#3B82F6",
   black: "#1C1C1C",
+  gray: "#8E8E93",
   white: "#FFFFFF",
 } as const;
+
+export function inkOn(color: PaletteColor) {
+  return color === "yellow" || color === "white" ? "#1C1C1C" : "#FFFFFF";
+}
 
 const STROKE: Record<StrokeSize, number> = { sm: 2, md: 4, lg: 8 };
 const TEXT_SIZE: Record<StrokeSize, number> = { sm: 14, md: 22, lg: 32 };
@@ -61,6 +66,7 @@ export function sameInkMark(left: Mark, right: Mark) {
       && Math.abs(left.w - right.w) < 0.5
       && left.text === right.text
       && left.color === right.color
+      && (left.form ?? "plain") === (right.form ?? "plain")
       && Math.abs(left.fontSize - right.fontSize) < 0.5;
   }
   if (left.kind === "tag" && right.kind === "tag") {
@@ -182,6 +188,29 @@ export function windowLocal(window: { x: number; y: number; width: number; heigh
   return { x: window.x - monitor.x, y: window.y - monitor.y, w: window.width, h: window.height };
 }
 
+export function placeCameraBubble(selection: Box, margin = 16, side = 168, min = 72): Box | null {
+  const room = Math.min(selection.w, selection.h) - margin * 2;
+  const size = Math.min(side, room);
+  if (size < min) return null;
+  return {
+    x: selection.x + selection.w - margin - size,
+    y: selection.y + selection.h - margin - size,
+    w: size,
+    h: size,
+  };
+}
+
+export function placeRecordCard(selection: Box, card: { w: number; h: number }, workspace: Box): { x: number; y: number } {
+  const minX = workspace.x;
+  const minY = workspace.y;
+  const maxX = Math.max(minX, workspace.x + workspace.w - card.w);
+  const maxY = Math.max(minY, workspace.y + workspace.h - card.h);
+  return {
+    x: Math.min(Math.max(selection.x + (selection.w - card.w) / 2, minX), maxX),
+    y: Math.min(Math.max(selection.y + (selection.h - card.h) / 2, minY), maxY),
+  };
+}
+
 export function placeToolbar(selection: Box, toolbar: { w: number; h: number }, workspace: Box, gap = 8): { x: number; y: number; side: ToolbarSide } {
   const minX = workspace.x;
   const maxX = Math.max(minX, workspace.x + workspace.w - toolbar.w);
@@ -202,6 +231,39 @@ export function placePropertyBar(
 ): { x: number; y: number } {
   if (side === "above") return { x: toolbar.x, y: toolbar.y + toolbar.h + gap };
   return { x: toolbar.x, y: toolbar.y - gap - bar.h };
+}
+
+export function placeAttachedProperty(
+  toolbar: { x: number; y: number; h: number },
+  bar: { h: number },
+  workspace: Box,
+  prefer: "above" | "below",
+  gap = 6,
+): { x: number; y: number } {
+  const above = { x: toolbar.x, y: toolbar.y - gap - bar.h };
+  const below = { x: toolbar.x, y: toolbar.y + toolbar.h + gap };
+  const fits = (y: number) => y >= workspace.y && y + bar.h <= workspace.y + workspace.h;
+  const first = prefer === "below" ? below : above;
+  const second = prefer === "below" ? above : below;
+  if (fits(first.y)) return first;
+  if (fits(second.y)) return second;
+  return first;
+}
+
+export function placeOuterPropertyBar(
+  toolbar: { x: number; y: number; h: number },
+  bar: { h: number },
+  side: ToolbarSide,
+  workspace: Box,
+  gap = 6,
+): { x: number; y: number } {
+  const outer = side === "above"
+    ? { x: toolbar.x, y: toolbar.y - gap - bar.h }
+    : { x: toolbar.x, y: toolbar.y + toolbar.h + gap };
+  const minY = workspace.y;
+  const maxY = workspace.y + workspace.h - bar.h;
+  if (outer.y >= minY && outer.y <= maxY) return outer;
+  return placePropertyBar(toolbar, bar, side, gap);
 }
 
 export function placeMagnifier(pointer: Point, bounds: Box, box: { w: number; h: number } = { w: MAGNIFIER_SIZE, h: MAGNIFIER_SIZE }, offset = 16): Point {

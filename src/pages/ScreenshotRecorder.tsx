@@ -136,7 +136,13 @@ export default function ScreenshotRecorder() {
 
   useEffect(() => {
     if (phase !== "saved" || format !== "mp4") return;
-    void videoRef.current?.play().catch(() => undefined);
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = false;
+    void video.play().catch(() => {
+      video.muted = true;
+      void video.play().catch(() => undefined);
+    });
   }, [phase, format, mediaUrl]);
 
   useEffect(() => {
@@ -253,7 +259,7 @@ export default function ScreenshotRecorder() {
       >
         {mediaUrl && format === "mp4" ? (
           <PreviewViewport zoom={zoom}>
-            <video ref={videoRef} src={mediaUrl} aria-label={t("zdx.label.screenshot.recordPreview")} className="pointer-events-none h-full w-full object-contain" autoPlay muted loop playsInline />
+            <video ref={videoRef} src={mediaUrl} aria-label={t("zdx.label.screenshot.recordPreview")} className="pointer-events-none h-full w-full object-contain" autoPlay loop playsInline />
           </PreviewViewport>
         ) : mediaUrl ? (
           <PreviewViewport zoom={zoom}>

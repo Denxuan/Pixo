@@ -121,6 +121,9 @@ pub fn run() {
             screenshot::commands::screenshot_pin_close,
             screenshot::commands::screenshot_open_capture,
             screenshot::commands::screenshot_record_start,
+            screenshot::commands::screenshot_audio_devices,
+            screenshot::commands::screenshot_camera_open,
+            screenshot::commands::screenshot_camera_close,
             screenshot::commands::screenshot_record_stop,
             screenshot::commands::screenshot_record_preview,
             screenshot::commands::screenshot_record_download,
@@ -146,9 +149,9 @@ pub(crate) fn ensure_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
 
 fn window_canvas() -> Color {
     if startup_dark() {
-        Color(0, 0, 0, 255)
+        Color(16, 16, 18, 255)
     } else {
-        Color(245, 245, 245, 255)
+        Color(243, 244, 246, 255)
     }
 }
 

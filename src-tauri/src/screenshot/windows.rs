@@ -12,7 +12,7 @@ static PARKED_FRAMES: Mutex<Vec<(String, f64, f64, f64, f64)>> = Mutex::new(Vec:
 /// Desktop frame stashed while the overlay paints off-screen.
 #[cfg(target_os = "macos")]
 static PENDING_FRAMES: Mutex<Vec<(String, f64, f64, f64, f64)>> = Mutex::new(Vec::new());
-/// Where a capture overlay belongs on the desktop. The window itself stays off-screen until reveal.
+/// Where a capture overlay belongs on the desktop.
 #[cfg(target_os = "macos")]
 static HOME_FRAMES: Mutex<Vec<(String, f64, f64, f64, f64)>> = Mutex::new(Vec::new());
 
@@ -28,6 +28,27 @@ fn capture_home_frame(x: f64, y: f64, width: f64, height: f64) -> Option<(f64, f
     } else {
         None
     }
+}
+
+/// The frozen capture can sit on the desktop only when this shot's picture is
+/// already in front of the webview and we know the display rect. Otherwise the
+/// window stays off-screen, where a black page cannot flash.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn should_show_frozen(covered: bool, has_home: bool) -> bool {
+    covered && has_home
+}
+
+/// A cover the page never took over must leave the desktop. A newer shot, a pin,
+/// a scroll, or a page that already revealed keeps its window.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn should_park_unrevealed(
+    current: Option<u64>,
+    revealed: bool,
+    pinned: bool,
+    parked: bool,
+    ticket: u64,
+) -> bool {
+    current == Some(ticket) && !revealed && !pinned && !parked
 }
 
 fn is_pinned(label: &str) -> bool {
@@ -251,11 +272,16 @@ fn create_overlay(
 }
 
 fn position_overlay(window: &tauri::WebviewWindow, left: f64, top: f64, width: f64, height: f64) {
-    forget_parked_frame(&window.label());
+    forget_parked_frame(window.label());
     #[cfg(target_os = "macos")]
     {
-        prepare_capture_window(window);
-        park_capture_offscreen(window, left, top, width, height);
+        let window = window.clone();
+        let app = window.app_handle().clone();
+        // Capture now runs off the main thread. AppKit frame changes cannot.
+        on_main(&app, move || {
+            prepare_capture_window(&window);
+            park_capture_offscreen(&window, left, top, width, height);
+        });
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -267,8 +293,7 @@ fn position_overlay(window: &tauri::WebviewWindow, left: f64, top: f64, width: f
 }
 
 pub fn arm_labels(app: &AppHandle, labels: &[String], frames: &[Vec<u8>], session: u64) {
-    #[cfg(not(target_os = "macos"))]
-    let _ = frames;
+    let mut windows = Vec::new();
     for label in labels {
         if is_pinned(label) {
             continue;
@@ -277,15 +302,98 @@ pub fn arm_labels(app: &AppHandle, labels: &[String], frames: &[Vec<u8>], sessio
             continue;
         };
         // The page may still be showing the last pin. Remember which session
-        // this window belongs to, and put that session's picture in front.
+        // this window belongs to before its picture is put in front.
         remember_armed(label, session);
-        #[cfg(target_os = "macos")]
-        if let Some(slot) = monitor_slot(label) {
-            if let Some(frame) = frames.get(slot) {
-                install_shot_cover(&window, frame);
-            }
+        windows.push(window);
+    }
+    #[cfg(target_os = "macos")]
+    place_armed_windows(app, windows, frames);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = frames;
+        for window in &windows {
+            arm(window, false);
         }
-        arm(&window);
+    }
+}
+
+/// Install each cover and, when it lands, show that frozen picture immediately.
+/// The webview used to stay off-screen until it had copied the whole frame.
+#[cfg(target_os = "macos")]
+fn place_armed_windows(app: &AppHandle, windows: Vec<tauri::WebviewWindow>, frames: &[Vec<u8>]) {
+    use objc2::MainThreadMarker;
+    fn place(window: &tauri::WebviewWindow, frame: Option<&[u8]>) {
+        let covered = frame.is_some_and(|bytes| install_shot_cover(window, bytes));
+        arm(window, covered);
+    }
+    // Already on the main thread: use the frame in place. Hopping would copy
+    // another full-screen buffer for no reason.
+    if MainThreadMarker::new().is_some() {
+        for window in &windows {
+            let frame = monitor_slot(window.label())
+                .and_then(|slot| frames.get(slot))
+                .map(Vec::as_slice);
+            place(window, frame);
+        }
+        return;
+    }
+    let owned: Vec<(tauri::WebviewWindow, Option<Vec<u8>>)> = windows
+        .into_iter()
+        .map(|window| {
+            let frame = monitor_slot(window.label())
+                .and_then(|slot| frames.get(slot))
+                .cloned();
+            (window, frame)
+        })
+        .collect();
+    on_main(app, move || {
+        for (window, frame) in &owned {
+            place(window, frame.as_deref());
+        }
+    });
+}
+
+/// Hide the app's own windows on the main thread and report which were visible.
+/// AppKit calls stay here; tao's hide() from a waited callback deadlocks.
+pub fn hide_app_windows(app: &AppHandle, labels: &[String], hide: bool) -> Vec<(String, bool)> {
+    #[cfg(target_os = "macos")]
+    {
+        let labels = labels.to_vec();
+        let app_for_work = app.clone();
+        return on_main(app, move || {
+            let mut hidden = Vec::with_capacity(labels.len());
+            for label in labels {
+                let Some(window) = app_for_work.get_webview_window(&label) else {
+                    continue;
+                };
+                let Some(ns_window) = retained(&window) else {
+                    hidden.push((label, false));
+                    continue;
+                };
+                let visible = ns_window.isVisible();
+                if hide && visible {
+                    ns_window.orderOut(None);
+                }
+                hidden.push((label, visible));
+            }
+            hidden
+        })
+        .unwrap_or_default();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut hidden = Vec::with_capacity(labels.len());
+        for label in labels {
+            let Some(window) = app.get_webview_window(label) else {
+                continue;
+            };
+            let visible = window.is_visible().unwrap_or(false);
+            if hide && visible {
+                let _ = window.hide();
+            }
+            hidden.push((label.clone(), visible));
+        }
+        hidden
     }
 }
 
@@ -503,6 +611,7 @@ pub fn reveal_capture_overlays(app: &AppHandle) {
 }
 
 const RECORDER_LABEL: &str = "screenshot-recorder";
+const CAMERA_LABEL: &str = "screenshot-camera";
 const SCROLL_LABEL: &str = "screenshot-scroll";
 const SCROLL_FRAME_LABELS: [&str; 4] = [
     "screenshot-scroll-frame-top",
@@ -571,6 +680,128 @@ pub fn close_recorder(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(RECORDER_LABEL) {
         conceal(&window);
     }
+}
+
+fn camera_page(device_id: &str) -> String {
+    let device_id = device_id.trim();
+    if device_id.is_empty() {
+        return "index.html?view=camera".to_string();
+    }
+    format!("index.html?view=camera&device={}", encode_query(device_id))
+}
+
+fn encode_query(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+fn tell_camera(window: &tauri::WebviewWindow, device_id: &str) {
+    let detail = serde_json::to_string(device_id.trim()).unwrap_or_else(|_| "\"\"".to_string());
+    let script = format!(
+        "window.__pixoCameraDevice={detail};window.dispatchEvent(new CustomEvent('pixo-camera',{{detail:{detail}}}));"
+    );
+    let _ = window.eval(&script);
+}
+
+fn camera_window(
+    app: &AppHandle,
+    left: f64,
+    top: f64,
+    size: f64,
+    device_id: &str,
+) -> Result<tauri::WebviewWindow, ScreenshotError> {
+    if let Some(window) = app.get_webview_window(CAMERA_LABEL) {
+        tell_camera(&window, device_id);
+        return Ok(window);
+    }
+    WebviewWindowBuilder::new(
+        app,
+        CAMERA_LABEL,
+        WebviewUrl::App(camera_page(device_id).into()),
+    )
+    .title("Pixo")
+    .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .visible(false)
+    .focused(false)
+    .position(left, top)
+    .inner_size(size, size)
+    .min_inner_size(1.0, 1.0)
+    .background_color(tauri::window::Color(0, 0, 0, 0))
+    .build()
+    .map_err(|error| {
+        eprintln!("screenshot camera: {error}");
+        ScreenshotError::new("capture_failed")
+    })
+}
+
+pub fn open_camera(
+    app: &AppHandle,
+    left: f64,
+    top: f64,
+    size: f64,
+    device_id: &str,
+) -> Result<(), ScreenshotError> {
+    let window = camera_window(app, left, top, size, device_id)?;
+    raise_camera(&window, left, top, size);
+    #[cfg(not(target_os = "macos"))]
+    {
+        use tauri::{LogicalPosition, LogicalSize};
+        let _ = window.set_position(LogicalPosition::new(left, top));
+        let _ = window.set_size(LogicalSize::new(size, size));
+        let _ = window.set_ignore_cursor_events(true);
+    }
+    show_content(&window);
+    let _ = window.show();
+    order_front(&window);
+    #[cfg(target_os = "macos")]
+    if let Some(ns_window) = retained(&window) {
+        ns_window.setIgnoresMouseEvents(true);
+    }
+    Ok(())
+}
+
+pub fn close_camera(app: &AppHandle) {
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        if let Some(window) = app.get_webview_window(CAMERA_LABEL) {
+            let _ = window.close();
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn raise_camera(window: &tauri::WebviewWindow, x: f64, y: f64, size: f64) {
+    use objc2_app_kit::{NSScreenSaverWindowLevel, NSWindowCollectionBehavior};
+    let Some(ns_window) = retained(window) else {
+        return;
+    };
+    ns_window.setLevel(NSScreenSaverWindowLevel + 1);
+    ns_window.setCollectionBehavior(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary
+            | NSWindowCollectionBehavior::Stationary,
+    );
+    ns_window.setHidesOnDeactivate(false);
+    ns_window.setMovable(false);
+    place_frame(&ns_window, x, y, size, size);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn raise_camera(window: &tauri::WebviewWindow, _x: f64, _y: f64, _size: f64) {
+    let _ = window.set_always_on_top(true);
 }
 
 fn scroll_hud_window(
@@ -1003,12 +1234,32 @@ fn restore_own_windows(app: &AppHandle, windows: &[(String, bool)], previous: Op
             if previous.is_some() {
                 show_without_activating(&window);
             } else {
+                // AppKit, not tao show(): this runs inside the waited main-thread callback.
+                #[cfg(target_os = "macos")]
+                focus_overlay(&window);
+                #[cfg(not(target_os = "macos"))]
                 let _ = window.show();
             }
-        } else if window.is_visible().unwrap_or(false) {
+        } else if own_window_visible(&window) {
             // Focusing the overlay activates the process and can surface the main window.
+            #[cfg(target_os = "macos")]
+            if let Some(ns_window) = retained(&window) {
+                ns_window.orderOut(None);
+            }
+            #[cfg(not(target_os = "macos"))]
             let _ = window.hide();
         }
+    }
+}
+
+fn own_window_visible(window: &tauri::WebviewWindow) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        retained(window).is_some_and(|ns_window| ns_window.isVisible())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.is_visible().unwrap_or(false)
     }
 }
 
@@ -1096,6 +1347,8 @@ pub fn reveal(window: &tauri::WebviewWindow) {
     }
     #[cfg(target_os = "macos")]
     {
+        // The page has the picture. A late fallback must not park this window.
+        mark_cover_revealed(window.label());
         restore_pending_frame(window);
         include_in_capture(window);
     }
@@ -1126,19 +1379,28 @@ fn wants_capture_focus(label: &str) -> bool {
     label.starts_with("screenshot-overlay-m") && is_pinned("screenshot-overlay-1")
 }
 
-fn arm(window: &tauri::WebviewWindow) {
+fn arm(window: &tauri::WebviewWindow, covered: bool) {
     if CAPTURE_PARKED.load(Ordering::Acquire) {
         return;
     }
-    // The page background is black until the frozen frame is painted.
-    // Keep the full-size window off the desktop so that wait is invisible.
-    // Alpha 0 is not a substitute: on this opaque window it is a black sheet.
+    // A cover is this capture, so the window can be on the desktop at once.
+    // Without one, the page is still black: alpha 0 on this opaque window is a
+    // black sheet, and the window stays off-screen instead.
+    #[cfg(target_os = "macos")]
+    let has_home = named_frame(&HOME_FRAMES, window.label()).is_some();
+    #[cfg(not(target_os = "macos"))]
+    let has_home = false;
+    if should_show_frozen(covered, has_home) {
+        #[cfg(target_os = "macos")]
+        if let Some(home) = named_frame(&HOME_FRAMES, window.label()) {
+            present_covered(window, home);
+            return;
+        }
+    }
     #[cfg(target_os = "macos")]
     {
-        // conceal drops the pending rect. The window is already off-screen,
-        // so the saved home is the only place reveal can put it back.
-        if let Some(home) = named_frame(&HOME_FRAMES, &window.label()) {
-            remember_pending_frame(&window.label(), home);
+        if let Some(home) = named_frame(&HOME_FRAMES, window.label()) {
+            remember_pending_frame(window.label(), home);
         }
         include_in_capture(window);
         show_content(window);
@@ -1149,6 +1411,31 @@ fn arm(window: &tauri::WebviewWindow) {
     let _ = window.hide();
 }
 
+/// Put the covered window on its display without going through tao's show().
+/// show() waits on the main queue, and this runs inside that queue.
+#[cfg(target_os = "macos")]
+fn present_covered(window: &tauri::WebviewWindow, home: (f64, f64, f64, f64)) {
+    remember_pending_frame(window.label(), home);
+    include_in_capture(window);
+    let Some(ns_window) = retained(window) else {
+        return;
+    };
+    ns_window.setAlphaValue(1.0);
+    // Clicks pass through the cover. Ignore them until the page has this frame,
+    // so they cannot land on the previous pin.
+    ns_window.setIgnoresMouseEvents(true);
+    restore_pending_frame(window);
+    order_front(window);
+    if wants_capture_focus(window.label()) {
+        focus_overlay(window);
+    }
+    if let Some(ns_window) = retained(window) {
+        ns_window.setIgnoresMouseEvents(true);
+        ns_window.displayIfNeeded();
+    }
+    schedule_present_timeout(window);
+}
+
 fn conceal(window: &tauri::WebviewWindow) {
     let label = window.label();
     forget_pending_frame(&label);
@@ -1156,7 +1443,16 @@ fn conceal(window: &tauri::WebviewWindow) {
     // Recording finishes on a background thread. AppKit throws if these run
     // there, and that exception aborts the process.
     #[cfg(target_os = "macos")]
-    order_out_on_main(window);
+    {
+        order_out_on_main(window);
+        // tao's hide() runs inline on the main thread. Inside a waited
+        // main-thread callback that call deadlocks, so only queue it from
+        // a background thread.
+        if objc2::MainThreadMarker::new().is_none() {
+            let _ = window.hide();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
     let _ = window.hide();
 }
 
@@ -1567,6 +1863,10 @@ static COVER_TICKETS: Mutex<Vec<(String, u64)>> = Mutex::new(Vec::new());
 #[cfg(target_os = "macos")]
 static COVER_NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// Covers whose page has called reveal. The fallback must not park those.
+#[cfg(target_os = "macos")]
+static REVEALED_COVERS: Mutex<Vec<(String, u64)>> = Mutex::new(Vec::new());
+
 #[cfg(target_os = "macos")]
 fn note_cover(label: &str) -> u64 {
     let ticket = COVER_NEXT.fetch_add(1, Ordering::Relaxed);
@@ -1635,27 +1935,27 @@ mod shot_cover {
 /// Paint this capture in front of the webview. The webview keeps the previous
 /// pin until it composites, and that layer is what used to flash on screen.
 #[cfg(target_os = "macos")]
-fn install_shot_cover(window: &tauri::WebviewWindow, encoded: &[u8]) {
+fn install_shot_cover(window: &tauri::WebviewWindow, encoded: &[u8]) -> bool {
     use objc2::{AnyThread, MainThreadMarker};
     use objc2_app_kit::{NSBitmapImageRep, NSDeviceRGBColorSpace, NSImage, NSView};
     use objc2_foundation::{NSPoint, NSRect, NSSize};
     let Ok((width, height, _)) = super::frame::header(encoded) else {
-        return;
+        return false;
     };
     let pixels = &encoded[16..];
     let Some(marker) = MainThreadMarker::new() else {
-        return;
+        return false;
     };
     let Some(ns_window) = retained(window) else {
-        return;
+        return false;
     };
     let Some(content) = ns_window.contentView() else {
-        return;
+        return false;
     };
     remove_shot_cover(window);
     let row = (width as usize).saturating_mul(4);
     if height == 0 || pixels.len() != row.saturating_mul(height as usize) {
-        return;
+        return false;
     }
     let Some(rep) = (unsafe {
         NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
@@ -1672,11 +1972,11 @@ fn install_shot_cover(window: &tauri::WebviewWindow, encoded: &[u8]) {
             32,
         )
     }) else {
-        return;
+        return false;
     };
     let dest = rep.bitmapData();
     if dest.is_null() {
-        return;
+        return false;
     }
     let stride = rep.bytesPerRow().max(0) as usize;
     unsafe {
@@ -1691,7 +1991,7 @@ fn install_shot_cover(window: &tauri::WebviewWindow, encoded: &[u8]) {
                 );
             }
         } else {
-            return;
+            return false;
         }
     }
     let mut bounds = content.bounds();
@@ -1724,6 +2024,61 @@ fn install_shot_cover(window: &tauri::WebviewWindow, encoded: &[u8]) {
     );
     note_cover(&window.label());
     clear_webview_page(&content);
+    true
+}
+
+#[cfg(target_os = "macos")]
+fn mark_cover_revealed(label: &str) {
+    let Some(ticket) = cover_ticket(label) else {
+        return;
+    };
+    let mut revealed = REVEALED_COVERS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if let Some(existing) = revealed.iter_mut().find(|(name, _)| name == label) {
+        existing.1 = ticket;
+        return;
+    }
+    revealed.push((label.to_string(), ticket));
+}
+
+#[cfg(target_os = "macos")]
+fn cover_was_revealed(label: &str, ticket: u64) -> bool {
+    REVEALED_COVERS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .any(|(name, current)| name == label && *current == ticket)
+}
+
+/// The page normally takes over within a frame or two. If it never does, the
+/// frozen sheet must not stay on top of the desktop.
+#[cfg(target_os = "macos")]
+fn schedule_present_timeout(window: &tauri::WebviewWindow) {
+    let label = window.label().to_string();
+    let Some(ticket) = cover_ticket(&label) else {
+        return;
+    };
+    let app = window.app_handle().clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(8));
+        let queued = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if !should_park_unrevealed(
+                cover_ticket(&label),
+                cover_was_revealed(&label, ticket),
+                is_pinned(&label),
+                CAPTURE_PARKED.load(Ordering::Acquire),
+                ticket,
+            ) {
+                return;
+            }
+            let Some(window) = queued.get_webview_window(&label) else {
+                return;
+            };
+            hold_overlay_offscreen(&window);
+        });
+    });
 }
 
 /// Take the stand-in down once the window has been on screen long enough for
@@ -2081,12 +2436,72 @@ fn front_is_ours() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn camera_page_keeps_the_device_in_the_query() {
+        assert_eq!(super::camera_page(""), "index.html?view=camera");
+        assert_eq!(super::camera_page("  "), "index.html?view=camera");
+        assert_eq!(
+            super::camera_page("abc"),
+            "index.html?view=camera&device=abc"
+        );
+        assert_eq!(
+            super::camera_page("a b/c"),
+            "index.html?view=camera&device=a%20b%2Fc"
+        );
+    }
+
     use super::appkit_origin_y;
 
     #[test]
     fn overlay_frame_covers_each_display_including_the_menu_bar() {
         assert_eq!(appkit_origin_y(0.0, 982.0, 982.0), 0.0);
         assert_eq!(appkit_origin_y(-56.0, 1080.0, 982.0), -42.0);
+    }
+
+    #[test]
+    fn frozen_capture_stays_offscreen_until_its_cover_has_a_home() {
+        assert!(super::should_show_frozen(true, true));
+        assert!(!super::should_show_frozen(false, true));
+        assert!(!super::should_show_frozen(true, false));
+    }
+
+    #[test]
+    fn an_unrevealed_cover_is_the_only_one_that_leaves_the_desktop() {
+        assert!(super::should_park_unrevealed(
+            Some(3),
+            false,
+            false,
+            false,
+            3
+        ));
+        assert!(!super::should_park_unrevealed(
+            Some(3),
+            true,
+            false,
+            false,
+            3
+        ));
+        assert!(!super::should_park_unrevealed(
+            Some(4),
+            false,
+            false,
+            false,
+            3
+        ));
+        assert!(!super::should_park_unrevealed(
+            Some(3),
+            false,
+            true,
+            false,
+            3
+        ));
+        assert!(!super::should_park_unrevealed(
+            Some(3),
+            false,
+            false,
+            true,
+            3
+        ));
     }
 
     #[test]

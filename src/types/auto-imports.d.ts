@@ -24,14 +24,15 @@ declare global {
   const Empty: typeof import('antd').Empty
   const FileImageOutlined: typeof import('@ant-design/icons').FileImageOutlined
   const FileOutlined: typeof import('@ant-design/icons').FileOutlined
+  const FileTextOutlined: typeof import('@ant-design/icons').FileTextOutlined
   const Flex: typeof import('antd').Flex
   const FontColorsOutlined: typeof import('@ant-design/icons').FontColorsOutlined
   const FontSizeOutlined: typeof import('@ant-design/icons').FontSizeOutlined
   const Form: typeof import('antd').Form
   const Fragment: typeof import('react').Fragment
-  const GlobalOutlined: typeof import('@ant-design/icons').GlobalOutlined
   const HashRouter: typeof import('react-router').HashRouter
   const HistoryOutlined: typeof import('@ant-design/icons').HistoryOutlined
+  const ImportOutlined: typeof import('@ant-design/icons').ImportOutlined
   const InfoCircleOutlined: typeof import('@ant-design/icons').InfoCircleOutlined
   const Input: typeof import('antd').Input
   const InputNumber: typeof import('antd').InputNumber
@@ -52,6 +53,7 @@ declare global {
   const PushpinOutlined: typeof import('@ant-design/icons').PushpinOutlined
   const Route: typeof import('react-router').Route
   const Routes: typeof import('react-router').Routes
+  const ScissorOutlined: typeof import('@ant-design/icons').ScissorOutlined
   const SearchOutlined: typeof import('@ant-design/icons').SearchOutlined
   const Segmented: typeof import('antd').Segmented
   const Select: typeof import('antd').Select
@@ -66,6 +68,7 @@ declare global {
   const Tooltip: typeof import('antd').Tooltip
   const Trans: typeof import('react-i18next').Trans
   const Typography: typeof import('antd').Typography
+  const VideoCameraOutlined: typeof import('@ant-design/icons').VideoCameraOutlined
   const antdTheme: typeof import('antd').theme
   const cache: typeof import('react').cache
   const cacheSignal: typeof import('react').cacheSignal

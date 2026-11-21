@@ -142,7 +142,7 @@ impl ClipboardState {
 
     pub fn copy(&self, id: i64, plain: bool) -> Result<CopyOutcome, ClipboardError> {
         let detail = lock(&self.inner.store).get(id)?;
-        match detail.kind.as_str() {
+        let outcome = match detail.kind.as_str() {
             "text" => {
                 let mut text = lock(&self.inner.store).rich_text(id)?;
                 if plain {
@@ -204,7 +204,10 @@ impl ClipboardState {
                 Ok(CopyOutcome::copied(Vec::new()))
             }
             _ => Err(ClipboardError::new("not_found")),
-        }
+        }?;
+        lock(&self.inner.store).touch_copied(id, now_millis())?;
+        self.inner.emit_change(id, "updated");
+        Ok(outcome)
     }
 
     pub fn copy_file_path(&self, path: &str) -> Result<(), ClipboardError> {

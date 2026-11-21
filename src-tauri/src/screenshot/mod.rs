@@ -1,3 +1,4 @@
+mod audio;
 mod bytes;
 mod capture;
 mod clock;

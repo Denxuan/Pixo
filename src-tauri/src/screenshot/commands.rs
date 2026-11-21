@@ -43,17 +43,22 @@ pub fn screenshot_request_access(state: State<'_, ScreenshotState>) -> ShotStatu
     state.request_access()
 }
 
-#[tauri::command]
-pub fn screenshot_start(
+#[tauri::command(async)]
+pub async fn screenshot_start(
     state: State<'_, ScreenshotState>,
     mode: Option<String>,
     hide_self: Option<bool>,
 ) -> Result<SessionView, ScreenshotError> {
+    let state = (*state).clone();
     let settings = state.settings();
-    state.start(
-        mode.as_deref().unwrap_or("capture"),
-        hide_self.unwrap_or(settings.hide_self),
-    )
+    let mode = mode.unwrap_or_else(|| "capture".to_string());
+    let hide = hide_self.unwrap_or(settings.hide_self);
+    tauri::async_runtime::spawn_blocking(move || state.start(&mode, hide))
+        .await
+        .map_err(|error| {
+            eprintln!("screenshot start: {error}");
+            ScreenshotError::new("capture_failed")
+        })?
 }
 
 #[tauri::command]
@@ -74,12 +79,19 @@ pub fn screenshot_overlay_ready(
     Ok(())
 }
 
-#[tauri::command]
-pub fn screenshot_frame(
+#[tauri::command(async)]
+pub async fn screenshot_frame(
     state: State<'_, ScreenshotState>,
     index: u32,
 ) -> Result<tauri::ipc::Response, ScreenshotError> {
-    Ok(tauri::ipc::Response::new(state.frame(index)?))
+    let state = (*state).clone();
+    tauri::async_runtime::spawn_blocking(move || state.frame(index))
+        .await
+        .map_err(|error| {
+            eprintln!("screenshot frame: {error}");
+            ScreenshotError::new("capture_failed")
+        })?
+        .map(tauri::ipc::Response::new)
 }
 
 #[tauri::command]
@@ -300,8 +312,60 @@ pub fn screenshot_record_start(
     width: f64,
     height: f64,
     format: String,
+    cursor: String,
+    speaker: bool,
+    microphone: bool,
+    speaker_device: String,
+    microphone_device: String,
 ) -> Result<(), ScreenshotError> {
-    state.start_record(monitor_index, x, y, width, height, &format)
+    state.start_record(
+        monitor_index,
+        x,
+        y,
+        width,
+        height,
+        &format,
+        &cursor,
+        speaker,
+        microphone,
+        &speaker_device,
+        &microphone_device,
+    )
+}
+
+#[derive(serde::Serialize)]
+pub struct AudioDevices {
+    pub speakers: Vec<String>,
+    pub microphones: Vec<String>,
+}
+
+#[tauri::command(async)]
+pub async fn screenshot_audio_devices() -> AudioDevices {
+    let (speakers, microphones) = tauri::async_runtime::spawn_blocking(super::audio::list_devices)
+        .await
+        .unwrap_or_default();
+    AudioDevices {
+        speakers,
+        microphones,
+    }
+}
+
+#[tauri::command]
+pub fn screenshot_camera_open(
+    state: State<'_, ScreenshotState>,
+    monitor_index: u32,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    device_id: String,
+) -> Result<bool, ScreenshotError> {
+    state.open_camera_preview(monitor_index, x, y, width, height, &device_id)
+}
+
+#[tauri::command]
+pub fn screenshot_camera_close(app: AppHandle) {
+    super::windows::close_camera(&app);
 }
 
 #[tauri::command]

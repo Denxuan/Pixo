@@ -2,7 +2,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { ClipboardRequestError, dismissClipboardPanel } from "@/api/clipboard";
 import HistoryList from "@/components/clipboard/HistoryList";
+import Kbd from "@/components/Kbd";
 import { useClipboardHistory } from "@/hooks/useClipboard";
+import { CLIP_FILTERS, isClipFilter } from "@/types/clipboard";
 import { clipboardErrorText } from "@/utils/clipboardMessage";
 import { DEFAULT_DELETE_SHORTCUT, DEFAULT_PIN_SHORTCUT, eventMatchesShortcut, formatShortcut, isApplePlatform } from "@/utils/shortcut";
 
@@ -26,6 +28,7 @@ export default function ClipboardPanel() {
   const [clearAll, setClearAll] = useState(false);
   const copyTimer = useRef(0);
   const copySeq = useRef(0);
+  const selectedId = useRef<number | null>(null);
   const pendingClose = useRef<number | null>(null);
   const copyOnSelect = history.settings?.copyOnSelect !== false;
   const pasteAutomatically = history.settings?.pasteAutomatically !== false;
@@ -41,9 +44,6 @@ export default function ClipboardPanel() {
   const hintKeys = {
     paste: formatShortcut("Alt+Enter", macos),
     plain: formatShortcut("Alt+Shift+Enter", macos),
-    option: shortcutHelp.option,
-    numberCopy: macos ? "⌘1–9" : "Ctrl+1–9",
-    numberPaste: macos ? "⌥1–9" : "Alt+1–9",
   };
   const panelHelpKey = pasteAutomatically ? "zdx.text.clipboard.panelHelpPaste" : copyOnSelect ? "zdx.text.clipboard.panelHelpSelect" : "zdx.text.clipboard.panelHelp";
   const panelHelp = t(panelHelpKey, { ...shortcutHelp, plain: hintKeys.plain });
@@ -74,6 +74,7 @@ export default function ClipboardPanel() {
   useEffect(() => {
     const onShown = () => {
       history.clearQuery();
+      history.setFilter("all");
       setIndex(0);
       setMessage("");
       setMessageTone("success");
@@ -135,6 +136,17 @@ export default function ClipboardPanel() {
   useEffect(() => {
     if (index > history.items.length - 1) setIndex(Math.max(history.items.length - 1, 0));
   }, [history.items.length, index]);
+
+  useEffect(() => {
+    selectedId.current = history.items[index]?.id ?? null;
+  }, [index]);
+
+  useEffect(() => {
+    const id = selectedId.current;
+    if (id == null) return;
+    const next = history.items.findIndex((item) => item.id === id);
+    if (next >= 0 && next !== index) setIndex(next);
+  }, [history.items, index]);
 
   const active = history.items[index];
 
@@ -207,6 +219,7 @@ export default function ClipboardPanel() {
 
   function onKeyDown(event: React.KeyboardEvent) {
     if (clearOpen || event.nativeEvent.isComposing) return;
+    if (event.key !== "Escape" && event.target instanceof Element && event.target.closest(".ant-select")) return;
     const digit = /^Digit([1-9])$/.exec(event.code) ?? /^Numpad([1-9])$/.exec(event.code);
     const position = digit ? Number(digit[1]) - 1 : null;
     if (event.key === "Escape") {
@@ -253,33 +266,101 @@ export default function ClipboardPanel() {
     }
   }
 
+  const keyHints = pasteAutomatically
+    ? [
+        { keys: formatShortcut("Enter", macos), label: t("zdx.label.clipboard.paste") },
+        { keys: hintKeys.paste, label: t("zdx.label.clipboard.copy") },
+        { keys: hintKeys.plain, label: t("zdx.label.clipboard.pastePlain") },
+      ]
+    : [
+        { keys: formatShortcut("Enter", macos), label: t("zdx.label.clipboard.copy") },
+        { keys: hintKeys.paste, label: t("zdx.label.clipboard.paste") },
+        { keys: hintKeys.plain, label: t("zdx.label.clipboard.pastePlain") },
+      ];
+  const helpContent = (
+    <Flex vertical gap={6} style={{ maxWidth: 320 }}>
+      <span>{panelHelp}</span>
+      {macos && <span>{t("zdx.text.clipboard.hintPasteAccess")}</span>}
+    </Flex>
+  );
+
   return (
     <Flex
       vertical
       className="h-screen overflow-hidden"
       onKeyDownCapture={onKeyDown}
+      aria-label={t("zdx.label.clipboard.title")}
       style={{
         background: token.colorBgElevated,
         color: token.colorText,
-        borderRadius: 20,
+        borderRadius: 16,
         border: `1px solid ${token.colorBorderSecondary}`,
       }}
     >
-      <Flex justify="space-between" align="center" data-tauri-drag-region style={{ padding: "10px 12px", borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
-        <Flex align="center" gap={4} data-tauri-drag-region className="min-w-0">
-          <Typography.Title level={5} data-tauri-drag-region style={{ margin: 0 }}>{t("zdx.label.clipboard.title")}</Typography.Title>
-          <Tooltip title={panelHelp}>
-            <Button type="text" size="small" aria-label={panelHelp} icon={<InfoCircleOutlined />} />
+      <div data-tauri-drag-region className="flex shrink-0 items-center gap-2 px-3 pb-2.5 pt-3" style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+        <Input
+          id="clipboard-panel-search"
+          variant="borderless"
+          size="large"
+          allowClear
+          prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
+          value={history.query}
+          onChange={(event) => history.setQuery(event.target.value)}
+          placeholder={t("zdx.placeholder.clipboard.search")}
+          aria-label={t("zdx.label.clipboard.search")}
+          className="min-w-0 flex-1"
+          style={{ paddingInline: 4 }}
+        />
+        <Select
+          variant="filled"
+          size="small"
+          value={history.filter}
+          aria-label={t("zdx.label.clipboard.filterKind")}
+          popupMatchSelectWidth={false}
+          onChange={(value) => {
+            if (isClipFilter(value)) history.setFilter(value);
+          }}
+          options={CLIP_FILTERS.map((item) => ({ value: item.id, label: t(item.label) }))}
+        />
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
+        {history.items.length === 0 && <Empty className="py-10" image={Empty.PRESENTED_IMAGE_SIMPLE} description={history.query ? t("zdx.text.clipboard.noResults") : t("zdx.text.clipboard.empty")} />}
+        {history.items.length > 0 && (
+          <HistoryList
+            items={history.items}
+            activeId={active?.id ?? null}
+            onActive={choose}
+            onCopy={(id) => {
+              window.clearTimeout(copyTimer.current);
+              void useItem(id, "copy", true);
+            }}
+            onPin={(id, pinned) => void history.pinItem(id, pinned)}
+            onDelete={(id) => void history.deleteItem(id)}
+            numberShortcuts={numberShortcuts}
+          />
+        )}
+      </div>
+      {message && <Alert type={messageTone} showIcon message={message} style={{ margin: "0 8px 8px" }} />}
+      <div data-tauri-drag-region className="flex h-10 shrink-0 items-center gap-2 pl-3 pr-1.5" style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, background: token.colorFillQuaternary }}>
+        <div data-tauri-drag-region aria-label={t("zdx.label.clipboard.shortcutHints")} className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
+          {keyHints.map((hint) => (
+            <span key={hint.label} className="flex shrink-0 items-center gap-1.5 whitespace-nowrap" style={{ fontSize: token.fontSizeSM, color: token.colorTextSecondary }}>
+              <Kbd>{hint.keys}</Kbd>
+              {hint.label}
+            </span>
+          ))}
+        </div>
+        <Flex align="center" className="shrink-0">
+          <Tooltip title={helpContent} placement="topRight">
+            <Button type="text" size="small" aria-label={t("zdx.label.clipboard.help")} aria-description={panelHelp} icon={<InfoCircleOutlined />} style={{ color: token.colorTextSecondary }} />
           </Tooltip>
-        </Flex>
-        <Flex align="center">
           <Popconfirm
             title={t("zdx.label.clipboard.clear")}
             description={t(clearAll ? "zdx.text.clipboard.clearAllConfirm" : "zdx.text.clipboard.clearConfirm")}
             okText={t("zdx.label.clipboard.confirm")}
             cancelText={t("zdx.label.clipboard.cancel")}
             okButtonProps={{ danger: true }}
-            placement="bottomRight"
+            placement="topRight"
             open={clearOpen}
             onOpenChange={(open) => {
               if (open) window.clearTimeout(copyTimer.current);
@@ -296,46 +377,11 @@ export default function ClipboardPanel() {
               });
             }}
           >
-            <Button type="text" danger aria-label={t("zdx.label.clipboard.clear")} icon={<ClearOutlined />} onMouseDown={(event) => setClearAll(event.altKey && event.shiftKey)} />
+            <Button type="text" size="small" danger aria-label={t("zdx.label.clipboard.clear")} icon={<ClearOutlined />} onMouseDown={(event) => setClearAll(event.altKey && event.shiftKey)} />
           </Popconfirm>
-          <Button type="text" aria-label={t("zdx.label.clipboard.close")} icon={<CloseOutlined />} onClick={() => dismissClipboardPanel()} />
+          <Button type="text" size="small" aria-label={t("zdx.label.clipboard.close")} icon={<CloseOutlined />} style={{ color: token.colorTextSecondary }} onClick={() => dismissClipboardPanel()} />
         </Flex>
-      </Flex>
-      <Flex vertical gap={8} style={{ padding: "10px 12px 8px" }}>
-        <Input
-          id="clipboard-panel-search"
-          allowClear
-          prefix={<SearchOutlined />}
-          value={history.query}
-          onChange={(event) => history.setQuery(event.target.value)}
-          placeholder={t("zdx.placeholder.clipboard.search")}
-          aria-label={t("zdx.label.clipboard.search")}
-        />
-      </Flex>
-      <div className="min-h-0 flex-1 overflow-auto" style={{ padding: "0 12px 12px" }}>
-        {history.items.length === 0 && <Empty description={history.query ? t("zdx.text.clipboard.noResults") : t("zdx.text.clipboard.empty")} />}
-        {history.items.length > 0 && (
-          <HistoryList
-            items={history.items}
-            activeId={active?.id ?? null}
-            onActive={choose}
-            onCopy={(id) => {
-              window.clearTimeout(copyTimer.current);
-              void useItem(id, "copy", true);
-            }}
-            onPin={(id, pinned) => void history.pinItem(id, pinned)}
-            onDelete={(id) => void history.deleteItem(id)}
-            numberShortcuts={numberShortcuts}
-          />
-        )}
       </div>
-      <Flex vertical gap={2} className="shrink-0" aria-label={t("zdx.label.clipboard.shortcutHints")} style={{ padding: "8px 12px 10px", borderTop: `1px solid ${token.colorBorderSecondary}` }}>
-        <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>{t(pasteAutomatically ? "zdx.text.clipboard.hintPasteAuto" : "zdx.text.clipboard.hintPaste", hintKeys)}</Typography.Text>
-        <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>{t("zdx.text.clipboard.hintPlain", hintKeys)}</Typography.Text>
-        <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>{t("zdx.text.clipboard.hintNumbers", hintKeys)}</Typography.Text>
-        {macos && <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>{t("zdx.text.clipboard.hintPasteAccess")}</Typography.Text>}
-      </Flex>
-      {message && <Alert type={messageTone} showIcon message={message} style={{ margin: "0 12px 12px" }} />}
     </Flex>
   );
 }

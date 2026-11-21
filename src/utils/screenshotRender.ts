@@ -2,6 +2,7 @@ import { ScreenshotRequestError } from "@/api/screenshot";
 import type { EditorDocument, Mark, PaletteColor, Point, Rect, StrokeSize, Watermark } from "@/types/screenshot";
 import {
   PALETTE,
+  inkOn,
   applyMosaic,
   arrowHead,
   blocksForRect,
@@ -64,8 +65,9 @@ export function paintOverlay(
     ctx.putImageData(mosaicFrame(source, marks), 0, 0);
   }
   if (selection && outline) dimOutside(ctx, selection, source.width, source.height);
+  drawHighlights(ctx, marks, source.width, source.height);
   for (const mark of marks) {
-    if (mark.kind !== "mosaicPen" && mark.kind !== "mosaicRect") drawMark(ctx, mark);
+    if (mark.kind !== "mosaicPen" && mark.kind !== "mosaicRect" && mark.kind !== "highlightShape") drawMark(ctx, mark);
   }
   if (selection && watermark && watermark.text.trim()) drawWatermark(ctx, watermark, selection);
   if (!outline) return;
@@ -105,8 +107,9 @@ export async function selectionPng(source: ImageData, editor: EditorDocument, pl
     ctx.beginPath();
     ctx.rect(bounds.x, bounds.y, bounds.w, bounds.h);
     ctx.clip();
+    drawHighlights(ctx, editor.marks, source.width, source.height);
     for (const mark of editor.marks) {
-      if (mark.kind !== "mosaicPen" && mark.kind !== "mosaicRect") drawMark(ctx, mark);
+      if (mark.kind !== "mosaicPen" && mark.kind !== "mosaicRect" && mark.kind !== "highlightShape") drawMark(ctx, mark);
     }
     if (editor.watermark?.text.trim()) drawWatermark(ctx, editor.watermark, { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h });
     ctx.restore();
@@ -267,10 +270,59 @@ function drawMark(ctx: CanvasRenderingContext2D, mark: Mark) {
     return;
   }
   if (mark.kind === "text") {
-    drawText(ctx, mark.x, mark.y, mark.w, mark.text, mark.fontSize || textSize(mark.size), PALETTE[mark.color]);
+    drawText(ctx, mark);
     return;
   }
   if (mark.kind === "tag") drawTag(ctx, mark);
+}
+
+let shadeCanvas: HTMLCanvasElement | null = null;
+
+function drawHighlights(ctx: CanvasRenderingContext2D, marks: Mark[], width: number, height: number) {
+  const shapes = marks.filter((mark): mark is Extract<Mark, { kind: "highlightShape" }> => mark.kind === "highlightShape");
+  if (shapes.length === 0 || width <= 0 || height <= 0) return;
+  if (!shadeCanvas) shadeCanvas = document.createElement("canvas");
+  if (shadeCanvas.width !== width) shadeCanvas.width = width;
+  if (shadeCanvas.height !== height) shadeCanvas.height = height;
+  const mask = shadeCanvas.getContext("2d");
+  if (!mask) return;
+  mask.setTransform(1, 0, 0, 1, 0, 0);
+  mask.globalAlpha = 1;
+  mask.globalCompositeOperation = "source-over";
+  mask.clearRect(0, 0, width, height);
+  const darkness = shapes.reduce((value, mark) => Math.max(value, mark.opacity), 0);
+  mask.fillStyle = `rgba(0, 0, 0, ${darkness})`;
+  mask.fillRect(0, 0, width, height);
+  mask.globalCompositeOperation = "destination-out";
+  for (const mark of shapes) {
+    mask.beginPath();
+    if (!traceHighlight(mask, mark)) continue;
+    mask.fill();
+  }
+  ctx.drawImage(shadeCanvas, 0, 0);
+  for (const mark of shapes) {
+    ctx.save();
+    ctx.beginPath();
+    if (!traceHighlight(ctx, mark)) {
+      ctx.restore();
+      continue;
+    }
+    ctx.clip();
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.06 + mark.opacity * 0.14})`;
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+  }
+}
+
+function traceHighlight(ctx: CanvasRenderingContext2D, mark: Extract<Mark, { kind: "highlightShape" }>) {
+  const x = Math.min(mark.x, mark.x + mark.w);
+  const y = Math.min(mark.y, mark.y + mark.h);
+  const w = Math.abs(mark.w);
+  const h = Math.abs(mark.h);
+  if (w < 1 || h < 1) return false;
+  if (mark.shape === "ellipse") ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+  else ctx.rect(x, y, w, h);
+  return true;
 }
 
 function strokeShape(ctx: CanvasRenderingContext2D, mark: { x: number; y: number; w: number; h: number; size: StrokeSize; color: PaletteColor; kind: "rect" | "ellipse" }) {
@@ -319,13 +371,36 @@ function drawArrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: nu
   ctx.restore();
 }
 
-function drawText(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, text: string, size: number, color: string) {
+function drawText(ctx: CanvasRenderingContext2D, mark: Extract<Mark, { kind: "text" }>) {
+  const size = mark.fontSize || textSize(mark.size);
+  const form = mark.form ?? "plain";
   ctx.save();
-  ctx.fillStyle = color;
   ctx.font = canvasFont(size);
   ctx.textBaseline = "top";
-  const lines = wrapText(ctx, text, Math.max(1, width));
-  lines.forEach((line, index) => ctx.fillText(line, x, y + index * size * 1.4));
+  ctx.lineJoin = "round";
+  const lines = wrapText(ctx, mark.text, Math.max(1, mark.w));
+  const lineHeight = size * 1.4;
+  if (form === "fill") {
+    const padX = Math.max(4, size * 0.34);
+    const padY = Math.max(2, size * 0.14);
+    const widest = lines.reduce((span, line) => Math.max(span, ctx.measureText(line).width), 0);
+    ctx.fillStyle = PALETTE[mark.color];
+    roundRect(ctx, mark.x - padX, mark.y - padY, Math.min(widest, mark.w) + padX * 2, Math.max(lines.length, 1) * lineHeight + padY * 2, Math.min(8, size * 0.22));
+    ctx.fill();
+  }
+  lines.forEach((line, index) => {
+    const y = mark.y + index * lineHeight;
+    if (form === "stroke") {
+      ctx.lineWidth = Math.max(2, size * 0.18);
+      ctx.strokeStyle = PALETTE[mark.color];
+      ctx.strokeText(line, mark.x, y);
+      ctx.fillStyle = inkOn(mark.color);
+      ctx.fillText(line, mark.x, y);
+      return;
+    }
+    ctx.fillStyle = form === "fill" ? inkOn(mark.color) : PALETTE[mark.color];
+    ctx.fillText(line, mark.x, y);
+  });
   ctx.restore();
 }
 
@@ -401,5 +476,5 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 }
 
 function textOn(color: PaletteColor) {
-  return color === "black" || color === "red" || color === "blue" ? "#FFFFFF" : "#1C1C1C";
+  return color === "black" || color === "gray" || color === "red" || color === "blue" ? "#FFFFFF" : "#1C1C1C";
 }

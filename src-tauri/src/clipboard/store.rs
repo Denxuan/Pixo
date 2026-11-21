@@ -166,30 +166,34 @@ impl Store {
 
     pub fn upsert(&mut self, request: UpsertRequest<'_>) -> Result<UpsertResult, ClipboardError> {
         let transaction = self.conn.transaction().map_err(storage)?;
-        let existing: Option<i64> = transaction
-            .query_row(
-                "SELECT id FROM clip_items WHERE content_hash = ?1",
-                params![request.hash],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(storage)?;
+        let existing = existing_item(&transaction, &request)?;
         if let Some(id) = existing {
-            if request.self_write {
-                transaction
-                    .execute(
-                        "UPDATE clip_items SET last_copied_at = ?1 WHERE id = ?2",
-                        params![request.now, id],
-                    )
-                    .map_err(storage)?;
-            } else {
-                transaction
-                    .execute(
-                        "UPDATE clip_items SET last_copied_at = ?1, copy_count = copy_count + 1, source_app = ?2 WHERE id = ?3",
-                        params![request.now, request.source_app, id],
-                    )
-                    .map_err(storage)?;
-            }
+            let self_write = i64::from(request.self_write);
+            transaction
+                .execute(
+                    "UPDATE clip_items SET
+                        last_copied_at = ?1,
+                        copy_count = copy_count + CASE WHEN ?2 = 1 THEN 0 ELSE 1 END,
+                        source_app = CASE WHEN ?2 = 1 THEN source_app ELSE ?3 END,
+                        content_hash = ?4,
+                        text = COALESCE(?5, text),
+                        html = CASE WHEN ?2 = 1 THEN html ELSE ?6 END,
+                        rtf = CASE WHEN ?2 = 1 THEN rtf ELSE ?7 END,
+                        size_bytes = CASE WHEN ?2 = 1 THEN size_bytes ELSE ?8 END
+                     WHERE id = ?9",
+                    params![
+                        request.now,
+                        self_write,
+                        request.source_app,
+                        request.hash,
+                        request.text,
+                        request.html,
+                        request.rtf,
+                        request.size_bytes,
+                        id,
+                    ],
+                )
+                .map_err(storage)?;
             let summary = load_summary(&transaction, id)?;
             transaction.commit().map_err(storage)?;
             return Ok(UpsertResult::Updated { summary });
@@ -224,6 +228,20 @@ impl Store {
         let summary = load_summary(&transaction, id)?;
         transaction.commit().map_err(storage)?;
         Ok(UpsertResult::Added(summary))
+    }
+
+    pub fn touch_copied(&mut self, id: i64, now: i64) -> Result<(), ClipboardError> {
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE clip_items SET last_copied_at = ?1 WHERE id = ?2",
+                params![now, id],
+            )
+            .map_err(storage)?;
+        if changed == 0 {
+            return Err(ClipboardError::new("not_found"));
+        }
+        Ok(())
     }
 
     pub fn list(
@@ -571,6 +589,43 @@ fn collect_matches(
     Ok(())
 }
 
+fn existing_item(
+    conn: &Connection,
+    request: &UpsertRequest<'_>,
+) -> Result<Option<i64>, ClipboardError> {
+    let by_hash: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM clip_items WHERE content_hash = ?1",
+            params![request.hash],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    if by_hash.is_some() {
+        return Ok(by_hash);
+    }
+    let Some(text) = request
+        .text
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    if request.kind != ClipKind::Text {
+        return Ok(None);
+    }
+    conn.query_row(
+        "SELECT id FROM clip_items
+         WHERE kind = 'text' AND trim(IFNULL(text, '')) = trim(?1)
+         ORDER BY last_copied_at DESC, id DESC
+         LIMIT 1",
+        params![text],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(storage)
+}
+
 fn image_hash_of(conn: &Connection, id: i64) -> Result<Option<String>, ClipboardError> {
     let row: Option<(String, String)> = conn
         .query_row(
@@ -878,6 +933,30 @@ mod tests {
         };
         assert_eq!(touched.copy_count, 2);
         assert_eq!(touched.last_copied_at, 3_000);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn copying_the_same_text_again_moves_that_entry_first() {
+        let (mut store, directory) = test_store();
+        store
+            .upsert(text_request("older-hash", "alpha", 1_000))
+            .unwrap();
+        store.upsert(text_request("other", "beta", 2_000)).unwrap();
+        let updated = store
+            .upsert(text_request("newer-hash", "alpha", 3_000))
+            .unwrap();
+        let UpsertResult::Updated { summary } = updated else {
+            panic!("expected the existing text to be reused");
+        };
+        assert_eq!(summary.preview, "alpha");
+        assert_eq!(summary.copy_count, 2);
+        let page = store.list(None, None, false, None, 10).unwrap();
+        assert_eq!(page.items[0].id, summary.id);
+        assert_eq!(page.items[0].preview, "alpha");
+        store.touch_copied(page.items[1].id, 4_000).unwrap();
+        let page = store.list(None, None, false, None, 10).unwrap();
+        assert_eq!(page.items[0].preview, "beta");
         let _ = std::fs::remove_dir_all(directory);
     }
 

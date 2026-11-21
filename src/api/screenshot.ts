@@ -112,8 +112,25 @@ export function screenshotFinish() {
   return call<void>("screenshot_finish");
 }
 
-export function screenshotRecordStart(monitorIndex: number, x: number, y: number, width: number, height: number, format: "gif" | "mp4") {
-  return call<void>("screenshot_record_start", { monitorIndex, x, y, width, height, format });
+export type AudioDevices = {
+  speakers: string[];
+  microphones: string[];
+};
+
+export function screenshotRecordStart(monitorIndex: number, x: number, y: number, width: number, height: number, format: "gif" | "mp4", cursor: "off" | "highlight" | "click" | "both", speaker: boolean, microphone: boolean, speakerDevice: string, microphoneDevice: string) {
+  return call<void>("screenshot_record_start", { monitorIndex, x, y, width, height, format, cursor, speaker, microphone, speakerDevice, microphoneDevice });
+}
+
+export function screenshotAudioDevices() {
+  return call<AudioDevices>("screenshot_audio_devices");
+}
+
+export function screenshotCameraOpen(monitorIndex: number, x: number, y: number, width: number, height: number, deviceId: string) {
+  return call<boolean>("screenshot_camera_open", { monitorIndex, x, y, width, height, deviceId });
+}
+
+export function screenshotCameraClose() {
+  return call<void>("screenshot_camera_close");
 }
 
 export function screenshotRecordStop() {

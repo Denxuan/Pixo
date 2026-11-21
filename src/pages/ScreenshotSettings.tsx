@@ -1,5 +1,6 @@
 import { ScreenshotRequestError, screenshotGetSettings, screenshotPickSaveDir, screenshotStatus, screenshotUpdateSettings, toScreenshotError } from "@/api/screenshot";
 import ShortcutField from "@/components/clipboard/ShortcutField";
+import { SettingGroup, SettingRow } from "@/components/SettingGroup";
 import type { ShotSettings, ShotStatus } from "@/types/screenshot";
 import { isDesktop } from "@/utils/desktop";
 import { screenshotErrorText } from "@/utils/screenshotMessage";
@@ -73,7 +74,7 @@ export default function ScreenshotSettingsPage() {
   return (
     <Flex vertical gap={16}>
       <Flex justify="space-between" align="flex-start" gap={16} wrap>
-        <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("zdx.text.screenshot.settingsDescription")}</Typography.Paragraph>
+        <Typography.Paragraph type="secondary" className="min-w-0 flex-[1_1_320px]" style={{ marginBottom: 0 }}>{t("zdx.text.screenshot.settingsDescription")}</Typography.Paragraph>
         {desktop && <Button type="primary" htmlType="submit" form="screenshot-settings" loading={saving} disabled={!draft}>{t("zdx.label.screenshot.save")}</Button>}
       </Flex>
       {saved && <Alert type="success" showIcon message={t("zdx.text.screenshot.settingsSaved")} />}
@@ -86,71 +87,83 @@ export default function ScreenshotSettingsPage() {
         </Flex>
       )}
       {desktop && draft && (
-        <Form id="screenshot-settings" layout="vertical" requiredMark={false} onFinish={() => void save()} className="max-w-xl">
-          <Form.Item label={t("zdx.label.screenshot.shortcut")} extra={t("zdx.text.screenshot.shortcutHelp")}>
-            <ShortcutField
-              value={draft.shortcut}
-              macos={status?.platform === "macos"}
-              label={t("zdx.label.screenshot.shortcut")}
-              recordingText={t("zdx.text.screenshot.shortcutRecording")}
-              modifierText={t("zdx.text.screenshot.shortcutNeedModifier")}
-              onChange={(shortcut) => setDraft({ ...draft, shortcut })}
-            />
-          </Form.Item>
-          <Form.Item label={t("zdx.label.screenshot.recordShortcut")} extra={t("zdx.text.screenshot.recordShortcut")}>
-            <ShortcutField
-              value={draft.recordShortcut}
-              macos={status?.platform === "macos"}
-              label={t("zdx.label.screenshot.recordShortcut")}
-              recordingText={t("zdx.text.screenshot.shortcutRecording")}
-              modifierText={t("zdx.text.screenshot.shortcutNeedModifier")}
-              onChange={(recordShortcut) => setDraft({ ...draft, recordShortcut })}
-            />
-          </Form.Item>
-          <Form.Item label={t("zdx.label.screenshot.saveDir")} extra={t("zdx.text.screenshot.saveDir")}>
-            <Flex gap={8}>
-              <Input className="min-w-0 flex-1" value={draft.saveDir} aria-label={t("zdx.label.screenshot.saveDir")} placeholder={t("zdx.placeholder.screenshot.saveDir")} onChange={(event) => setDraft({ ...draft, saveDir: event.target.value })} />
-              <Button htmlType="button" loading={choosing} onClick={() => void chooseFolder()}>{t("zdx.label.screenshot.chooseSaveDir")}</Button>
-            </Flex>
-          </Form.Item>
-          <Form.Item label={t("zdx.label.screenshot.format")}>
-            <Select
-              aria-label={t("zdx.label.screenshot.format")}
-              value={draft.format}
-              onChange={(format) => {
-                if (format === "png" || format === "jpeg") setDraft({ ...draft, format });
-              }}
-              options={[
-                { value: "png", label: t("zdx.label.screenshot.png") },
-                { value: "jpeg", label: t("zdx.label.screenshot.jpeg") },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item label={t("zdx.label.screenshot.jpegQuality")}>
-            <InputNumber
-              min={60}
-              max={100}
-              disabled={draft.format !== "jpeg"}
-              style={{ width: "100%" }}
-              value={draft.jpegQuality}
-              onChange={(value) => setDraft({ ...draft, jpegQuality: typeof value === "number" ? value : draft.jpegQuality })}
-            />
-          </Form.Item>
-          <Form.Item label={t("zdx.label.screenshot.hideSelf")} extra={t("zdx.text.screenshot.hideSelf")}>
-            <Switch aria-label={t("zdx.label.screenshot.hideSelf")} checked={draft.hideSelf} onChange={(hideSelf) => setDraft({ ...draft, hideSelf })} />
-          </Form.Item>
-          <Form.Item label={t("zdx.label.screenshot.scrollAuto")} extra={t("zdx.text.screenshot.scrollAuto")}>
-            <Switch aria-label={t("zdx.label.screenshot.scrollAuto")} checked={draft.scrollAuto} onChange={(scrollAuto) => setDraft({ ...draft, scrollAuto })} />
-          </Form.Item>
-          <Form.Item label={t("zdx.label.screenshot.scrollHeight")} extra={t("zdx.text.screenshot.scrollHeight")}>
-            <InputNumber
-              min={2000}
-              max={60000}
-              style={{ width: "100%" }}
-              value={draft.scrollMaxHeight}
-              onChange={(value) => setDraft({ ...draft, scrollMaxHeight: typeof value === "number" ? value : draft.scrollMaxHeight })}
-            />
-          </Form.Item>
+        <Form id="screenshot-settings" onFinish={() => void save()}>
+          <Flex vertical gap={24}>
+            <SettingGroup title={t("zdx.label.screenshot.groupShortcuts")}>
+              <SettingRow label={t("zdx.label.screenshot.shortcut")} description={t("zdx.text.screenshot.shortcutHelp")}>
+                <ShortcutField
+                  value={draft.shortcut}
+                  macos={status?.platform === "macos"}
+                  label={t("zdx.label.screenshot.shortcut")}
+                  recordingText={t("zdx.text.screenshot.shortcutRecording")}
+                  modifierText={t("zdx.text.screenshot.shortcutNeedModifier")}
+                  onChange={(shortcut) => setDraft({ ...draft, shortcut })}
+                />
+              </SettingRow>
+              <SettingRow label={t("zdx.label.screenshot.recordShortcut")} description={t("zdx.text.screenshot.recordShortcut")}>
+                <ShortcutField
+                  value={draft.recordShortcut}
+                  macos={status?.platform === "macos"}
+                  label={t("zdx.label.screenshot.recordShortcut")}
+                  recordingText={t("zdx.text.screenshot.shortcutRecording")}
+                  modifierText={t("zdx.text.screenshot.shortcutNeedModifier")}
+                  onChange={(recordShortcut) => setDraft({ ...draft, recordShortcut })}
+                />
+              </SettingRow>
+            </SettingGroup>
+
+            <SettingGroup title={t("zdx.label.screenshot.groupOutput")}>
+              <SettingRow stacked label={t("zdx.label.screenshot.saveDir")} description={t("zdx.text.screenshot.saveDir")}>
+                <Flex gap={8}>
+                  <Input className="min-w-0 flex-1" value={draft.saveDir} aria-label={t("zdx.label.screenshot.saveDir")} placeholder={t("zdx.placeholder.screenshot.saveDir")} onChange={(event) => setDraft({ ...draft, saveDir: event.target.value })} />
+                  <Button htmlType="button" loading={choosing} onClick={() => void chooseFolder()}>{t("zdx.label.screenshot.chooseSaveDir")}</Button>
+                </Flex>
+              </SettingRow>
+              <SettingRow label={t("zdx.label.screenshot.format")}>
+                <Segmented
+                  aria-label={t("zdx.label.screenshot.format")}
+                  value={draft.format}
+                  onChange={(format) => {
+                    if (format === "png" || format === "jpeg") setDraft({ ...draft, format });
+                  }}
+                  options={[
+                    { value: "png", label: t("zdx.label.screenshot.png") },
+                    { value: "jpeg", label: t("zdx.label.screenshot.jpeg") },
+                  ]}
+                />
+              </SettingRow>
+              <SettingRow label={t("zdx.label.screenshot.jpegQuality")}>
+                <InputNumber
+                  aria-label={t("zdx.label.screenshot.jpegQuality")}
+                  min={60}
+                  max={100}
+                  disabled={draft.format !== "jpeg"}
+                  style={{ width: 140 }}
+                  value={draft.jpegQuality}
+                  onChange={(value) => setDraft({ ...draft, jpegQuality: typeof value === "number" ? value : draft.jpegQuality })}
+                />
+              </SettingRow>
+            </SettingGroup>
+
+            <SettingGroup title={t("zdx.label.screenshot.groupCapture")}>
+              <SettingRow label={t("zdx.label.screenshot.hideSelf")} description={t("zdx.text.screenshot.hideSelf")}>
+                <Switch aria-label={t("zdx.label.screenshot.hideSelf")} checked={draft.hideSelf} onChange={(hideSelf) => setDraft({ ...draft, hideSelf })} />
+              </SettingRow>
+              <SettingRow label={t("zdx.label.screenshot.scrollAuto")} description={t("zdx.text.screenshot.scrollAuto")}>
+                <Switch aria-label={t("zdx.label.screenshot.scrollAuto")} checked={draft.scrollAuto} onChange={(scrollAuto) => setDraft({ ...draft, scrollAuto })} />
+              </SettingRow>
+              <SettingRow label={t("zdx.label.screenshot.scrollHeight")} description={t("zdx.text.screenshot.scrollHeight")}>
+                <InputNumber
+                  aria-label={t("zdx.label.screenshot.scrollHeight")}
+                  min={2000}
+                  max={60000}
+                  style={{ width: 140 }}
+                  value={draft.scrollMaxHeight}
+                  onChange={(value) => setDraft({ ...draft, scrollMaxHeight: typeof value === "number" ? value : draft.scrollMaxHeight })}
+                />
+              </SettingRow>
+            </SettingGroup>
+          </Flex>
         </Form>
       )}
     </Flex>

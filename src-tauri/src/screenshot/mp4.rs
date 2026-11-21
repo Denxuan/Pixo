@@ -63,10 +63,15 @@ impl Mp4Stream {
         Ok(())
     }
 
-    pub fn finish_file(mut self, directory: &Path, tail: Duration) -> Result<String, String> {
+    pub fn finish_file(
+        mut self,
+        directory: &Path,
+        tail: Duration,
+        audio: Option<Vec<i16>>,
+    ) -> Result<String, String> {
         self.pending_shown += tail;
         self.emit()?;
-        let bytes = self.finish_bytes()?;
+        let bytes = self.finish_bytes(audio.as_deref())?;
         fs::create_dir_all(directory).map_err(|error| error.to_string())?;
         let path = unique_file(directory, "mp4");
         if let Err(error) = fs::write(&path, bytes) {
@@ -77,7 +82,7 @@ impl Mp4Stream {
         Ok(path.to_string_lossy().into_owned())
     }
 
-    fn finish_bytes(&self) -> Result<Vec<u8>, String> {
+    fn finish_bytes(&self, audio: Option<&[i16]>) -> Result<Vec<u8>, String> {
         if self.samples.is_empty() || self.sps.is_empty() || self.pps.is_empty() {
             return Err("empty".to_string());
         }
@@ -88,6 +93,7 @@ impl Mp4Stream {
             &self.sps,
             &self.pps,
             &self.samples,
+            audio,
         )
     }
 
@@ -225,6 +231,7 @@ fn mux_avc(
     sps: &[u8],
     pps: &[u8],
     samples: &[Sample],
+    audio: Option<&[i16]>,
 ) -> Result<Vec<u8>, String> {
     let width = u16::try_from(width).map_err(|_| "size".to_string())?;
     let height = u16::try_from(height).map_err(|_| "size".to_string())?;
@@ -243,6 +250,10 @@ fn mux_avc(
             .checked_add(sample.duration)
             .ok_or_else(|| "duration".to_string())?;
     }
+    let audio_samples = match audio {
+        Some(pcm) => Some(audio_track_samples(pcm, duration)?),
+        None => None,
+    };
     let mut mdat_payload = Vec::new();
     let mut sizes = Vec::with_capacity(samples.len());
     for sample in samples {
@@ -250,11 +261,20 @@ fn mux_avc(
         sizes.push(size);
         mdat_payload.extend_from_slice(&sample.data);
     }
+    let video_bytes = u32::try_from(mdat_payload.len()).map_err(|_| "size".to_string())?;
+    if let Some(audio_samples) = &audio_samples {
+        for sample in audio_samples {
+            mdat_payload.extend_from_slice(&sample.data);
+        }
+    }
 
     let mut buf = Buf::default();
     write_ftyp(&mut buf)?;
     let mdat_at = buf.begin(b"mdat");
     let chunk_offset = u32::try_from(buf.data.len()).map_err(|_| "size".to_string())?;
+    let audio_offset = chunk_offset
+        .checked_add(video_bytes)
+        .ok_or_else(|| "size".to_string())?;
     buf.bytes(&mdat_payload);
     buf.end(mdat_at)?;
     write_moov(
@@ -268,8 +288,47 @@ fn mux_avc(
         samples,
         &sizes,
         chunk_offset,
+        audio_samples.as_deref(),
+        audio_offset,
     )?;
     Ok(buf.data)
+}
+
+const AUDIO_RATE: u32 = 48_000;
+const AUDIO_CHUNK_FRAMES: usize = 1024;
+
+fn audio_track_samples(pcm: &[i16], video_ticks: u32) -> Result<Vec<Sample>, String> {
+    let frames = audio_frame_count(video_ticks);
+    let mut samples = Vec::new();
+    let mut frame = 0usize;
+    while frame < frames {
+        let count = (frames - frame).min(AUDIO_CHUNK_FRAMES);
+        let mut data = vec![0u8; count * 4];
+        for index in 0..count {
+            let src = (frame + index) * 2;
+            let left = pcm.get(src).copied().unwrap_or(0);
+            let right = pcm.get(src + 1).copied().unwrap_or(0);
+            data[index * 4..index * 4 + 2].copy_from_slice(&left.to_le_bytes());
+            data[index * 4 + 2..index * 4 + 4].copy_from_slice(&right.to_le_bytes());
+        }
+        samples.push(Sample {
+            data,
+            duration: u32::try_from(count).map_err(|_| "size".to_string())?,
+            sync: false,
+        });
+        frame += count;
+    }
+    if samples.is_empty() {
+        return Err("empty".to_string());
+    }
+    Ok(samples)
+}
+
+fn audio_frame_count(video_ticks: u32) -> usize {
+    let ticks = u64::from(video_ticks);
+    let scale = u64::from(TIMESCALE);
+    let frames = (ticks * u64::from(AUDIO_RATE) + scale / 2) / scale;
+    usize::try_from(frames.max(1)).unwrap_or(usize::MAX)
 }
 
 fn write_ftyp(buf: &mut Buf) -> Result<(), String> {
@@ -280,6 +339,7 @@ fn write_ftyp(buf: &mut Buf) -> Result<(), String> {
     buf.fourcc(b"iso2");
     buf.fourcc(b"avc1");
     buf.fourcc(b"mp41");
+    buf.fourcc(b"qt  ");
     buf.end(at)
 }
 
@@ -294,9 +354,16 @@ fn write_moov(
     samples: &[Sample],
     sizes: &[u32],
     chunk_offset: u32,
+    audio: Option<&[Sample]>,
+    audio_offset: u32,
 ) -> Result<(), String> {
     let at = buf.begin(b"moov");
-    write_mvhd(buf, timescale, duration)?;
+    write_mvhd(
+        buf,
+        timescale,
+        duration,
+        if audio.is_some() { 3 } else { 2 },
+    )?;
     write_trak(
         buf,
         width,
@@ -309,10 +376,13 @@ fn write_moov(
         sizes,
         chunk_offset,
     )?;
+    if let Some(audio) = audio {
+        write_audio_trak(buf, duration, audio, audio_offset)?;
+    }
     buf.end(at)
 }
 
-fn write_mvhd(buf: &mut Buf, timescale: u32, duration: u32) -> Result<(), String> {
+fn write_mvhd(buf: &mut Buf, timescale: u32, duration: u32, next_track: u32) -> Result<(), String> {
     let at = buf.begin(b"mvhd");
     buf.full(0, 0);
     buf.u32(0);
@@ -325,7 +395,7 @@ fn write_mvhd(buf: &mut Buf, timescale: u32, duration: u32) -> Result<(), String
     buf.zeroes(8);
     write_matrix(buf);
     buf.zeroes(24);
-    buf.u32(2);
+    buf.u32(next_track);
     buf.end(at)
 }
 
@@ -342,7 +412,7 @@ fn write_trak(
     chunk_offset: u32,
 ) -> Result<(), String> {
     let at = buf.begin(b"trak");
-    write_tkhd(buf, duration, width, height)?;
+    write_tkhd(buf, 1, duration, width, height, 0)?;
     write_mdia(
         buf,
         width,
@@ -358,18 +428,25 @@ fn write_trak(
     buf.end(at)
 }
 
-fn write_tkhd(buf: &mut Buf, duration: u32, width: u16, height: u16) -> Result<(), String> {
+fn write_tkhd(
+    buf: &mut Buf,
+    track_id: u32,
+    duration: u32,
+    width: u16,
+    height: u16,
+    volume: u16,
+) -> Result<(), String> {
     let at = buf.begin(b"tkhd");
     buf.full(0, 0x7);
     buf.u32(0);
     buf.u32(0);
-    buf.u32(1);
+    buf.u32(track_id);
     buf.u32(0);
     buf.u32(duration);
     buf.zeroes(8);
     buf.u16(0);
     buf.u16(0);
-    buf.u16(0);
+    buf.u16(volume);
     buf.u16(0);
     write_matrix(buf);
     buf.u32(u32::from(width) << 16);
@@ -605,6 +682,93 @@ fn write_hdlr(buf: &mut Buf, kind: &[u8; 4], name: &str) -> Result<(), String> {
     buf.end(at)
 }
 
+fn write_audio_trak(
+    buf: &mut Buf,
+    movie_duration: u32,
+    samples: &[Sample],
+    chunk_offset: u32,
+) -> Result<(), String> {
+    let duration = samples.iter().try_fold(0u32, |sum, sample| {
+        sum.checked_add(sample.duration)
+            .ok_or_else(|| "duration".to_string())
+    })?;
+    let at = buf.begin(b"trak");
+    write_tkhd(buf, 2, movie_duration, 0, 0, 0x0100)?;
+    write_audio_mdia(buf, duration, samples, chunk_offset)?;
+    buf.end(at)
+}
+
+fn write_audio_mdia(
+    buf: &mut Buf,
+    duration: u32,
+    samples: &[Sample],
+    chunk_offset: u32,
+) -> Result<(), String> {
+    let at = buf.begin(b"mdia");
+    write_mdhd(buf, AUDIO_RATE, duration)?;
+    write_hdlr(buf, b"soun", "SoundHandler")?;
+    write_audio_minf(buf, samples, chunk_offset)?;
+    buf.end(at)
+}
+
+fn write_audio_minf(buf: &mut Buf, samples: &[Sample], chunk_offset: u32) -> Result<(), String> {
+    let at = buf.begin(b"minf");
+    write_smhd(buf)?;
+    write_hdlr(buf, b"url ", "DataHandler")?;
+    write_dinf(buf)?;
+    write_audio_stbl(buf, samples, chunk_offset)?;
+    buf.end(at)
+}
+
+fn write_smhd(buf: &mut Buf) -> Result<(), String> {
+    let at = buf.begin(b"smhd");
+    buf.full(0, 0);
+    buf.u16(0);
+    buf.u16(0);
+    buf.end(at)
+}
+
+fn write_audio_stbl(buf: &mut Buf, samples: &[Sample], chunk_offset: u32) -> Result<(), String> {
+    let sizes: Vec<u32> = samples
+        .iter()
+        .map(|sample| u32::try_from(sample.data.len()).unwrap_or(u32::MAX))
+        .collect();
+    let at = buf.begin(b"stbl");
+    write_audio_stsd(buf)?;
+    write_stts(buf, samples)?;
+    write_stsc(buf, samples.len())?;
+    write_stsz(buf, &sizes)?;
+    write_stco(buf, chunk_offset)?;
+    buf.end(at)
+}
+
+fn write_audio_stsd(buf: &mut Buf) -> Result<(), String> {
+    let at = buf.begin(b"stsd");
+    buf.full(0, 0);
+    buf.u32(1);
+    write_sowt(buf)?;
+    buf.end(at)
+}
+
+fn write_sowt(buf: &mut Buf) -> Result<(), String> {
+    let at = buf.begin(b"sowt");
+    buf.zeroes(6);
+    buf.u16(1);
+    buf.u16(1);
+    buf.u16(0);
+    buf.u32(0);
+    buf.u16(2);
+    buf.u16(16);
+    buf.u16(0);
+    buf.u16(0);
+    buf.u32(AUDIO_RATE << 16);
+    buf.u32(1);
+    buf.u32(4);
+    buf.u32(4);
+    buf.u32(2);
+    buf.end(at)
+}
+
 fn write_matrix(buf: &mut Buf) {
     buf.u32(0x0001_0000);
     buf.u32(0);
@@ -689,6 +853,7 @@ mod tests {
                 duration: 9_000,
                 sync: true,
             }],
+            None,
         )
         .unwrap()
     }
@@ -735,6 +900,39 @@ mod tests {
         let offset = u32::from_be_bytes(bytes[stco + 12..stco + 16].try_into().unwrap()) as usize;
         assert_eq!(&bytes[offset..offset + 4], &4u32.to_be_bytes());
         assert!(bytes.windows(4).any(|chunk| chunk == b"vide"));
+        assert!(!bytes.windows(4).any(|chunk| chunk == b"sowt"));
+    }
+
+    #[test]
+    fn mux_includes_a_pcm_audio_track() {
+        let sps = vec![0x67, 0x42, 0x00, 0x1E, 0xAB];
+        let pps = vec![0x68, 0xCE, 0x38, 0x80];
+        let payload = [0x65u8, 0x88, 0x84, 0x21];
+        let mut data = (payload.len() as u32).to_be_bytes().to_vec();
+        data.extend_from_slice(&payload);
+        let bytes = mux_avc(
+            32,
+            16,
+            TIMESCALE,
+            &sps,
+            &pps,
+            &[Sample {
+                data,
+                duration: 9_000,
+                sync: true,
+            }],
+            Some(&[0x1234, -2, 0x1234, -2]),
+        )
+        .unwrap();
+        let mut tags = Vec::new();
+        walk(&bytes, &mut tags).unwrap();
+        assert_eq!(tags.iter().filter(|tag| tag.as_str() == "trak").count(), 2);
+        assert!(bytes.windows(4).any(|chunk| chunk == b"sowt"));
+        assert!(bytes.windows(4).any(|chunk| chunk == b"soun"));
+        let needle = [0x34u8, 0x12, 0xFE, 0xFF, 0x34, 0x12, 0xFE, 0xFF];
+        assert!(bytes.windows(8).any(|chunk| chunk == needle));
+        assert!(bytes.len() > 4_800 * 4);
+        assert!(bytes.len() < 4_800 * 4 + 20_000);
     }
 
     #[test]
@@ -754,7 +952,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let path = stream
-            .finish_file(&root, Duration::from_millis(80))
+            .finish_file(&root, Duration::from_millis(80), None)
             .unwrap();
         let bytes = fs::read(&path).unwrap();
         assert!(bytes.windows(4).any(|chunk| chunk == b"ftyp"));

@@ -1,4 +1,5 @@
 import { clipboardGet, clipboardImage, clipboardSourceIcon } from "@/api/clipboard";
+import Kbd from "@/components/Kbd";
 import type { ClipSummary } from "@/types/clipboard";
 import { formatBytes, formatRelativeTime } from "@/utils/time";
 
@@ -84,7 +85,21 @@ function ClipAvatar({ id }: { id: number }) {
     };
   }, [id]);
 
-  return <Avatar shape="square" size={40} src={url || undefined} icon={kindIcon("image")} aria-label={t("zdx.label.clipboard.image")} />;
+  return <KindBadge kind="image" src={url} label={t("zdx.label.clipboard.image")} />;
+}
+
+function KindBadge({ kind, src, label }: { kind: string; src?: string; label?: string }) {
+  const { token } = antdTheme.useToken();
+  return (
+    <Avatar
+      shape="square"
+      size={34}
+      src={src || undefined}
+      icon={kindIcon(kind)}
+      aria-label={label}
+      style={{ borderRadius: token.borderRadius, background: src ? token.colorFillQuaternary : token.colorFillSecondary, color: token.colorTextSecondary, fontSize: 16 }}
+    />
+  );
 }
 
 function ClipTitle({ item }: { item: ClipSummary }) {
@@ -177,43 +192,46 @@ export default function HistoryList({
               if (event.target instanceof Element && event.target.closest("button")) return;
               onActive(item.id);
             }}
+            className="group outline-none hover:bg-black/[0.035] focus-visible:ring-2 dark:hover:bg-white/[0.05]"
             style={{
               display: "block",
-              background: active ? token.colorPrimaryBg : item.pinned ? token.colorWarningBg : token.colorBgContainer,
-              border: `1px solid ${active ? token.colorPrimaryBorder : item.pinned ? token.colorWarningBorder : token.colorBorderSecondary}`,
-              boxShadow: item.pinned ? `inset 3px 0 0 ${token.colorWarning}` : undefined,
-              borderRadius: token.borderRadiusLG,
-              marginBottom: 6,
-              padding: "8px 8px 8px 10px",
+              background: active ? token.colorFillSecondary : undefined,
+              border: 0,
+              borderRadius: token.borderRadius,
+              marginBottom: 2,
+              padding: "8px 10px",
               cursor: "pointer",
             }}
           >
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               <div className="shrink-0">
-                {item.kind === "image" ? <ClipAvatar id={item.id} /> : <Avatar shape="square" size={40} icon={kindIcon(item.kind)} />}
+                {item.kind === "image" ? <ClipAvatar id={item.id} /> : <KindBadge kind={item.kind} />}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  {item.pinned ? <PushpinFilled aria-hidden="true" style={{ color: token.colorWarning, fontSize: 12 }} /> : null}
                   <ClipTitle item={item} />
-                  {item.pinKey ? <Typography.Text keyboard className="shrink-0" aria-label={t("zdx.label.clipboard.pinKey", { key: item.pinKey })}>{item.pinKey}</Typography.Text> : null}
-                  {rowNumber ? (
-                    <Tooltip title={t("zdx.text.clipboard.hintRow", rowNumber)}>
-                      <Typography.Text type="secondary" className="shrink-0" aria-label={t("zdx.text.clipboard.hintRow", rowNumber)} style={{ fontSize: token.fontSizeSM }}>{rowNumber.copy}</Typography.Text>
-                    </Tooltip>
-                  ) : null}
-                  <div className="flex shrink-0 items-center">
-                    <Button type="text" size="small" aria-label={item.pinned ? t("zdx.label.clipboard.unpin") : t("zdx.label.clipboard.pin")} aria-pressed={item.pinned} icon={item.pinned ? <PushpinFilled /> : <PushpinOutlined />} style={item.pinned ? { color: token.colorWarning } : undefined} onClick={(event) => { event.stopPropagation(); onPin(item.id, !item.pinned); }} />
-                    <Button type="text" size="small" aria-label={t("zdx.label.clipboard.copy")} icon={<CopyOutlined />} onClick={(event) => { event.stopPropagation(); onCopy(item.id); }} />
-                    <Button type="text" size="small" danger aria-label={t("zdx.label.clipboard.delete")} icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); onDelete(item.id); }} />
-                  </div>
                 </div>
-                <div className="mt-1 flex min-w-0 items-center gap-3" style={{ color: token.colorTextSecondary, fontSize: token.fontSizeSM }}>
+                <div className="mt-0.5 flex min-w-0 items-center gap-2.5" style={{ color: token.colorTextTertiary, fontSize: token.fontSizeSM }}>
                   <MetaChip shrink icon={<ClockCircleOutlined />} text={copiedAt} label={copiedAt} />
                   <MetaChip text={size} label={size} />
                   <MetaChip icon={<HistoryOutlined />} text={String(item.copyCount)} label={copied} />
                   {item.formatted ? <MetaChip icon={<FontColorsOutlined />} label={t("zdx.label.clipboard.formatted")} /> : null}
                   {item.sourceApp ? <SourceApp source={item.sourceApp} /> : null}
                 </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <div className={active ? "flex items-center" : "flex items-center opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"}>
+                  <Button type="text" size="small" aria-label={item.pinned ? t("zdx.label.clipboard.unpin") : t("zdx.label.clipboard.pin")} aria-pressed={item.pinned} icon={item.pinned ? <PushpinFilled /> : <PushpinOutlined />} style={item.pinned ? { color: token.colorWarning } : { color: token.colorTextSecondary }} onClick={(event) => { event.stopPropagation(); onPin(item.id, !item.pinned); }} />
+                  <Button type="text" size="small" aria-label={t("zdx.label.clipboard.copy")} icon={<CopyOutlined />} style={{ color: token.colorTextSecondary }} onClick={(event) => { event.stopPropagation(); onCopy(item.id); }} />
+                  <Button type="text" size="small" danger aria-label={t("zdx.label.clipboard.delete")} icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); onDelete(item.id); }} />
+                </div>
+                {item.pinKey ? <Kbd label={t("zdx.label.clipboard.pinKey", { key: item.pinKey })}>{item.pinKey.toUpperCase()}</Kbd> : null}
+                {rowNumber ? (
+                  <Tooltip title={t("zdx.text.clipboard.hintRow", rowNumber)}>
+                    <span className="inline-flex"><Kbd label={t("zdx.text.clipboard.hintRow", rowNumber)}>{rowNumber.copy}</Kbd></span>
+                  </Tooltip>
+                ) : null}
               </div>
             </div>
           </List.Item>

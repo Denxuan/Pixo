@@ -1,6 +1,18 @@
 export type ClipKind = "text" | "image" | "files";
 export type ClipFilter = "all" | "text" | "image" | "files" | "pinned";
 
+export const CLIP_FILTERS: Array<{ id: ClipFilter; label: string }> = [
+  { id: "all", label: "zdx.label.clipboard.filter.all" },
+  { id: "text", label: "zdx.label.clipboard.filter.text" },
+  { id: "image", label: "zdx.label.clipboard.filter.image" },
+  { id: "files", label: "zdx.label.clipboard.filter.files" },
+  { id: "pinned", label: "zdx.label.clipboard.filter.pinned" },
+];
+
+export function isClipFilter(value: unknown): value is ClipFilter {
+  return value === "all" || value === "text" || value === "image" || value === "files" || value === "pinned";
+}
+
 export interface ClipSummary {
   id: number;
   kind: string;

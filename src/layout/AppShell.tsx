@@ -4,7 +4,6 @@ import { clipboardStatus, takeClipboardMainRequest } from "@/api/clipboard";
 import { screenshotGetSettings } from "@/api/screenshot";
 import PermissionPrompt from "@/components/PermissionPrompt";
 import UpdatePrompt from "@/components/UpdatePrompt";
-import { useSettingsStore, type ThemeMode } from "@/stores/settings";
 import type { ClipboardStatus } from "@/types/clipboard";
 import { isDesktop } from "@/utils/desktop";
 
@@ -18,10 +17,6 @@ function mainWindowPath(path: string) {
   if (path === "/settings" || path === "/settings/clipboard" || path === "/settings/screenshot") return path;
   if (path === "/clipboard/settings") return "/settings/clipboard";
   return "/clipboard";
-}
-
-function isThemeMode(value: string): value is ThemeMode {
-  return value === "system" || value === "light" || value === "dark";
 }
 
 function ScreenshotNavIcon() {
@@ -38,25 +33,20 @@ export default function AppShell() {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
-  const mode = useSettingsStore((state) => state.mode);
-  const setMode = useSettingsStore((state) => state.setMode);
-  const language = useSettingsStore((state) => state.language);
-  const setLanguage = useSettingsStore((state) => state.setLanguage);
   const { token } = antdTheme.useToken();
   const [collapsed, setCollapsed] = useState(false);
   const [clipboardOn, setClipboardOn] = useState<boolean | null>(null);
   const [screenshotOn, setScreenshotOn] = useState<boolean | null>(null);
   const reduceMotion = useSyncExternalStore(subscribeMotion, () => motionQuery.matches);
-  const selected = location.pathname.startsWith("/settings") ? "settings" : location.pathname.startsWith("/screenshot") ? "screenshot" : location.pathname.startsWith("/clipboard") ? "clipboard" : "";
+  const onSettings = location.pathname.startsWith("/settings");
+  const selected = location.pathname.startsWith("/screenshot") ? "screenshot" : location.pathname.startsWith("/clipboard") ? "clipboard" : "";
   const clipboardItem = { key: "clipboard", icon: <HistoryOutlined />, label: t("zdx.label.nav.clipboard") };
   const screenshotItem = { key: "screenshot", icon: <ScreenshotNavIcon />, label: t("zdx.label.nav.screenshot") };
-  const settingsItem = { key: "settings", icon: <SettingOutlined />, label: t("zdx.label.system.title") };
   const showClipboard = !isDesktop() || clipboardOn !== false;
   const showScreenshot = !isDesktop() || screenshotOn !== false;
   const navItems = [
     ...(showClipboard ? [clipboardItem] : []),
     ...(showScreenshot ? [screenshotItem] : []),
-    settingsItem,
   ];
 
   useEffect(() => {
@@ -124,78 +114,71 @@ export default function AppShell() {
         collapsible
         collapsed={collapsed}
         onCollapse={setCollapsed}
-        width={232}
-        collapsedWidth={72}
+        width={216}
+        collapsedWidth={64}
         trigger={null}
-        style={{
-          height: "100%",
-          background: token.colorBgLayout,
-          borderInlineEnd: `1px solid ${token.colorBorderSecondary}`,
-          transition: reduceMotion ? "none" : undefined,
-        }}
+        style={{ height: "100%", background: "transparent", transition: reduceMotion ? "none" : undefined }}
       >
-        <Flex vertical style={{ height: "100%" }}>
-          <Flex align="center" justify={collapsed ? "center" : "flex-start"} gap={collapsed ? 0 : 12} style={{ padding: collapsed ? "24px 0 8px" : "24px 20px 8px" }}>
-            <img src="/pixo-icon.png" alt="" className="h-10 w-10 rounded-xl" />
+        <nav aria-label={t("zdx.label.nav.tools")} className="flex h-full flex-col">
+          <div className={collapsed ? "flex shrink-0 justify-center px-0 pb-4 pt-5" : "flex shrink-0 items-center gap-2.5 px-5 pb-4 pt-5"}>
+            <img src="/pixo-icon.png" alt="" className="h-8 w-8 shrink-0 rounded-lg" />
             {!collapsed && (
-              <Flex vertical gap={0}>
-                <Typography.Title level={4} style={{ margin: 0, color: token.colorText }}>Pixo</Typography.Title>
-                <Typography.Text style={{ color: token.colorTextSecondary }}>{t("zdx.text.app.tagline")}</Typography.Text>
-              </Flex>
+              <div className="min-w-0">
+                <div className="truncate text-[15px] font-semibold leading-tight" style={{ color: token.colorText }}>Pixo</div>
+                <div className="truncate text-xs leading-snug" style={{ color: token.colorTextTertiary }}>{t("zdx.text.app.tagline")}</div>
+              </div>
             )}
-          </Flex>
+          </div>
           <Menu
             mode="inline"
             inlineCollapsed={collapsed}
             selectedKeys={selected ? [selected] : []}
-            style={{ borderInlineEnd: 0, background: "transparent" }}
+            className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
+            style={{ borderInlineEnd: 0 }}
             onClick={({ key }) => {
               if (key === "clipboard") navigate("/clipboard");
               if (key === "screenshot") navigate("/screenshot");
-              if (key === "settings") navigate("/settings");
             }}
-            items={collapsed ? navItems : [{ type: "group", label: t("zdx.label.nav.workspace"), children: navItems }]}
+            items={collapsed ? navItems : [{ type: "group", label: t("zdx.label.nav.tools"), children: navItems }]}
           />
-          {!collapsed && <Typography.Text style={{ marginTop: "auto", padding: "12px 20px", color: token.colorTextSecondary }}>{t("zdx.text.app.local")}</Typography.Text>}
-        </Flex>
+          <div className="shrink-0 pb-3">
+            <Menu
+              mode="inline"
+              inlineCollapsed={collapsed}
+              selectedKeys={onSettings ? ["settings"] : []}
+              style={{ borderInlineEnd: 0 }}
+              onClick={() => navigate("/settings")}
+              items={[{ key: "settings", icon: <SettingOutlined />, label: t("zdx.label.nav.settings") }]}
+            />
+            <div className={collapsed ? "flex justify-center pt-1" : "flex px-3 pt-1"}>
+              <Tooltip title={collapsed ? t("zdx.label.nav.expand") : t("zdx.label.nav.collapse")} placement="right">
+                <Button
+                  type="text"
+                  aria-label={collapsed ? t("zdx.label.nav.expand") : t("zdx.label.nav.collapse")}
+                  icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                  onClick={() => setCollapsed((value) => !value)}
+                  style={{ color: token.colorTextSecondary }}
+                />
+              </Tooltip>
+            </div>
+          </div>
+        </nav>
       </Layout.Sider>
-      <Layout className="min-h-0 overflow-hidden">
-        <Layout.Header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingInline: 16, lineHeight: 1, background: token.colorBgLayout, color: token.colorText, borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
-          <Flex align="center" gap={8} style={{ flexShrink: 0 }}>
-            <Button
-              type="text"
-              aria-label={collapsed ? t("zdx.label.nav.expand") : t("zdx.label.nav.collapse")}
-              icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-              onClick={() => setCollapsed((value) => !value)}
-              style={{ color: token.colorText }}
-            />
-            <Typography.Text type="secondary" style={{ whiteSpace: "nowrap" }}>{t("zdx.text.app.welcome")}</Typography.Text>
-          </Flex>
-          <Space>
-            <Select
-              aria-label={t("zdx.label.theme.title")}
-              value={mode}
-              style={{ width: 128 }}
-              onChange={(value) => {
-                if (isThemeMode(value)) setMode(value);
-              }}
-              options={[
-                { value: "system", label: t("zdx.label.theme.system") },
-                { value: "light", label: t("zdx.label.theme.light") },
-                { value: "dark", label: t("zdx.label.theme.dark") },
-              ]}
-            />
-            <Button icon={<GlobalOutlined />} aria-label={t("zdx.label.language.switch")} onClick={() => setLanguage(language === "en" ? "zh-CN" : "en")}>
-              {t("zdx.label.language.toggle")}
-            </Button>
-          </Space>
-        </Layout.Header>
-        <Layout.Content className="flex min-h-0 flex-1 flex-col overflow-hidden" style={{ padding: 24 }}>
+      <Layout.Content className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden py-2 pr-2">
+        <main
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
+          style={{
+            background: token.colorBgContainer,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: token.borderRadiusLG,
+            boxShadow: "0 1px 2px rgba(0, 0, 0, 0.04)",
+          }}
+        >
           <Outlet />
-        </Layout.Content>
-        <PermissionPrompt />
-        <UpdatePrompt />
-      </Layout>
+        </main>
+      </Layout.Content>
+      <PermissionPrompt />
+      <UpdatePrompt />
     </Layout>
   );
 }

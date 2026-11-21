@@ -1,23 +1,11 @@
 import { ClipboardRequestError } from "@/api/clipboard";
 import HistoryList from "@/components/clipboard/HistoryList";
+import Page from "@/components/Page";
 import { useClipboardHistory } from "@/hooks/useClipboard";
-import type { ClipFilter } from "@/types/clipboard";
-import { toSettingsUpdate } from "@/types/clipboard";
+import { CLIP_FILTERS, isClipFilter, toSettingsUpdate } from "@/types/clipboard";
 import { clipboardErrorText, clipboardReasonText, clipboardStatusText } from "@/utils/clipboardMessage";
 import { isDesktop } from "@/utils/desktop";
 import { DEFAULT_DELETE_SHORTCUT, DEFAULT_PIN_SHORTCUT, eventMatchesShortcut } from "@/utils/shortcut";
-
-const FILTERS: Array<{ id: ClipFilter; label: string }> = [
-  { id: "all", label: "zdx.label.clipboard.filter.all" },
-  { id: "text", label: "zdx.label.clipboard.filter.text" },
-  { id: "image", label: "zdx.label.clipboard.filter.image" },
-  { id: "files", label: "zdx.label.clipboard.filter.files" },
-  { id: "pinned", label: "zdx.label.clipboard.filter.pinned" },
-];
-
-function isFilter(value: string | number): value is ClipFilter {
-  return value === "all" || value === "text" || value === "image" || value === "files" || value === "pinned";
-}
 
 export default function ClipboardPage() {
   const { t } = useTranslation();
@@ -89,94 +77,98 @@ export default function ClipboardPage() {
   const emptyText = status?.enabled ? (history.query ? t("zdx.text.clipboard.noResults") : t("zdx.text.clipboard.empty")) : t("zdx.text.clipboard.disabled");
 
   return (
-    <Flex vertical gap={16} className="h-full min-h-0 flex-1 overflow-hidden" onKeyDown={onKeyDown}>
-      <Flex justify="space-between" align="flex-start" gap={16} wrap>
-        <div>
-          <Typography.Title level={3} style={{ margin: 0 }}>{t("zdx.label.clipboard.title")}</Typography.Title>
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("zdx.text.clipboard.description")}</Typography.Paragraph>
-        </div>
-        {desktop && (
-          <Space wrap>
-            {!status?.enabled && <Button type="primary" onClick={() => setEnableOpen(true)}>{t("zdx.label.clipboard.enable")}</Button>}
-            {status?.enabled && !status.paused && <Button icon={<PauseOutlined />} onClick={() => void history.setPaused(true)}>{t("zdx.label.clipboard.pause")}</Button>}
-            {status?.enabled && status.paused && <Button icon={<PlayCircleOutlined />} onClick={() => void history.setPaused(false)}>{t("zdx.label.clipboard.resume")}</Button>}
-            <Button icon={<SearchOutlined />} onClick={() => void history.readNow()}>{t("zdx.label.clipboard.readNow")}</Button>
-            <Button icon={<SettingOutlined />} onClick={() => navigate("/settings/clipboard")}>{t("zdx.label.clipboard.settings")}</Button>
-            <Popconfirm
-              title={t("zdx.label.clipboard.clear")}
-              description={t(clearAll ? "zdx.text.clipboard.clearAllConfirm" : "zdx.text.clipboard.clearConfirm")}
-              okText={t("zdx.label.clipboard.confirm")}
-              cancelText={t("zdx.label.clipboard.cancel")}
-              okButtonProps={{ danger: true }}
-              placement="bottomRight"
-              onConfirm={() => history.clearHistory(!clearAll).then(() => setNotice(t(clearAll ? "zdx.text.clipboard.clearedAll" : "zdx.text.clipboard.cleared")))}
-            >
-              <Button danger onMouseDown={(event) => setClearAll(event.altKey && event.shiftKey)}>{t("zdx.label.clipboard.clear")}</Button>
-            </Popconfirm>
-          </Space>
-        )}
-      </Flex>
-
-      {!desktop && <Alert type="info" showIcon message={t("zdx.text.clipboard.error.desktop_only")} />}
-
-      {desktop && status && (
-        <Alert
-          type="info"
-          showIcon
-          message={clipboardStatusText(t, status.state)}
-          description={details.length > 0 ? <Flex vertical gap={4}>{details.map((line) => <span key={line}>{line}</span>)}</Flex> : undefined}
-        />
-      )}
-
-      {desktop && (
+    <Page
+      fill
+      title={t("zdx.label.clipboard.title")}
+      description={t("zdx.text.clipboard.description")}
+      extra={desktop && (
         <>
-          <Flex gap={12} wrap align="center">
-            <Input
-              allowClear
-              prefix={<SearchOutlined />}
-              value={history.query}
-              onChange={(event) => history.setQuery(event.target.value)}
-              placeholder={t("zdx.placeholder.clipboard.search")}
-              aria-label={t("zdx.label.clipboard.search")}
-              style={{ maxWidth: 360 }}
-            />
-            <Segmented
-              value={history.filter}
-              options={FILTERS.map((item) => ({ label: t(item.label), value: item.id }))}
-              onChange={(value) => {
-                if (isFilter(value)) history.setFilter(value);
-              }}
-            />
-          </Flex>
-          <div className="min-h-0 flex-1 overflow-auto">
-            {history.loading && history.items.length === 0 && (
-              <Flex align="center" gap={8}>
-                <Spin size="small" />
-                <Typography.Text type="secondary">{t("zdx.text.clipboard.loading")}</Typography.Text>
-              </Flex>
-            )}
-            {!history.loading && history.items.length === 0 && <Empty description={emptyText} />}
-            {history.items.length > 0 && (
-              <>
-                <HistoryList items={history.items} activeId={activeId} onActive={setActiveId} onCopy={(id) => void copy(id)} onPin={(id, pinned) => void history.pinItem(id, pinned)} onDelete={setPendingDelete} />
-                {history.nextCursor && <Button onClick={() => void history.loadMore()}>{t("zdx.label.clipboard.loadMore")}</Button>}
-              </>
-            )}
-          </div>
-          {notice && <Alert type="success" showIcon message={notice} />}
-          {history.error && history.error.code !== "desktop_only" && <Alert type="error" showIcon message={clipboardErrorText(t, history.error)} />}
+          {!status?.enabled && <Button type="primary" onClick={() => setEnableOpen(true)}>{t("zdx.label.clipboard.enable")}</Button>}
+          {status?.enabled && !status.paused && <Button icon={<PauseOutlined />} onClick={() => void history.setPaused(true)}>{t("zdx.label.clipboard.pause")}</Button>}
+          {status?.enabled && status.paused && <Button icon={<PlayCircleOutlined />} onClick={() => void history.setPaused(false)}>{t("zdx.label.clipboard.resume")}</Button>}
+          <Tooltip title={t("zdx.label.clipboard.readNow")}>
+            <Button icon={<ImportOutlined />} aria-label={t("zdx.label.clipboard.readNow")} onClick={() => void history.readNow()} />
+          </Tooltip>
+          <Tooltip title={t("zdx.label.clipboard.settings")}>
+            <Button icon={<SettingOutlined />} aria-label={t("zdx.label.clipboard.settings")} onClick={() => navigate("/settings/clipboard")} />
+          </Tooltip>
+          <Popconfirm
+            title={t("zdx.label.clipboard.clear")}
+            description={t(clearAll ? "zdx.text.clipboard.clearAllConfirm" : "zdx.text.clipboard.clearConfirm")}
+            okText={t("zdx.label.clipboard.confirm")}
+            cancelText={t("zdx.label.clipboard.cancel")}
+            okButtonProps={{ danger: true }}
+            placement="bottomRight"
+            onConfirm={() => history.clearHistory(!clearAll).then(() => setNotice(t(clearAll ? "zdx.text.clipboard.clearedAll" : "zdx.text.clipboard.cleared")))}
+          >
+            <Button danger icon={<ClearOutlined />} onMouseDown={(event) => setClearAll(event.altKey && event.shiftKey)}>{t("zdx.label.clipboard.clear")}</Button>
+          </Popconfirm>
         </>
       )}
+    >
+      <Flex vertical gap={16} className="min-h-0 flex-1 overflow-hidden" onKeyDown={onKeyDown}>
+        {!desktop && <Alert type="info" showIcon message={t("zdx.text.clipboard.error.desktop_only")} />}
 
-      <Typography.Text type="secondary" className="mt-auto shrink-0">{t("zdx.text.clipboard.privacy")}</Typography.Text>
+        {desktop && status && (
+          <Alert
+            type={status.enabled && !status.paused ? "success" : "info"}
+            showIcon
+            message={clipboardStatusText(t, status.state)}
+            description={details.length > 0 ? <Flex vertical gap={4}>{details.map((line) => <span key={line}>{line}</span>)}</Flex> : undefined}
+          />
+        )}
 
-      <Modal open={enableOpen} title={t("zdx.text.clipboard.enableTitle")} okText={t("zdx.label.clipboard.enable")} cancelText={t("zdx.label.clipboard.cancel")} onOk={() => void enable()} onCancel={() => setEnableOpen(false)}>
-        <Typography.Paragraph>{t("zdx.text.clipboard.enableBody")}</Typography.Paragraph>
-        {status && <Typography.Paragraph>{t("zdx.text.clipboard.storagePath", { path: status.storagePath })}</Typography.Paragraph>}
-      </Modal>
-      <Modal open={pendingDelete !== null} title={t("zdx.label.clipboard.delete")} okText={t("zdx.label.clipboard.confirm")} cancelText={t("zdx.label.clipboard.cancel")} onOk={() => { if (pendingDelete !== null) void history.deleteItem(pendingDelete).then(() => setPendingDelete(null)); }} onCancel={() => setPendingDelete(null)}>
-        <Typography.Paragraph>{t("zdx.text.clipboard.deleteConfirm")}</Typography.Paragraph>
-      </Modal>
-    </Flex>
+        {desktop && (
+          <>
+            <Flex gap={12} wrap align="center" justify="space-between">
+              <Input
+                allowClear
+                prefix={<SearchOutlined />}
+                value={history.query}
+                onChange={(event) => history.setQuery(event.target.value)}
+                placeholder={t("zdx.placeholder.clipboard.search")}
+                aria-label={t("zdx.label.clipboard.search")}
+                className="min-w-[200px] flex-[1_1_240px]"
+                style={{ maxWidth: 360 }}
+              />
+              <Segmented
+                value={history.filter}
+                options={CLIP_FILTERS.map((item) => ({ label: t(item.label), value: item.id }))}
+                onChange={(value) => {
+                  if (isClipFilter(value)) history.setFilter(value);
+                }}
+              />
+            </Flex>
+            <div className="-mr-2 min-h-0 flex-1 overflow-auto pr-2">
+              {history.loading && history.items.length === 0 && (
+                <Flex align="center" gap={8}>
+                  <Spin size="small" />
+                  <Typography.Text type="secondary">{t("zdx.text.clipboard.loading")}</Typography.Text>
+                </Flex>
+              )}
+              {!history.loading && history.items.length === 0 && <Empty className="py-12" image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} />}
+              {history.items.length > 0 && (
+                <>
+                  <HistoryList items={history.items} activeId={activeId} onActive={setActiveId} onCopy={(id) => void copy(id)} onPin={(id, pinned) => void history.pinItem(id, pinned)} onDelete={setPendingDelete} />
+                  {history.nextCursor && <Flex justify="center" className="py-2"><Button type="text" onClick={() => void history.loadMore()}>{t("zdx.label.clipboard.loadMore")}</Button></Flex>}
+                </>
+              )}
+            </div>
+            {notice && <Alert type="success" showIcon closable message={notice} onClose={() => setNotice("")} />}
+            {history.error && history.error.code !== "desktop_only" && <Alert type="error" showIcon message={clipboardErrorText(t, history.error)} />}
+          </>
+        )}
+
+        <Typography.Text type="secondary" className="mt-auto shrink-0 text-xs">{t("zdx.text.clipboard.privacy")}</Typography.Text>
+
+        <Modal open={enableOpen} title={t("zdx.text.clipboard.enableTitle")} okText={t("zdx.label.clipboard.enable")} cancelText={t("zdx.label.clipboard.cancel")} onOk={() => void enable()} onCancel={() => setEnableOpen(false)}>
+          <Typography.Paragraph>{t("zdx.text.clipboard.enableBody")}</Typography.Paragraph>
+          {status && <Typography.Paragraph>{t("zdx.text.clipboard.storagePath", { path: status.storagePath })}</Typography.Paragraph>}
+        </Modal>
+        <Modal open={pendingDelete !== null} title={t("zdx.label.clipboard.delete")} okText={t("zdx.label.clipboard.confirm")} cancelText={t("zdx.label.clipboard.cancel")} onOk={() => { if (pendingDelete !== null) void history.deleteItem(pendingDelete).then(() => setPendingDelete(null)); }} onCancel={() => setPendingDelete(null)}>
+          <Typography.Paragraph>{t("zdx.text.clipboard.deleteConfirm")}</Typography.Paragraph>
+        </Modal>
+      </Flex>
+    </Page>
   );
 }

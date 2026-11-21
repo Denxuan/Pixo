@@ -1,7 +1,22 @@
 import { ScreenshotRequestError, openScreenRecordingSettings, screenshotRequestAccess, screenshotStart, screenshotStatus, toScreenshotError } from "@/api/screenshot";
+import Page from "@/components/Page";
 import type { ShotStatus } from "@/types/screenshot";
 import { isDesktop } from "@/utils/desktop";
 import { screenshotErrorText, screenshotReasonText } from "@/utils/screenshotMessage";
+
+function ActionCard({ icon, title, description, action }: { icon: ReactNode; title: string; description: string; action?: ReactNode }) {
+  const { token } = antdTheme.useToken();
+  return (
+    <div className="flex flex-col gap-3 p-5" style={{ border: `1px solid ${token.colorBorderSecondary}`, borderRadius: token.borderRadiusLG, background: token.colorBgContainer }}>
+      <span className="flex h-10 w-10 items-center justify-center text-lg" style={{ borderRadius: token.borderRadius, background: token.colorPrimaryBg, color: token.colorPrimary }} aria-hidden="true">{icon}</span>
+      <div className="flex flex-1 flex-col gap-1">
+        <Typography.Text strong>{title}</Typography.Text>
+        <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM, lineHeight: 1.6 }}>{description}</Typography.Text>
+      </div>
+      {action && <div>{action}</div>}
+    </div>
+  );
+}
 
 export default function ScreenshotPage() {
   const { t } = useTranslation();
@@ -60,19 +75,15 @@ export default function ScreenshotPage() {
   const blocked = status?.captureReason === "wayland";
 
   return (
-    <Flex vertical gap={16} className="h-full min-h-0 flex-1 overflow-auto">
-      <Flex justify="space-between" align="flex-start" gap={16} wrap>
-        <div>
-          <Typography.Title level={3} style={{ margin: 0 }}>{t("zdx.label.screenshot.title")}</Typography.Title>
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("zdx.text.screenshot.description")}</Typography.Paragraph>
-        </div>
-        {desktop && (
-          <Space wrap>
-            <Button type="primary" onClick={() => void start()} loading={busy} disabled={blocked}>{t("zdx.label.screenshot.start")}</Button>
-            <Button onClick={() => navigate("/settings/screenshot")}>{t("zdx.label.screenshot.settings")}</Button>
-          </Space>
-        )}
-      </Flex>
+    <Page
+      title={t("zdx.label.screenshot.title")}
+      description={t("zdx.text.screenshot.description")}
+      extra={desktop && (
+        <Tooltip title={t("zdx.label.screenshot.settings")}>
+          <Button icon={<SettingOutlined />} aria-label={t("zdx.label.screenshot.settings")} onClick={() => navigate("/settings/screenshot")} />
+        </Tooltip>
+      )}
+    >
       {!desktop && <Alert type="info" showIcon message={t("zdx.text.screenshot.desktopOnly")} />}
       {desktop && status && (
         <Alert
@@ -92,15 +103,27 @@ export default function ScreenshotPage() {
       )}
       {notice && <Alert type="error" showIcon message={notice} />}
       {desktop && (
-        <Flex vertical gap={8}>
-          <Typography.Text type="secondary">{status?.canOcr ? t("zdx.text.screenshot.ocrHelp") : t("zdx.text.screenshot.ocrUnsupported")}</Typography.Text>
-          <Flex align="center" gap={12}>
-            <Button onClick={() => void start()} disabled={blocked || busy}>{t("zdx.label.screenshot.record")}</Button>
-            <Typography.Text type="secondary">{t("zdx.text.screenshot.recordEntry")}</Typography.Text>
-          </Flex>
-        </Flex>
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-4">
+          <ActionCard
+            icon={<ScissorOutlined />}
+            title={t("zdx.label.screenshot.cardCapture")}
+            description={t("zdx.text.screenshot.cardCapture")}
+            action={<Button type="primary" onClick={() => void start()} loading={busy} disabled={blocked}>{t("zdx.label.screenshot.start")}</Button>}
+          />
+          <ActionCard
+            icon={<VideoCameraOutlined />}
+            title={t("zdx.label.screenshot.cardRecord")}
+            description={t("zdx.text.screenshot.recordEntry")}
+            action={<Button onClick={() => void start()} disabled={blocked || busy}>{t("zdx.label.screenshot.record")}</Button>}
+          />
+          <ActionCard
+            icon={<FileTextOutlined />}
+            title={t("zdx.label.screenshot.cardOcr")}
+            description={status?.canOcr ? t("zdx.text.screenshot.ocrHelp") : t("zdx.text.screenshot.ocrUnsupported")}
+          />
+        </div>
       )}
-      <Typography.Text type="secondary">{t("zdx.text.screenshot.local")}</Typography.Text>
-    </Flex>
+      <Typography.Text type="secondary" className="text-xs">{t("zdx.text.screenshot.local")}</Typography.Text>
+    </Page>
   );
 }

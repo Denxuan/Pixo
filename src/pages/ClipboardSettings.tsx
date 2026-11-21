@@ -1,6 +1,7 @@
 import { ClipboardRequestError, clipboardGetSettings, clipboardStatus, clipboardUpdateSettings, toClipboardError } from "@/api/clipboard";
 import ExcludedAppsField from "@/components/clipboard/ExcludedAppsField";
 import ShortcutField from "@/components/clipboard/ShortcutField";
+import { SettingGroup, SettingRow } from "@/components/SettingGroup";
 import type { ClipboardSettings, ClipboardStatus } from "@/types/clipboard";
 import { toSettingsUpdate } from "@/types/clipboard";
 import { clipboardErrorText } from "@/utils/clipboardMessage";
@@ -104,9 +105,9 @@ export default function ClipboardSettingsPage() {
   return (
     <Flex vertical gap={16}>
       <Flex justify="space-between" align="flex-start" gap={16} wrap>
-        <div>
+        <div className="min-w-0 flex-[1_1_320px]">
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("zdx.text.clipboard.settingsDescription")}</Typography.Paragraph>
-          {status && <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("zdx.text.clipboard.storagePath", { path: status.storagePath })}</Typography.Paragraph>}
+          {status && <Typography.Paragraph type="secondary" style={{ marginBottom: 0, wordBreak: "break-all" }}>{t("zdx.text.clipboard.storagePath", { path: status.storagePath })}</Typography.Paragraph>}
         </div>
         {desktop && <Button type="primary" htmlType="submit" form="clipboard-settings" loading={saving} disabled={!draft}>{t("zdx.label.clipboard.save")}</Button>}
       </Flex>
@@ -131,58 +132,83 @@ export default function ClipboardSettingsPage() {
       )}
 
       {desktop && draft && (
-        <Form id="clipboard-settings" layout="vertical" requiredMark={false} onFinish={() => void save(false)} className="max-w-xl">
-          <Form.Item label={t("zdx.label.clipboard.recordText")}><Switch checked={draft.recordText} onChange={(checked) => setDraft({ ...draft, recordText: checked })} /></Form.Item>
-          <Form.Item label={t("zdx.label.clipboard.recordImage")}><Switch checked={draft.recordImage} onChange={(checked) => setDraft({ ...draft, recordImage: checked })} /></Form.Item>
-          <Form.Item label={t("zdx.label.clipboard.recordFiles")}><Switch checked={draft.recordFiles} onChange={(checked) => setDraft({ ...draft, recordFiles: checked })} /></Form.Item>
-          <Form.Item label={t("zdx.label.clipboard.skipSensitive")}><Switch checked={draft.skipSensitive} onChange={(checked) => setDraft({ ...draft, skipSensitive: checked })} /></Form.Item>
-          <Form.Item label={t("zdx.label.clipboard.ignoredTypes")} extra={t("zdx.text.clipboard.ignoredTypes")}>
-            <Input.TextArea value={ignored} onChange={(event) => setIgnored(event.target.value)} placeholder={t("zdx.placeholder.clipboard.ignoredTypes")} rows={4} />
-          </Form.Item>
-          <Form.Item label={t("zdx.label.clipboard.copyOnSelect")} extra={t("zdx.text.clipboard.copyOnSelect")}>
-            <Switch checked={draft.copyOnSelect} onChange={(checked) => setDraft({ ...draft, copyOnSelect: checked })} />
-          </Form.Item>
-          <Form.Item label={t("zdx.label.clipboard.pasteAutomatically")} extra={t("zdx.text.clipboard.pasteAutomatically", { option: status?.platform.includes("macos") ? "Option" : "Alt" })}>
-            <Switch checked={draft.pasteAutomatically} onChange={(checked) => setDraft({ ...draft, pasteAutomatically: checked })} />
-          </Form.Item>
-          <Form.Item label={t("zdx.label.clipboard.maxItems")} extra={t("zdx.text.clipboard.maxItems")}>
-            <InputNumber min={1} max={5000} style={{ width: "100%" }} value={draft.maxItems} onChange={(value) => setDraft({ ...draft, maxItems: typeof value === "number" ? value : draft.maxItems })} />
-          </Form.Item>
-          <Form.Item label={t("zdx.label.clipboard.retentionDays")} extra={t("zdx.text.clipboard.retentionZero")}>
-            <InputNumber min={0} max={3650} style={{ width: "100%" }} value={draft.retentionDays} onChange={(value) => setDraft({ ...draft, retentionDays: Number(value) })} />
-          </Form.Item>
-          <Form.Item label={t("zdx.label.clipboard.maxText")}>
-            <InputNumber min={0} style={{ width: "100%" }} value={textMb} onChange={(value) => setTextMb(typeof value === "number" ? value : null)} />
-          </Form.Item>
-          <Form.Item label={t("zdx.label.clipboard.maxImage")}>
-            <InputNumber min={0} style={{ width: "100%" }} value={imageMb} onChange={(value) => setImageMb(typeof value === "number" ? value : null)} />
-          </Form.Item>
-          <Form.Item label={t("zdx.label.clipboard.shortcut")} extra={t("zdx.text.clipboard.shortcutHelp")}>
-            <ShortcutField value={draft.shortcut} macos={status?.platform.includes("macos") ?? false} onChange={(shortcut) => setDraft({ ...draft, shortcut })} />
-          </Form.Item>
-          <Form.Item label={t("zdx.label.clipboard.pinShortcut")} extra={t("zdx.text.clipboard.pinShortcut")}>
-            <ShortcutField label={t("zdx.label.clipboard.pinShortcut")} value={draft.pinShortcut} macos={status?.platform.includes("macos") ?? false} onChange={(pinShortcut) => setDraft({ ...draft, pinShortcut })} />
-          </Form.Item>
-          <Form.Item label={t("zdx.label.clipboard.deleteShortcut")} extra={t("zdx.text.clipboard.deleteShortcut")}>
-            <ShortcutField label={t("zdx.label.clipboard.deleteShortcut")} value={draft.deleteShortcut} macos={status?.platform.includes("macos") ?? false} onChange={(deleteShortcut) => setDraft({ ...draft, deleteShortcut })} />
-          </Form.Item>
-          <Form.Item
-            label={t("zdx.label.clipboard.excludedApps")}
-            extra={
-              <Flex vertical gap={4}>
-                {status?.canReadSourceApp ? <span>{t("zdx.text.clipboard.excludedPicker")}</span> : status ? <span>{t("zdx.text.clipboard.excludedHelp")}</span> : null}
-                {status?.platform.includes("wayland") && <span>{t("zdx.text.clipboard.excludedWayland")}</span>}
-              </Flex>
-            }
-          >
-            {status == null ? (
-              <Spin size="small" />
-            ) : status.canReadSourceApp ? (
-              <ExcludedAppsField value={excludedApps} onChange={setExcludedApps} />
-            ) : (
-              <Input.TextArea value={excluded} onChange={(event) => setExcluded(event.target.value)} placeholder={t("zdx.placeholder.clipboard.excludedApps")} rows={4} />
-            )}
-          </Form.Item>
+        <Form id="clipboard-settings" onFinish={() => void save(false)}>
+          <Flex vertical gap={24}>
+            <SettingGroup title={t("zdx.label.clipboard.groupRecord")}>
+              <SettingRow label={t("zdx.label.clipboard.recordText")}>
+                <Switch aria-label={t("zdx.label.clipboard.recordText")} checked={draft.recordText} onChange={(checked) => setDraft({ ...draft, recordText: checked })} />
+              </SettingRow>
+              <SettingRow label={t("zdx.label.clipboard.recordImage")}>
+                <Switch aria-label={t("zdx.label.clipboard.recordImage")} checked={draft.recordImage} onChange={(checked) => setDraft({ ...draft, recordImage: checked })} />
+              </SettingRow>
+              <SettingRow label={t("zdx.label.clipboard.recordFiles")}>
+                <Switch aria-label={t("zdx.label.clipboard.recordFiles")} checked={draft.recordFiles} onChange={(checked) => setDraft({ ...draft, recordFiles: checked })} />
+              </SettingRow>
+              <SettingRow label={t("zdx.label.clipboard.skipSensitive")}>
+                <Switch aria-label={t("zdx.label.clipboard.skipSensitive")} checked={draft.skipSensitive} onChange={(checked) => setDraft({ ...draft, skipSensitive: checked })} />
+              </SettingRow>
+              <SettingRow stacked label={t("zdx.label.clipboard.ignoredTypes")} description={t("zdx.text.clipboard.ignoredTypes")}>
+                <Input.TextArea aria-label={t("zdx.label.clipboard.ignoredTypes")} value={ignored} onChange={(event) => setIgnored(event.target.value)} placeholder={t("zdx.placeholder.clipboard.ignoredTypes")} rows={3} />
+              </SettingRow>
+            </SettingGroup>
+
+            <SettingGroup title={t("zdx.label.clipboard.groupBehavior")}>
+              <SettingRow label={t("zdx.label.clipboard.copyOnSelect")} description={t("zdx.text.clipboard.copyOnSelect")}>
+                <Switch aria-label={t("zdx.label.clipboard.copyOnSelect")} checked={draft.copyOnSelect} onChange={(checked) => setDraft({ ...draft, copyOnSelect: checked })} />
+              </SettingRow>
+              <SettingRow label={t("zdx.label.clipboard.pasteAutomatically")} description={t("zdx.text.clipboard.pasteAutomatically", { option: status?.platform.includes("macos") ? "Option" : "Alt" })}>
+                <Switch aria-label={t("zdx.label.clipboard.pasteAutomatically")} checked={draft.pasteAutomatically} onChange={(checked) => setDraft({ ...draft, pasteAutomatically: checked })} />
+              </SettingRow>
+            </SettingGroup>
+
+            <SettingGroup title={t("zdx.label.clipboard.groupStorage")}>
+              <SettingRow label={t("zdx.label.clipboard.maxItems")} description={t("zdx.text.clipboard.maxItems")}>
+                <InputNumber aria-label={t("zdx.label.clipboard.maxItems")} min={1} max={5000} style={{ width: 140 }} value={draft.maxItems} onChange={(value) => setDraft({ ...draft, maxItems: typeof value === "number" ? value : draft.maxItems })} />
+              </SettingRow>
+              <SettingRow label={t("zdx.label.clipboard.retentionDays")} description={t("zdx.text.clipboard.retentionZero")}>
+                <InputNumber aria-label={t("zdx.label.clipboard.retentionDays")} min={0} max={3650} style={{ width: 140 }} value={draft.retentionDays} onChange={(value) => setDraft({ ...draft, retentionDays: Number(value) })} />
+              </SettingRow>
+              <SettingRow label={t("zdx.label.clipboard.maxText")}>
+                <InputNumber aria-label={t("zdx.label.clipboard.maxText")} min={0} style={{ width: 140 }} value={textMb} onChange={(value) => setTextMb(typeof value === "number" ? value : null)} />
+              </SettingRow>
+              <SettingRow label={t("zdx.label.clipboard.maxImage")}>
+                <InputNumber aria-label={t("zdx.label.clipboard.maxImage")} min={0} style={{ width: 140 }} value={imageMb} onChange={(value) => setImageMb(typeof value === "number" ? value : null)} />
+              </SettingRow>
+            </SettingGroup>
+
+            <SettingGroup title={t("zdx.label.clipboard.groupShortcuts")}>
+              <SettingRow label={t("zdx.label.clipboard.shortcut")} description={t("zdx.text.clipboard.shortcutHelp")}>
+                <ShortcutField value={draft.shortcut} macos={status?.platform.includes("macos") ?? false} onChange={(shortcut) => setDraft({ ...draft, shortcut })} />
+              </SettingRow>
+              <SettingRow label={t("zdx.label.clipboard.pinShortcut")} description={t("zdx.text.clipboard.pinShortcut")}>
+                <ShortcutField label={t("zdx.label.clipboard.pinShortcut")} value={draft.pinShortcut} macos={status?.platform.includes("macos") ?? false} onChange={(pinShortcut) => setDraft({ ...draft, pinShortcut })} />
+              </SettingRow>
+              <SettingRow label={t("zdx.label.clipboard.deleteShortcut")} description={t("zdx.text.clipboard.deleteShortcut")}>
+                <ShortcutField label={t("zdx.label.clipboard.deleteShortcut")} value={draft.deleteShortcut} macos={status?.platform.includes("macos") ?? false} onChange={(deleteShortcut) => setDraft({ ...draft, deleteShortcut })} />
+              </SettingRow>
+            </SettingGroup>
+
+            <SettingGroup title={t("zdx.label.clipboard.groupExclude")}>
+              <SettingRow
+                stacked
+                label={t("zdx.label.clipboard.excludedApps")}
+                description={
+                  <>
+                    {status?.canReadSourceApp ? <div>{t("zdx.text.clipboard.excludedPicker")}</div> : status ? <div>{t("zdx.text.clipboard.excludedHelp")}</div> : null}
+                    {status?.platform.includes("wayland") && <div>{t("zdx.text.clipboard.excludedWayland")}</div>}
+                  </>
+                }
+              >
+                {status == null ? (
+                  <Spin size="small" />
+                ) : status.canReadSourceApp ? (
+                  <ExcludedAppsField value={excludedApps} onChange={setExcludedApps} />
+                ) : (
+                  <Input.TextArea aria-label={t("zdx.label.clipboard.excludedApps")} value={excluded} onChange={(event) => setExcluded(event.target.value)} placeholder={t("zdx.placeholder.clipboard.excludedApps")} rows={3} />
+                )}
+              </SettingRow>
+            </SettingGroup>
+          </Flex>
         </Form>
       )}
     </Flex>

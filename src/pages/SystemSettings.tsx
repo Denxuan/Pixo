@@ -4,9 +4,11 @@ import { clipboardSetEnabled, clipboardStatus } from "@/api/clipboard";
 import { screenshotGetSettings, screenshotSetEnabled } from "@/api/screenshot";
 import { getAutostart, setAutostart, setBackground, setTrayIcon } from "@/api/system";
 import { TRAY_ICONS, TrayMarkGlyph, type TrayIconId } from "@/components/icons/TrayMark";
+import Page from "@/components/Page";
+import { SettingGroup, SettingRow } from "@/components/SettingGroup";
 import ClipboardSettingsPage from "@/pages/ClipboardSettings";
 import ScreenshotSettingsPage from "@/pages/ScreenshotSettings";
-import { useSettingsStore, useTrayIcon } from "@/stores/settings";
+import { useSettingsStore, useTrayIcon, type Language, type ThemeMode } from "@/stores/settings";
 import { useUpdateStore } from "@/stores/update";
 import { isDesktop } from "@/utils/desktop";
 
@@ -19,21 +21,71 @@ function VersionCheck({ desktop }: { desktop: boolean }) {
   const check = useUpdateStore((state) => state.check);
 
   return (
-    <Flex align="flex-start" justify="space-between" gap={20}>
-      <div>
-        <Typography.Text strong>{t("zdx.label.system.version")}</Typography.Text>
-        <br />
-        <Typography.Text type="secondary">{t("zdx.text.system.versionHelp")}</Typography.Text>
-        {currentVersion && <><br /><Typography.Text>{t("zdx.text.system.versionCurrent", { version: currentVersion })}</Typography.Text></>}
-        {update?.updateAvailable && <><br /><Typography.Text>{t("zdx.text.system.updateAvailable", { version: update.latest })}</Typography.Text></>}
-        {update && !update.updateAvailable && <><br /><Typography.Text type="secondary">{t("zdx.text.system.upToDate")}</Typography.Text></>}
-        {updateError && <><br /><Typography.Text type="secondary">{t("zdx.text.system.updateError")}</Typography.Text></>}
-      </div>
+    <SettingRow
+      label={currentVersion ? t("zdx.text.system.versionCurrent", { version: currentVersion }) : t("zdx.label.system.version")}
+      description={
+        <>
+          <div>{t("zdx.text.system.versionHelp")}</div>
+          {update?.updateAvailable && <Typography.Text type="success" style={{ fontSize: "inherit" }}>{t("zdx.text.system.updateAvailable", { version: update.latest })}</Typography.Text>}
+          {update && !update.updateAvailable && <div>{t("zdx.text.system.upToDate")}</div>}
+          {updateError && <Typography.Text type="warning" style={{ fontSize: "inherit" }}>{t("zdx.text.system.updateError")}</Typography.Text>}
+        </>
+      }
+    >
       <Space>
         <Button onClick={() => void check()} loading={checking} disabled={!desktop}>{t("zdx.label.system.checkUpdate")}</Button>
         {update?.updateAvailable && <Button type="primary" onClick={() => void openUrl(update.url)}>{t("zdx.label.system.install")}</Button>}
       </Space>
-    </Flex>
+    </SettingRow>
+  );
+}
+
+function isThemeMode(value: string | number): value is ThemeMode {
+  return value === "system" || value === "light" || value === "dark";
+}
+
+function isLanguage(value: string): value is Language {
+  return value === "zh-CN" || value === "en";
+}
+
+function AppearanceSettings() {
+  const { t } = useTranslation();
+  const mode = useSettingsStore((state) => state.mode);
+  const setMode = useSettingsStore((state) => state.setMode);
+  const language = useSettingsStore((state) => state.language);
+  const setLanguage = useSettingsStore((state) => state.setLanguage);
+
+  return (
+    <SettingGroup title={t("zdx.label.system.appearance")}>
+      <SettingRow label={t("zdx.label.theme.title")} description={t("zdx.text.system.theme")}>
+        <Segmented
+          aria-label={t("zdx.label.theme.title")}
+          value={mode}
+          onChange={(value) => {
+            if (isThemeMode(value)) setMode(value);
+          }}
+          options={[
+            { value: "system", label: t("zdx.label.theme.system") },
+            { value: "light", label: t("zdx.label.theme.light") },
+            { value: "dark", label: t("zdx.label.theme.dark") },
+          ]}
+        />
+      </SettingRow>
+      <SettingRow label={t("zdx.label.language.title")} description={t("zdx.text.system.language")}>
+        <Select
+          aria-label={t("zdx.label.language.title")}
+          value={language}
+          style={{ width: 160 }}
+          onChange={(value) => {
+            if (isLanguage(value)) setLanguage(value);
+          }}
+          options={[
+            { value: "zh-CN", label: t("zdx.label.language.chinese") },
+            { value: "en", label: t("zdx.label.language.english") },
+          ]}
+        />
+      </SettingRow>
+    </SettingGroup>
   );
 }
 
@@ -64,12 +116,7 @@ function TrayIconPicker() {
   }
 
   return (
-    <Flex vertical gap={8}>
-      <div>
-        <Typography.Text strong>{t("zdx.label.system.trayIcon")}</Typography.Text>
-        <br />
-        <Typography.Text type="secondary">{t("zdx.text.system.trayIcon")}</Typography.Text>
-      </div>
+    <SettingRow stacked label={t("zdx.label.system.trayIcon")} description={t("zdx.text.system.trayIcon")}>
       <div role="radiogroup" aria-label={t("zdx.label.system.trayIcon")} className="flex flex-wrap gap-2" onKeyDown={onKeyDown}>
         {TRAY_ICONS.map((icon) => {
           const selected = trayIcon === icon.id;
@@ -85,11 +132,12 @@ function TrayIconPicker() {
               onClick={() => choose(icon.id)}
               className="flex cursor-pointer flex-col items-center justify-center gap-1 bg-transparent"
               style={{
-                width: 76,
-                height: 76,
-                borderRadius: 12,
+                minWidth: 72,
+                height: 68,
+                padding: "0 8px",
+                borderRadius: token.borderRadius,
                 border: `1px solid ${selected ? token.colorPrimary : token.colorBorderSecondary}`,
-                background: selected ? token.colorPrimaryBg : "transparent",
+                background: selected ? token.colorPrimaryBg : token.colorFillQuaternary,
                 color: selected ? token.colorPrimary : token.colorText,
               }}
             >
@@ -100,7 +148,7 @@ function TrayIconPicker() {
         })}
       </div>
       {failed && <Typography.Text type="danger">{t("zdx.text.system.error")}</Typography.Text>}
-    </Flex>
+    </SettingRow>
   );
 }
 
@@ -117,7 +165,8 @@ export default function SystemSettingsPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const desktop = isDesktop();
-  const section = location.pathname === "/settings/clipboard" ? "clipboard" : location.pathname === "/settings/screenshot" ? "screenshot" : "general";
+  const screenshotSettingsOpen = screenshotOn && location.pathname === "/settings/screenshot";
+  const section = location.pathname === "/settings/clipboard" ? "clipboard" : screenshotSettingsOpen ? "screenshot" : "general";
 
   useEffect(() => {
     if (!desktop) { setLoading(false); return; }
@@ -132,6 +181,11 @@ export default function SystemSettingsPage() {
     return () => { alive = false; };
   }, [desktop]);
 
+  useEffect(() => {
+    if (!desktop || loading || screenshotOn || location.pathname !== "/settings/screenshot") return;
+    navigate("/settings", { replace: true });
+  }, [desktop, loading, location.pathname, navigate, screenshotOn]);
+
   async function update(kind: "autostart" | "background" | "clipboard" | "screenshot", enabled: boolean) {
     setBusy(true);
     setError(false);
@@ -139,7 +193,11 @@ export default function SystemSettingsPage() {
       if (kind === "autostart") { await setAutostart(enabled); setAutostartState(await getAutostart()); }
       else if (kind === "background") { await setBackground(enabled); saveBackground(enabled); }
       else if (kind === "clipboard") { setClipboardOn((await clipboardSetEnabled(enabled)).enabled); }
-      else { setScreenshotOn((await screenshotSetEnabled(enabled)).enabled); }
+      else {
+        const next = await screenshotSetEnabled(enabled);
+        setScreenshotOn(next.enabled);
+        if (!next.enabled && location.pathname === "/settings/screenshot") navigate("/settings", { replace: true });
+      }
     } catch { setError(true); }
     finally { setBusy(false); }
   }
@@ -158,8 +216,7 @@ export default function SystemSettingsPage() {
     });
   }
 
-  return <Flex vertical gap={20} className="min-h-0 flex-1 overflow-auto">
-    <Typography.Title level={3} style={{ margin: 0 }}>{t("zdx.label.system.title")}</Typography.Title>
+  return <Page title={t("zdx.label.system.title")}>
     <Tabs
       activeKey={section}
       onChange={(key) => navigate(key === "clipboard" ? "/settings/clipboard" : key === "screenshot" ? "/settings/screenshot" : "/settings")}
@@ -169,15 +226,30 @@ export default function SystemSettingsPage() {
           key: "general",
           label: t("zdx.label.system.general"),
           children: (
-            <Flex vertical gap={24} className="max-w-xl">
+            <Flex vertical gap={24}>
               {!desktop && <Alert type="info" showIcon message={t("zdx.text.system.desktopOnly")} />}
               {error && <Alert type="error" showIcon message={t("zdx.text.system.error")} />}
-              <TrayIconPicker />
-              <Flex align="center" justify="space-between" gap={20}><div><Typography.Text strong>{t("zdx.label.system.clipboardFeature")}</Typography.Text><br /><Typography.Text type="secondary">{t("zdx.text.system.clipboardFeature")}</Typography.Text></div><Switch aria-label={t("zdx.label.system.clipboardFeature")} checked={clipboardOn} disabled={!desktop || loading || busy} onChange={changeClipboard} /></Flex>
-              <Flex align="center" justify="space-between" gap={20}><div><Typography.Text strong>{t("zdx.label.system.screenshotFeature")}</Typography.Text><br /><Typography.Text type="secondary">{t("zdx.text.system.screenshotFeature")}</Typography.Text></div><Switch aria-label={t("zdx.label.system.screenshotFeature")} checked={screenshotOn} disabled={!desktop || loading || busy} onChange={(enabled) => void update("screenshot", enabled)} /></Flex>
-              <Flex align="center" justify="space-between" gap={20}><div><Typography.Text strong>{t("zdx.label.system.autostart")}</Typography.Text><br /><Typography.Text type="secondary">{t("zdx.text.system.autostart")}</Typography.Text></div><Switch aria-label={t("zdx.label.system.autostart")} checked={autostart} disabled={!desktop || loading || busy} onChange={(enabled) => void update("autostart", enabled)} /></Flex>
-              <Flex align="center" justify="space-between" gap={20}><div><Typography.Text strong>{t("zdx.label.system.background")}</Typography.Text><br /><Typography.Text type="secondary">{t("zdx.text.system.background")}</Typography.Text></div><Switch aria-label={t("zdx.label.system.background")} checked={background} disabled={!desktop || busy} onChange={(enabled) => void update("background", enabled)} /></Flex>
-              <VersionCheck desktop={desktop} />
+              <AppearanceSettings />
+              <SettingGroup title={t("zdx.label.system.features")}>
+                <SettingRow label={t("zdx.label.system.clipboardFeature")} description={t("zdx.text.system.clipboardFeature")}>
+                  <Switch aria-label={t("zdx.label.system.clipboardFeature")} checked={clipboardOn} disabled={!desktop || loading || busy} onChange={changeClipboard} />
+                </SettingRow>
+                <SettingRow label={t("zdx.label.system.screenshotFeature")} description={t("zdx.text.system.screenshotFeature")}>
+                  <Switch aria-label={t("zdx.label.system.screenshotFeature")} checked={screenshotOn} disabled={!desktop || loading || busy} onChange={(enabled) => void update("screenshot", enabled)} />
+                </SettingRow>
+              </SettingGroup>
+              <SettingGroup title={t("zdx.label.system.startup")}>
+                <SettingRow label={t("zdx.label.system.autostart")} description={t("zdx.text.system.autostart")}>
+                  <Switch aria-label={t("zdx.label.system.autostart")} checked={autostart} disabled={!desktop || loading || busy} onChange={(enabled) => void update("autostart", enabled)} />
+                </SettingRow>
+                <SettingRow label={t("zdx.label.system.background")} description={t("zdx.text.system.background")}>
+                  <Switch aria-label={t("zdx.label.system.background")} checked={background} disabled={!desktop || busy} onChange={(enabled) => void update("background", enabled)} />
+                </SettingRow>
+                <TrayIconPicker />
+              </SettingGroup>
+              <SettingGroup title={t("zdx.label.system.about")}>
+                <VersionCheck desktop={desktop} />
+              </SettingGroup>
             </Flex>
           ),
         },
@@ -186,12 +258,12 @@ export default function SystemSettingsPage() {
           label: t("zdx.label.system.clipboard"),
           children: <ClipboardSettingsPage />,
         },
-        {
+        ...(screenshotOn ? [{
           key: "screenshot",
           label: t("zdx.label.system.screenshot"),
           children: <ScreenshotSettingsPage />,
-        },
+        }] : []),
       ]}
     />
-  </Flex>;
+  </Page>;
 }

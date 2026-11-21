@@ -50,7 +50,6 @@ export default defineConfig(() => ({
           "@ant-design/icons": [
             "SendOutlined",
             "AppstoreOutlined",
-            "GlobalOutlined",
             "CodeOutlined",
             "HistoryOutlined",
             "MenuFoldOutlined",
@@ -71,6 +70,10 @@ export default defineConfig(() => ({
             "SettingOutlined",
             "SearchOutlined",
             "PlayCircleOutlined",
+            "ImportOutlined",
+            "ScissorOutlined",
+            "VideoCameraOutlined",
+            "FileTextOutlined",
           ],
         },
         {

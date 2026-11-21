@@ -17,6 +17,16 @@ import {
 import type { ClipFilter, ClipSummary, ClipboardSettings, ClipboardSettingsUpdate, ClipboardStatus, CopyResult } from "@/types/clipboard";
 import { isDesktop } from "@/utils/desktop";
 
+function promoteClip(items: ClipSummary[], id: number): ClipSummary[] {
+  const index = items.findIndex((item) => item.id === id);
+  if (index < 0) return items;
+  const item = { ...items[index], lastCopiedAt: Date.now() };
+  const rest = items.filter((entry) => entry.id !== id);
+  const at = item.pinned ? 0 : rest.findIndex((entry) => !entry.pinned);
+  rest.splice(at < 0 ? rest.length : at, 0, item);
+  return rest;
+}
+
 function filterQuery(filter: ClipFilter): { kind?: "text" | "image" | "files"; pinnedOnly: boolean } {
   if (filter === "pinned") return { pinnedOnly: true };
   if (filter === "all") return { pinnedOnly: false };
@@ -88,8 +98,10 @@ export function useClipboardHistory() {
     void clipboardGetSettings().then((current) => {
       if (alive) setSettings(current);
     }).catch(() => undefined);
-    void listen("clipboard://changed", () => {
+    void listen<{ id?: number }>("clipboard://changed", (event) => {
       if (Date.now() < suppressChangedUntil.current) return;
+      const id = event.payload?.id;
+      if (id != null) setItems((current) => promoteClip(current, id));
       void loadRef.current();
     }).then((stop) => {
       if (alive) stops.push(stop);
@@ -140,7 +152,11 @@ export function useClipboardHistory() {
       setStatus(next);
       return next;
     }),
-    copyItem: (id: number, options?: { plain?: boolean; paste?: boolean }) => run(() => clipboardCopy(id, options)) as Promise<CopyResult>,
+    copyItem: (id: number, options?: { plain?: boolean; paste?: boolean }) => run(async () => {
+      const result = await clipboardCopy(id, options);
+      setItems((current) => promoteClip(current, id));
+      return result;
+    }) as Promise<CopyResult>,
     suppressChanged: (ms = 1200) => {
       suppressChangedUntil.current = Date.now() + ms;
     },

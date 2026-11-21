@@ -10,6 +10,7 @@ export function screenshotErrorText(t: Translate, error: ScreenshotRequestError)
   if (error.code === "unsupported" && reason === "wayland") return t("zdx.text.screenshot.wayland");
   if (error.code === "capture_failed" && reason === "display_changed") return t("zdx.text.screenshot.displayChanged");
   if (error.code === "capture_failed" && reason === "empty") return t("zdx.text.screenshot.recordEmpty");
+  if (error.code === "capture_failed" && reason === "audio") return t("zdx.text.screenshot.audioUnavailable");
   if (error.code === "unsupported" && reason === "ocr") return t("zdx.text.screenshot.ocrUnsupported");
   if (error.code === "not_found" && reason === "ocr") return t("zdx.text.screenshot.ocrEmpty");
   switch (error.code) {

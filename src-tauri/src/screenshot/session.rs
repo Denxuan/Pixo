@@ -348,9 +348,20 @@ impl ScreenshotState {
         width: f64,
         height: f64,
         format: &str,
+        cursor: &str,
+        speaker: bool,
+        microphone: bool,
+        speaker_device: &str,
+        microphone_device: &str,
     ) -> Result<(), ScreenshotError> {
         let format = super::record::RecordFormat::parse(format)
             .ok_or_else(|| ScreenshotError::new("invalid_input"))?;
+        let cursor = super::record::CursorMark::parse(cursor)
+            .ok_or_else(|| ScreenshotError::new("invalid_input"))?;
+        let speaker = speaker && format == super::record::RecordFormat::Mp4;
+        let microphone = microphone && format == super::record::RecordFormat::Mp4;
+        let speaker_device = bounded_device(speaker_device, 256)?;
+        let microphone_device = bounded_device(microphone_device, 256)?;
         ensure_capture_allowed()?;
         if super::record::is_active() {
             return Err(ScreenshotError::new("busy"));
@@ -397,9 +408,66 @@ impl ScreenshotState {
             monitor_height: monitor.height,
             save_dir,
             format,
+            cursor,
+            speaker,
+            microphone,
+            speaker_device,
+            microphone_device,
         };
         drop(session);
         super::record::start(self.inner.app.clone(), plan)
+    }
+
+    pub fn open_camera_preview(
+        &self,
+        monitor_index: u32,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        device_id: &str,
+    ) -> Result<bool, ScreenshotError> {
+        if !x.is_finite()
+            || !y.is_finite()
+            || !width.is_finite()
+            || !height.is_finite()
+            || x < 0.0
+            || y < 0.0
+            || width < 8.0
+            || height < 8.0
+        {
+            return Err(ScreenshotError::new("invalid_input"));
+        }
+        let device_id = bounded_device(device_id, 512)?;
+        let session = self
+            .inner
+            .session
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let live = session
+            .as_ref()
+            .ok_or_else(|| ScreenshotError::new("cancelled"))?;
+        let monitor = live
+            .monitors
+            .get(monitor_index as usize)
+            .ok_or_else(|| ScreenshotError::new("invalid_input"))?;
+        let Some((left, top, side, _)) = super::record::camera_bubble(
+            monitor.x,
+            monitor.y,
+            monitor.width,
+            monitor.height,
+            x,
+            y,
+            width,
+            height,
+            monitor.scale_factor,
+        ) else {
+            return Ok(false);
+        };
+        let app = self.inner.app.clone();
+        drop(session);
+        windows::open_camera(&app, left, top, side, &device_id)?;
+        Ok(true)
     }
 
     pub fn current(&self) -> Result<SessionView, ScreenshotError> {
@@ -1054,6 +1122,14 @@ impl LiveSession {
     }
 }
 
+fn bounded_device(value: &str, limit: usize) -> Result<String, ScreenshotError> {
+    let value = value.trim();
+    if value.len() > limit {
+        return Err(ScreenshotError::new("invalid_input"));
+    }
+    Ok(value.to_string())
+}
+
 fn ensure_capture_allowed() -> Result<(), ScreenshotError> {
     if capture::is_wayland() {
         return Err(ScreenshotError::with_params(
@@ -1089,24 +1165,20 @@ fn capture_capability() -> (bool, Option<String>) {
 }
 
 fn hide_own_windows(app: &AppHandle, hide: bool) -> Vec<HiddenWindow> {
-    let mut hidden = Vec::new();
-    for (label, window) in app.webview_windows() {
-        if label.starts_with("screenshot-overlay-")
-            || label.starts_with("screenshot-pin-")
-            || label.starts_with("screenshot-scroll")
-        {
-            continue;
-        }
-        let visible = window.is_visible().unwrap_or(false);
-        if hide && visible {
-            let _ = window.hide();
-        }
-        hidden.push(HiddenWindow {
-            label,
-            was_visible: visible,
-        });
-    }
-    hidden
+    let labels: Vec<String> = app
+        .webview_windows()
+        .into_iter()
+        .map(|(label, _)| label)
+        .filter(|label| {
+            !label.starts_with("screenshot-overlay-")
+                && !label.starts_with("screenshot-pin-")
+                && !label.starts_with("screenshot-scroll")
+        })
+        .collect();
+    windows::hide_app_windows(app, &labels, hide)
+        .into_iter()
+        .map(|(label, was_visible)| HiddenWindow { label, was_visible })
+        .collect()
 }
 
 fn give_back(app: &AppHandle, hidden: &[HiddenWindow], previous: Option<&str>) {
@@ -1313,17 +1385,23 @@ pub fn record_from_hotkey(app: &AppHandle) {
 }
 
 fn open_from_hotkey(app: &AppHandle, mode: &str) {
-    let Some(state) = app.try_state::<ScreenshotState>() else {
-        return;
-    };
-    let hide = state.settings().hide_self;
-    if let Err(error) = state.start(mode, hide) {
-        eprintln!("screenshot start: {}", error.code);
-        let _ = app.emit(
-            "screenshot://session",
-            serde_json::json!({ "phase": "failed", "code": error.code, "params": error.params }),
-        );
-    }
+    let app = app.clone();
+    let mode = mode.to_string();
+    // The shortcut callback is on the main thread. Capture has to leave it,
+    // or AppKit stays frozen until the whole screen has been copied.
+    std::thread::spawn(move || {
+        let Some(state) = app.try_state::<ScreenshotState>() else {
+            return;
+        };
+        let hide = state.settings().hide_self;
+        if let Err(error) = state.start(&mode, hide) {
+            eprintln!("screenshot start: {}", error.code);
+            let _ = app.emit(
+                "screenshot://session",
+                serde_json::json!({ "phase": "failed", "code": error.code, "params": error.params }),
+            );
+        }
+    });
 }
 
 fn scroll_area(x: f64, y: f64, width: f64, height: f64) -> Option<(u32, u32, u32, u32)> {

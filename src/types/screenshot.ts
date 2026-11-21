@@ -1,4 +1,4 @@
-export type PaletteColor = "red" | "yellow" | "green" | "blue" | "black" | "white";
+export type PaletteColor = "red" | "yellow" | "green" | "blue" | "black" | "gray" | "white";
 export type StrokeSize = "sm" | "md" | "lg";
 export type TagSide = "left" | "right";
 
@@ -11,9 +11,10 @@ export type Mark =
   | { kind: "arrow"; x1: number; y1: number; x2: number; y2: number; size: StrokeSize; color: PaletteColor }
   | { kind: "pen"; points: Point[]; size: StrokeSize; color: PaletteColor }
   | { kind: "highlight"; points: Point[]; size: StrokeSize; color: PaletteColor }
+  | { kind: "highlightShape"; shape: HighlightMode; x: number; y: number; w: number; h: number; size: StrokeSize; color: PaletteColor; opacity: number }
   | { kind: "mosaicPen"; points: Point[]; size: StrokeSize }
   | { kind: "mosaicRect"; x: number; y: number; w: number; h: number; size: StrokeSize }
-  | { kind: "text"; x: number; y: number; w: number; text: string; size: StrokeSize; fontSize: number; color: PaletteColor }
+  | { kind: "text"; x: number; y: number; w: number; text: string; size: StrokeSize; fontSize: number; color: PaletteColor; form?: TextForm }
   | { kind: "tag"; anchorX: number; anchorY: number; text: string; size: StrokeSize; color: PaletteColor; side: TagSide };
 
 export type Watermark = { text: string; opacity: number; color: PaletteColor };
@@ -76,4 +77,7 @@ export type ShotSettings = {
 export type CopyResult = { history: string };
 export type SaveResult = { path: string };
 
+export type HighlightMode = "rect" | "ellipse" | "fill";
+export type TextForm = "plain" | "fill" | "stroke";
+export type RecordCursor = "off" | "highlight" | "click" | "both";
 export type ShotTool = "adjust" | "rect" | "ellipse" | "arrow" | "pen" | "highlight" | "mosaic" | "text" | "tag" | "watermark";

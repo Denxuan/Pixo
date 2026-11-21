@@ -42,9 +42,10 @@ export default function ShortcutField({
   }
 
   return (
-    <Flex vertical gap={4}>
+    <Flex vertical gap={4} className="w-[200px] max-w-full">
       <Input
         readOnly
+        className="text-center"
         value={recording ? (recordingText ?? t("zdx.text.clipboard.shortcutRecording")) : formatShortcut(value, macos)}
         aria-label={label ?? t("zdx.label.clipboard.shortcut")}
         onFocus={() => {

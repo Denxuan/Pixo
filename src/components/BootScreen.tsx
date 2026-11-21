@@ -35,12 +35,17 @@ export default function BootScreen() {
   const { token } = antdTheme.useToken();
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full" style={{ background: token.colorBgLayout }}>
       <style>{motion}</style>
-      <div className="box-border flex w-[232px] flex-col gap-2 px-5 pt-6" style={{ background: token.colorBgLayout, borderInlineEnd: `1px solid ${token.colorBorderSecondary}` }}>
-        <img className="boot-mark h-10 w-10 rounded-xl" src="/pixo-icon.png" alt="" />
-        <p className="boot-name m-0 text-xl font-semibold leading-[1.2] tracking-[-0.02em]" style={{ color: token.colorText }}>Pixo</p>
-        <p className="boot-line m-0 text-sm leading-[1.4]" style={{ color: token.colorTextSecondary }}>{t("zdx.text.app.tagline")}</p>
+      <div className="box-border flex w-[216px] shrink-0 items-center gap-2.5 self-start px-5 pt-5">
+        <img className="boot-mark h-8 w-8 rounded-lg" src="/pixo-icon.png" alt="" />
+        <div className="min-w-0">
+          <p className="boot-name m-0 text-[15px] font-semibold leading-tight" style={{ color: token.colorText }}>Pixo</p>
+          <p className="boot-line m-0 text-xs leading-snug" style={{ color: token.colorTextTertiary }}>{t("zdx.text.app.tagline")}</p>
+        </div>
+      </div>
+      <div className="box-border flex min-w-0 flex-1 py-2 pr-2">
+        <div className="flex-1" style={{ background: token.colorBgContainer, border: `1px solid ${token.colorBorderSecondary}`, borderRadius: token.borderRadiusLG }} />
       </div>
     </div>
   );

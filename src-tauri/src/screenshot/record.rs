@@ -56,6 +56,26 @@ impl RecordFormat {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CursorMark {
+    Off,
+    Highlight,
+    Click,
+    Both,
+}
+
+impl CursorMark {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(Self::Off),
+            "highlight" => Some(Self::Highlight),
+            "click" => Some(Self::Click),
+            "both" => Some(Self::Both),
+            _ => None,
+        }
+    }
+}
+
 struct Held {
     path: PathBuf,
     format: RecordFormat,
@@ -86,6 +106,11 @@ pub struct RecordPlan {
     pub monitor_height: u32,
     pub save_dir: String,
     pub format: RecordFormat,
+    pub cursor: CursorMark,
+    pub speaker: bool,
+    pub microphone: bool,
+    pub speaker_device: String,
+    pub microphone_device: String,
 }
 
 pub fn start(app: AppHandle, plan: RecordPlan) -> Result<(), ScreenshotError> {
@@ -156,6 +181,7 @@ pub fn start(app: AppHandle, plan: RecordPlan) -> Result<(), ScreenshotError> {
             RecordOutcome::Saved { path, format } => {
                 remember_held(&path, format, &plan.save_dir);
                 let frame = preview_rect(&plan);
+                windows::close_camera(&app);
                 windows::close_record_frame(&app);
                 let _ = windows::show_record_preview(&app, frame.0, frame.1, frame.2, frame.3);
                 let _ = app.emit(
@@ -171,6 +197,7 @@ pub fn start(app: AppHandle, plan: RecordPlan) -> Result<(), ScreenshotError> {
             failed => {
                 emit_outcome(&app, &failed);
                 thread::sleep(Duration::from_millis(1600));
+                windows::close_camera(&app);
                 windows::close_record_frame(&app);
                 windows::close_recorder(&app);
                 if let Some(state) = app.try_state::<ScreenshotState>() {
@@ -419,10 +446,15 @@ impl RecordStream {
         }
     }
 
-    fn finish(self, directory: &Path, tail: Duration) -> Result<String, String> {
+    fn finish(
+        self,
+        directory: &Path,
+        tail: Duration,
+        audio: Option<Vec<i16>>,
+    ) -> Result<String, String> {
         match self {
             Self::Gif(stream) => stream.finish_file(tail),
-            Self::Mp4(stream) => stream.finish_file(directory, tail),
+            Self::Mp4(stream) => stream.finish_file(directory, tail, audio),
         }
     }
 }
@@ -462,6 +494,27 @@ fn capture_and_save(app: &AppHandle, plan: &RecordPlan) -> RecordOutcome {
     }
     sweep_dir(&directory);
     thread::sleep(Duration::from_millis(80));
+    let audio = if plan.format == RecordFormat::Mp4 && (plan.speaker || plan.microphone) {
+        match super::audio::AudioCapture::start(
+            plan.speaker,
+            plan.microphone,
+            &plan.speaker_device,
+            &plan.microphone_device,
+        ) {
+            Ok(capture) => Some(capture),
+            Err(error) => {
+                eprintln!("screenshot record audio: {error}");
+                return RecordOutcome::Failed {
+                    code: "capture_failed",
+                    reason: Some("audio"),
+                };
+            }
+        }
+    } else {
+        None
+    };
+    let mut probe = PointerProbe::new();
+    let mut pointer_fx = PointerFx::default();
     let mut misses = 0usize;
     let mut captured = 0usize;
     let mut previous_tick = Instant::now();
@@ -470,6 +523,10 @@ fn capture_and_save(app: &AppHandle, plan: &RecordPlan) -> RecordOutcome {
         let started = Instant::now();
         match capture_region(plan.monitor_index, x, y, width, height) {
             Ok(image) => {
+                let mut image = image;
+                if plan.cursor != CursorMark::Off {
+                    paint_pointer(&mut image, plan, &mut probe, &mut pointer_fx);
+                }
                 let image = downscale(image);
                 let pushed = if let Some(stream) = stream.as_mut() {
                     let elapsed = started.saturating_duration_since(previous_tick);
@@ -520,7 +577,8 @@ fn capture_and_save(app: &AppHandle, plan: &RecordPlan) -> RecordOutcome {
         "screenshot://record",
         serde_json::json!({ "phase": "exporting", "format": plan.format.as_str() }),
     );
-    match stream.finish(&directory, previous_tick.elapsed()) {
+    let audio = audio.map(super::audio::AudioCapture::finish);
+    match stream.finish(&directory, previous_tick.elapsed(), audio) {
         Ok(path) => RecordOutcome::Saved {
             path,
             format: plan.format,
@@ -857,6 +915,38 @@ pub fn preview_window(
         top = (monitor_bottom - height).max(monitor_top);
     }
     (left, top, width, height)
+}
+
+/// Square camera preview at the bottom-right of the selection, in logical points.
+pub fn camera_bubble(
+    monitor_x: i32,
+    monitor_y: i32,
+    monitor_width: u32,
+    monitor_height: u32,
+    selection_x: f64,
+    selection_y: f64,
+    selection_width: f64,
+    selection_height: f64,
+    scale: f64,
+) -> Option<(f64, f64, f64, f64)> {
+    let scale = scale.max(1.0);
+    let monitor_left = f64::from(monitor_x) / scale;
+    let monitor_top = f64::from(monitor_y) / scale;
+    let monitor_right = monitor_left + f64::from(monitor_width) / scale;
+    let monitor_bottom = monitor_top + f64::from(monitor_height) / scale;
+    let left = monitor_left + selection_x / scale;
+    let top = monitor_top + selection_y / scale;
+    let right = (left + selection_width / scale).clamp(left, monitor_right);
+    let bottom = (top + selection_height / scale).clamp(top, monitor_bottom);
+    let margin = 16.0;
+    let room = (right - left - margin * 2.0).min(bottom - top - margin * 2.0);
+    let side = 168.0_f64.min(room);
+    if side < 72.0 {
+        return None;
+    }
+    let x = (right - margin - side).clamp(monitor_left, (monitor_right - side).max(monitor_left));
+    let y = (bottom - margin - side).clamp(monitor_top, (monitor_bottom - side).max(monitor_top));
+    Some((x, y, side, side))
 }
 
 fn band(x: f64, y: f64, width: f64, height: f64) -> Option<(f64, f64, f64, f64)> {
@@ -1441,6 +1531,376 @@ fn color_distance(left: [u8; 3], right: [u8; 3]) -> i32 {
     red * red + green * green + blue * blue
 }
 
+const POINTER_BLUE: [u8; 3] = [59, 130, 246];
+const CLICK_FADE_MS: f64 = 450.0;
+
+struct PointerSample {
+    x: f64,
+    y: f64,
+    down: bool,
+}
+
+#[derive(Default)]
+struct PointerFx {
+    was_down: bool,
+    click: Option<ClickMark>,
+}
+
+struct ClickMark {
+    x: f64,
+    y: f64,
+    at: Instant,
+}
+
+struct PointerProbe {
+    #[cfg(target_os = "linux")]
+    linux: LinuxProbe,
+}
+
+impl PointerProbe {
+    fn new() -> Self {
+        Self {
+            #[cfg(target_os = "linux")]
+            linux: LinuxProbe::new(),
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn sample(&mut self) -> Option<PointerSample> {
+        let _ = self;
+        host_pointer()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn sample(&mut self) -> Option<PointerSample> {
+        self.linux.sample()
+    }
+}
+
+fn paint_pointer(
+    image: &mut RgbaImage,
+    plan: &RecordPlan,
+    probe: &mut PointerProbe,
+    fx: &mut PointerFx,
+) {
+    let highlight = matches!(plan.cursor, CursorMark::Highlight | CursorMark::Both);
+    let clicks = matches!(plan.cursor, CursorMark::Click | CursorMark::Both);
+    let radius = pointer_radius(image.width(), image.height());
+    let width = pointer_width(radius);
+    if let Some(sample) = probe.sample() {
+        let (x, y) = pointer_in_capture(
+            sample.x,
+            sample.y,
+            plan.monitor_x,
+            plan.monitor_y,
+            plan.x,
+            plan.y,
+            plan.scale,
+            capture_uses_logical_region(),
+        );
+        let inside = point_near(x, y, image.width(), image.height());
+        if clicks && sample.down && !fx.was_down && inside {
+            fx.click = Some(ClickMark {
+                x,
+                y,
+                at: Instant::now(),
+            });
+        }
+        fx.was_down = sample.down;
+        if highlight && inside {
+            paint_disk(
+                image,
+                x,
+                y,
+                radius,
+                [POINTER_BLUE[0], POINTER_BLUE[1], POINTER_BLUE[2], 70],
+            );
+            paint_ring(
+                image,
+                x,
+                y,
+                radius,
+                width,
+                [POINTER_BLUE[0], POINTER_BLUE[1], POINTER_BLUE[2], 235],
+            );
+        }
+    }
+    if !clicks {
+        return;
+    }
+    let rendered = fx.click.as_ref().map(|click| {
+        let age = click.at.elapsed();
+        (
+            click.x,
+            click.y,
+            click_alpha(age),
+            click_radius(radius, age),
+        )
+    });
+    let Some((x, y, alpha, click_radius)) = rendered else {
+        return;
+    };
+    if alpha == 0 {
+        fx.click = None;
+        return;
+    }
+    paint_ring(image, x, y, click_radius, width, [255, 255, 255, alpha]);
+    paint_disk(image, x, y, radius * 0.36, [255, 255, 255, alpha]);
+}
+
+fn pointer_radius(width: u32, height: u32) -> f64 {
+    let edge = f64::from(width.min(height));
+    (edge * 0.045).clamp(18.0, 96.0)
+}
+
+fn pointer_width(radius: f64) -> f64 {
+    (radius * 0.12).clamp(2.0, 6.0)
+}
+
+fn click_radius(base: f64, age: Duration) -> f64 {
+    let t = (age.as_secs_f64() / (CLICK_FADE_MS / 1000.0)).clamp(0.0, 1.0);
+    base * (0.55 + t * 1.25)
+}
+
+fn pointer_in_capture(
+    global_x: f64,
+    global_y: f64,
+    monitor_x: i32,
+    monitor_y: i32,
+    selection_x: u32,
+    selection_y: u32,
+    scale: f64,
+    logical: bool,
+) -> (f64, f64) {
+    let scale = if logical { scale.max(1.0) } else { 1.0 };
+    (
+        global_x - f64::from(monitor_x) / scale - f64::from(selection_x) / scale,
+        global_y - f64::from(monitor_y) / scale - f64::from(selection_y) / scale,
+    )
+}
+
+fn point_near(x: f64, y: f64, width: u32, height: u32) -> bool {
+    x.is_finite()
+        && y.is_finite()
+        && x >= -24.0
+        && y >= -24.0
+        && x < f64::from(width) + 24.0
+        && y < f64::from(height) + 24.0
+}
+
+fn click_alpha(age: Duration) -> u8 {
+    if age >= Duration::from_millis(CLICK_FADE_MS as u64) {
+        return 0;
+    }
+    let t = (age.as_secs_f64() / (CLICK_FADE_MS / 1000.0)).clamp(0.0, 1.0);
+    ((1.0 - t) * 255.0).round() as u8
+}
+
+fn paint_ring(
+    image: &mut RgbaImage,
+    cx: f64,
+    cy: f64,
+    radius: f64,
+    thickness: f64,
+    color: [u8; 4],
+) {
+    let inner = (radius - thickness).max(0.0);
+    let reach = radius + 1.0;
+    let x0 = (cx - reach).floor() as i32;
+    let x1 = (cx + reach).ceil() as i32;
+    let y0 = (cy - reach).floor() as i32;
+    let y1 = (cy + reach).ceil() as i32;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let dx = f64::from(x) + 0.5 - cx;
+            let dy = f64::from(y) + 0.5 - cy;
+            let dist = dx.hypot(dy);
+            let outer = (radius + 0.75 - dist).clamp(0.0, 1.0);
+            let hole = (dist - (inner - 0.75)).clamp(0.0, 1.0);
+            let cover = outer.min(hole);
+            if cover <= 0.0 {
+                continue;
+            }
+            let alpha = (f64::from(color[3]) * cover).round() as u8;
+            if alpha == 0 {
+                continue;
+            }
+            blend_pixel(image, x, y, [color[0], color[1], color[2], alpha]);
+        }
+    }
+}
+
+fn paint_disk(image: &mut RgbaImage, cx: f64, cy: f64, radius: f64, color: [u8; 4]) {
+    let reach = radius + 1.0;
+    let x0 = (cx - reach).floor() as i32;
+    let x1 = (cx + reach).ceil() as i32;
+    let y0 = (cy - reach).floor() as i32;
+    let y1 = (cy + reach).ceil() as i32;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let dx = f64::from(x) + 0.5 - cx;
+            let dy = f64::from(y) + 0.5 - cy;
+            let cover = (radius + 0.75 - dx.hypot(dy)).clamp(0.0, 1.0);
+            if cover <= 0.0 {
+                continue;
+            }
+            let alpha = (f64::from(color[3]) * cover).round() as u8;
+            if alpha == 0 {
+                continue;
+            }
+            blend_pixel(image, x, y, [color[0], color[1], color[2], alpha]);
+        }
+    }
+}
+
+fn blend_pixel(image: &mut RgbaImage, x: i32, y: i32, color: [u8; 4]) {
+    if x < 0 || y < 0 {
+        return;
+    }
+    let (width, height) = (image.width(), image.height());
+    if x as u32 >= width || y as u32 >= height || color[3] == 0 {
+        return;
+    }
+    let pixel = image.get_pixel_mut(x as u32, y as u32);
+    if color[3] == 255 {
+        *pixel = image::Rgba([color[0], color[1], color[2], 255]);
+        return;
+    }
+    let src_a = u32::from(color[3]);
+    let inv = 255 - src_a;
+    let dst = pixel.0;
+    pixel.0 = [
+        ((u32::from(color[0]) * src_a + u32::from(dst[0]) * inv) / 255) as u8,
+        ((u32::from(color[1]) * src_a + u32::from(dst[1]) * inv) / 255) as u8,
+        ((u32::from(color[2]) * src_a + u32::from(dst[2]) * inv) / 255) as u8,
+        255,
+    ];
+}
+
+#[cfg(target_os = "macos")]
+fn host_pointer() -> Option<PointerSample> {
+    unsafe {
+        let event = CGEventCreate(std::ptr::null_mut());
+        if event.is_null() {
+            return None;
+        }
+        let point = CGEventGetLocation(event);
+        CFRelease(event);
+        let down = CGEventSourceButtonState(0, 0) || CGEventSourceButtonState(0, 1);
+        Some(PointerSample {
+            x: point.x,
+            y: point.y,
+            down,
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct CgPoint {
+    x: f64,
+    y: f64,
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGEventCreate(source: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn CGEventGetLocation(event: *mut std::ffi::c_void) -> CgPoint;
+    fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFRelease(value: *const std::ffi::c_void);
+}
+
+#[cfg(target_os = "windows")]
+fn host_pointer() -> Option<PointerSample> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+    let mut point = POINT::default();
+    if unsafe { GetCursorPos(&mut point) }.is_err() {
+        return None;
+    }
+    let down = unsafe {
+        GetAsyncKeyState(i32::from(VK_LBUTTON.0)) < 0
+            || GetAsyncKeyState(i32::from(VK_RBUTTON.0)) < 0
+    };
+    Some(PointerSample {
+        x: f64::from(point.x),
+        y: f64::from(point.y),
+        down,
+    })
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+fn host_pointer() -> Option<PointerSample> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxProbe {
+    state: LinuxState,
+}
+
+#[cfg(target_os = "linux")]
+enum LinuxState {
+    Pending,
+    Failed,
+    Open {
+        connection: x11rb::rust_connection::RustConnection,
+        root: u32,
+    },
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxProbe {
+    fn new() -> Self {
+        Self {
+            state: LinuxState::Pending,
+        }
+    }
+
+    fn sample(&mut self) -> Option<PointerSample> {
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::{ConnectionExt, KeyButMask};
+
+        if matches!(self.state, LinuxState::Pending) {
+            self.state = open_linux_pointer()
+                .map(|(connection, root)| LinuxState::Open { connection, root })
+                .unwrap_or(LinuxState::Failed);
+        }
+        let LinuxState::Open { connection, root } = &self.state else {
+            return None;
+        };
+        let reply = connection.query_pointer(*root).ok()?.reply().ok()?;
+        let buttons = u16::from(KeyButMask::BUTTON1)
+            | u16::from(KeyButMask::BUTTON2)
+            | u16::from(KeyButMask::BUTTON3);
+        Some(PointerSample {
+            x: f64::from(reply.root_x),
+            y: f64::from(reply.root_y),
+            down: u16::from(reply.mask) & buttons != 0,
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn open_linux_pointer() -> Option<(x11rb::rust_connection::RustConnection, u32)> {
+    use x11rb::connection::Connection;
+
+    if super::capture::is_wayland() {
+        return None;
+    }
+    let (connection, screen) = x11rb::connect(None).ok()?;
+    let root = connection.setup().roots.get(screen)?.root;
+    Some((connection, root))
+}
+
 fn delay_cs(carry_us: &mut i32, elapsed: Duration) -> u16 {
     let micros = elapsed.as_micros().min(i32::MAX as u128);
     *carry_us = carry_us.saturating_add(i32::try_from(micros).unwrap_or(i32::MAX));
@@ -1456,6 +1916,56 @@ fn delay_cs(carry_us: &mut i32, elapsed: Duration) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_mark_accepts_the_pointer_effects() {
+        assert_eq!(CursorMark::parse("off"), Some(CursorMark::Off));
+        assert_eq!(CursorMark::parse("highlight"), Some(CursorMark::Highlight));
+        assert_eq!(CursorMark::parse("click"), Some(CursorMark::Click));
+        assert_eq!(CursorMark::parse("both"), Some(CursorMark::Both));
+        assert_eq!(CursorMark::parse("camera"), None);
+    }
+
+    #[test]
+    fn pointer_in_capture_converts_scaled_points() {
+        let (x, y) = pointer_in_capture(80.0, 45.0, 0, 0, 100, 50, 2.0, true);
+        assert!((x - 30.0).abs() < 0.001);
+        assert!((y - 20.0).abs() < 0.001);
+        let (x, y) = pointer_in_capture(180.0, 90.0, 100, 40, 20, 10, 2.0, false);
+        assert!((x - 60.0).abs() < 0.001);
+        assert!((y - 40.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn click_alpha_fades_out_over_450ms() {
+        assert_eq!(click_alpha(Duration::ZERO), 255);
+        assert_eq!(click_alpha(Duration::from_millis(450)), 0);
+        let mid = click_alpha(Duration::from_millis(225));
+        assert!((120..=136).contains(&u32::from(mid)));
+    }
+
+    #[test]
+    fn pointer_radius_grows_with_the_frame() {
+        assert!((pointer_radius(200, 200) - 18.0).abs() < 0.01);
+        assert!((pointer_radius(1000, 800) - 36.0).abs() < 0.01);
+        assert!((pointer_radius(4000, 3000) - 96.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn click_ring_expands_as_it_fades() {
+        let start = click_radius(40.0, Duration::ZERO);
+        let later = click_radius(40.0, Duration::from_millis(225));
+        assert!((start - 22.0).abs() < 0.01);
+        assert!(later > start);
+    }
+
+    #[test]
+    fn pointer_ring_marks_the_click_and_spares_the_center() {
+        let mut image = RgbaImage::from_pixel(48, 48, image::Rgba([0, 0, 0, 255]));
+        paint_ring(&mut image, 24.0, 24.0, 18.0, 2.0, [59, 130, 246, 255]);
+        assert!(image.get_pixel(41, 24).0[2] > 80);
+        assert_eq!(image.get_pixel(24, 24).0, [0, 0, 0, 255]);
+    }
 
     #[test]
     fn logical_region_divides_by_the_display_scale() {
@@ -1518,6 +2028,18 @@ mod tests {
                 Some((48.0, 250.0, 204.0, 2.0)),
                 Some((48.0, 100.0, 2.0, 150.0)),
             ]
+        );
+    }
+
+    #[test]
+    fn camera_bubble_sits_in_the_bottom_right() {
+        assert_eq!(
+            camera_bubble(0, 0, 2000, 1200, 100.0, 50.0, 800.0, 600.0, 2.0),
+            Some((266.0, 141.0, 168.0, 168.0))
+        );
+        assert_eq!(
+            camera_bubble(0, 0, 400, 300, 0.0, 0.0, 80.0, 80.0, 1.0),
+            None
         );
     }
 

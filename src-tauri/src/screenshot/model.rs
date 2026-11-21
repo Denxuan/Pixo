@@ -73,6 +73,7 @@ pub enum PaletteColor {
     Green,
     Blue,
     Black,
+    Gray,
     White,
 }
 
@@ -137,6 +138,16 @@ pub enum Mark {
         size: StrokeSize,
         color: PaletteColor,
     },
+    HighlightShape {
+        shape: HighlightForm,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        size: StrokeSize,
+        color: PaletteColor,
+        opacity: f64,
+    },
     MosaicPen {
         points: Vec<Point>,
         size: StrokeSize,
@@ -156,6 +167,8 @@ pub enum Mark {
         size: StrokeSize,
         font_size: f64,
         color: PaletteColor,
+        #[serde(default)]
+        form: TextForm,
     },
     Tag {
         anchor_x: f64,
@@ -165,6 +178,23 @@ pub enum Mark {
         color: PaletteColor,
         side: TagSide,
     },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TextForm {
+    #[default]
+    Plain,
+    Fill,
+    Stroke,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum HighlightForm {
+    Rect,
+    Ellipse,
+    Fill,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -255,6 +285,22 @@ fn validate_mark(mark: &Mark, width: f64, height: f64) -> Result<(), ScreenshotE
         | Mark::Ellipse { x, y, w, h, .. }
         | Mark::MosaicRect { x, y, w, h, .. } => {
             if !finite_box(*x, *y, *w, *h, width, height) || *w < 2.0 || *h < 2.0 {
+                return Err(ScreenshotError::new("invalid_input"));
+            }
+        }
+        Mark::HighlightShape {
+            x,
+            y,
+            w,
+            h,
+            opacity,
+            ..
+        } => {
+            if !finite_box(*x, *y, *w, *h, width, height)
+                || *w < 2.0
+                || *h < 2.0
+                || !(0.1..=1.0).contains(opacity)
+            {
                 return Err(ScreenshotError::new("invalid_input"));
             }
         }
@@ -568,10 +614,36 @@ mod tests {
             size: StrokeSize::Md,
             font_size: 36.0,
             color: PaletteColor::Red,
+            form: TextForm::Plain,
         });
         assert!(validate_document(&document, &[100], &[100]).is_ok());
         if let Mark::Text { font_size, .. } = &mut document.marks[0] {
             *font_size = 8.0;
+        }
+        assert!(validate_document(&document, &[100], &[100]).is_err());
+    }
+
+    #[test]
+    fn highlight_fill_keeps_opacity_in_range() {
+        let mut document = document(Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 80.0,
+            h: 40.0,
+        }));
+        document.marks.push(Mark::HighlightShape {
+            shape: HighlightForm::Fill,
+            x: 4.0,
+            y: 4.0,
+            w: 24.0,
+            h: 12.0,
+            size: StrokeSize::Md,
+            color: PaletteColor::Yellow,
+            opacity: 0.5,
+        });
+        assert!(validate_document(&document, &[100], &[100]).is_ok());
+        if let Mark::HighlightShape { opacity, .. } = &mut document.marks[0] {
+            *opacity = 0.0;
         }
         assert!(validate_document(&document, &[100], &[100]).is_err());
     }

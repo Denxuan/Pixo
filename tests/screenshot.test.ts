@@ -15,8 +15,12 @@ import {
   parseFrame,
   draggedOrigin,
   pinSlot,
+  placeAttachedProperty,
+  placeCameraBubble,
   placeMagnifier,
+  placeOuterPropertyBar,
   placePropertyBar,
+  placeRecordCard,
   placeSizeLabel,
   placeToolbar,
   tagBubble,
@@ -53,9 +57,36 @@ test("places the toolbar below, above, and inside the selection", () => {
   expect(placeToolbar({ x: 10, y: 30, w: 80, h: 40 }, toolbar, { x: 0, y: 0, w: 200, h: 100 }).side).toBe("inside");
 });
 
+test("centers the record card in the selection and keeps it inside the workspace", () => {
+  expect(placeRecordCard({ x: 100, y: 80, w: 400, h: 200 }, { w: 200, h: 100 }, { x: 0, y: 0, w: 800, h: 600 })).toEqual({ x: 200, y: 130 });
+  expect(placeRecordCard({ x: 700, y: 500, w: 80, h: 40 }, { w: 200, h: 120 }, { x: 0, y: 0, w: 800, h: 600 })).toEqual({ x: 600, y: 460 });
+  expect(placeRecordCard({ x: 10, y: 10, w: 40, h: 40 }, { w: 200, h: 120 }, { x: 0, y: 0, w: 180, h: 100 })).toEqual({ x: 0, y: 0 });
+});
+
 test("puts the property bar on the opposite side of the toolbar", () => {
   expect(placePropertyBar({ x: 10, y: 80, h: 40 }, { h: 36 }, "below")).toEqual({ x: 10, y: 38 });
   expect(placePropertyBar({ x: 10, y: 20, h: 40 }, { h: 36 }, "above")).toEqual({ x: 10, y: 66 });
+});
+
+test("puts the camera bubble in the bottom-right of the selection", () => {
+  expect(placeCameraBubble({ x: 40, y: 20, w: 500, h: 320 })).toEqual({ x: 356, y: 156, w: 168, h: 168 });
+  expect(placeCameraBubble({ x: 0, y: 0, w: 200, h: 180 })).toEqual({ x: 36, y: 16, w: 148, h: 148 });
+  expect(placeCameraBubble({ x: 0, y: 0, w: 160, h: 140 })).toEqual({ x: 36, y: 16, w: 108, h: 108 });
+  expect(placeCameraBubble({ x: 0, y: 0, w: 90, h: 90 })).toBeNull();
+});
+
+test("keeps the attached property bar on the preferred side", () => {
+  const workspace = { x: 0, y: 0, w: 1000, h: 800 };
+  expect(placeAttachedProperty({ x: 10, y: 80, h: 40 }, { h: 36 }, workspace, "above")).toEqual({ x: 10, y: 38 });
+  expect(placeAttachedProperty({ x: 10, y: 80, h: 40 }, { h: 36 }, workspace, "below")).toEqual({ x: 10, y: 126 });
+  expect(placeAttachedProperty({ x: 10, y: 4, h: 40 }, { h: 36 }, workspace, "above")).toEqual({ x: 10, y: 50 });
+});
+
+test("puts the highlight bar outside the toolbar and keeps it on screen", () => {
+  const workspace = { x: 0, y: 0, w: 1000, h: 800 };
+  expect(placeOuterPropertyBar({ x: 10, y: 80, h: 40 }, { h: 36 }, "below", workspace)).toEqual({ x: 10, y: 126 });
+  expect(placeOuterPropertyBar({ x: 10, y: 80, h: 40 }, { h: 36 }, "above", workspace)).toEqual({ x: 10, y: 38 });
+  expect(placeOuterPropertyBar({ x: 10, y: 760, h: 40 }, { h: 36 }, "below", workspace)).toEqual({ x: 10, y: 718 });
 });
 
 test("moves the magnifier and size label when they leave the workspace", () => {

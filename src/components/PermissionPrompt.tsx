@@ -1,5 +1,6 @@
 import { permissionsOpen, permissionsPrepare, permissionsStatus, type SystemPermission } from "@/api/permissions";
 import { toClipboardError } from "@/api/clipboard";
+import { SettingGroup, SettingRow } from "@/components/SettingGroup";
 import { clipboardErrorText } from "@/utils/clipboardMessage";
 import { isDesktop } from "@/utils/desktop";
 
@@ -76,13 +77,14 @@ export default function PermissionPrompt() {
       footer={<Button autoInsertSpace={false} onClick={() => setDismissed(true)}>{t("zdx.label.permission.later")}</Button>}
     >
       <Flex vertical gap={16}>
-        <Typography.Paragraph style={{ margin: 0 }}>{t("zdx.text.permission.intro")}</Typography.Paragraph>
-        {missing.map((item) => (
-          <Flex key={item.id} vertical gap={4}>
-            <Flex justify="space-between" align="center" gap={12}>
-              <Typography.Text strong>{t(permissionCopy[item.id].label)}</Typography.Text>
+        <Typography.Paragraph type="secondary" style={{ margin: 0 }}>{t("zdx.text.permission.intro")}</Typography.Paragraph>
+        <SettingGroup>
+          {missing.map((item) => (
+            <SettingRow key={item.id} label={t(permissionCopy[item.id].label)} description={t(permissionCopy[item.id].body)}>
               <Button
                 size="small"
+                type="primary"
+                ghost
                 onClick={() => {
                   setError("");
                   void permissionsOpen(item.id).catch((caught) => {
@@ -92,11 +94,10 @@ export default function PermissionPrompt() {
               >
                 {t("zdx.label.permission.openSettings")}
               </Button>
-            </Flex>
-            <Typography.Text type="secondary">{t(permissionCopy[item.id].body)}</Typography.Text>
-          </Flex>
-        ))}
-        <Typography.Text type="secondary">{t("zdx.text.permission.restart")}</Typography.Text>
+            </SettingRow>
+          ))}
+        </SettingGroup>
+        <Typography.Text type="secondary" className="text-xs">{t("zdx.text.permission.restart")}</Typography.Text>
         {error && <Alert type="error" showIcon message={error} />}
       </Flex>
     </Modal>

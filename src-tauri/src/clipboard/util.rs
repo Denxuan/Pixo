@@ -28,16 +28,8 @@ pub fn hash_text(text: &str) -> String {
 }
 
 pub fn hash_rich(text: &super::model::RichText) -> String {
-    let mut raw = hash_text(&text.plain).into_bytes();
-    raw.push(0);
-    if let Some(html) = &text.html {
-        raw.extend(html.as_bytes());
-    }
-    raw.push(0);
-    if let Some(rtf) = &text.rtf {
-        raw.extend(rtf);
-    }
-    sha256_hex(&raw)
+    // The same words are one history entry, so copying them again moves that entry up.
+    hash_text(text.plain.trim())
 }
 
 pub fn hash_files(paths: &[String]) -> String {

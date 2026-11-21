@@ -6,11 +6,12 @@ import { useSharedSettings } from "@/hooks/useSharedSettings";
 import { useSettingsStore } from "@/stores/settings";
 import { isTrayIcon } from "@/components/icons/TrayMark";
 import { isDesktop } from "@/utils/desktop";
-import { isDarkTheme } from "@/utils/theme";
+import { appTheme, isDarkTheme, SHELL_BACKGROUND } from "@/utils/theme";
 
 const ClipboardPanel = lazy(() => import("@/pages/ClipboardPanel"));
 const ScreenshotOverlay = lazy(() => import("@/pages/ScreenshotOverlay"));
 const ScreenshotPin = lazy(() => import("@/pages/ScreenshotPin"));
+const ScreenshotCamera = lazy(() => import("@/pages/ScreenshotCamera"));
 const ScreenshotRecorder = lazy(() => import("@/pages/ScreenshotRecorder"));
 const ScreenshotScrollHud = lazy(() => import("@/pages/ScreenshotScrollHud"));
 const AppRouter = lazy(() => import("@/router"));
@@ -21,12 +22,13 @@ const subscribe = (onChange: () => void) => {
   return () => colorScheme.removeEventListener("change", onChange);
 };
 
-function useSurface(): "app" | "panel" | "overlay" | "pin" | "recorder" | "scroll" {
+function useSurface(): "app" | "panel" | "overlay" | "pin" | "recorder" | "camera" | "scroll" {
   if (!isDesktop()) return "app";
   try {
     const label = getCurrentWindow().label;
     if (label === "clipboard-panel") return "panel";
     if (label === "screenshot-recorder") return "recorder";
+    if (label === "screenshot-camera") return "camera";
     if (label === "screenshot-scroll") return "scroll";
     if (label.startsWith("screenshot-overlay-")) return "overlay";
     if (label.startsWith("screenshot-pin-")) return "pin";
@@ -69,14 +71,14 @@ export default function App() {
     if (!isDesktop() || !appWindow || !hydrated) return;
     const current = getCurrentWindow();
     void current.setTheme(mode === "system" ? null : dark ? "dark" : "light").catch(() => undefined);
-    void current.setBackgroundColor(dark ? "#000000" : "#f5f5f5").catch(() => undefined);
+    void current.setBackgroundColor(dark ? SHELL_BACKGROUND.dark : SHELL_BACKGROUND.light).catch(() => undefined);
   }, [appWindow, dark, hydrated, mode]);
 
   return (
-    <ConfigProvider theme={{ algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm }}>
-      <div className={dark ? "dark h-full overflow-hidden" : "h-full overflow-hidden"} style={{ colorScheme: dark ? "dark" : "light", background: surface === "panel" || surface === "recorder" || surface === "overlay" ? "transparent" : surface === "scroll" ? "#1c1c1c" : appWindow ? undefined : "#000" }}>
+    <ConfigProvider button={{ autoInsertSpace: false }} theme={{ ...(appWindow ? appTheme(dark) : {}), algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm }}>
+      <div className={dark ? "dark h-full overflow-hidden" : "h-full overflow-hidden"} style={{ colorScheme: dark ? "dark" : "light", background: surface === "panel" || surface === "recorder" || surface === "camera" || surface === "overlay" ? "transparent" : surface === "scroll" ? "#1c1c1c" : appWindow ? undefined : "#000" }}>
         <Suspense fallback={appWindow ? <BootScreen /> : null}>
-          {surface === "recorder" ? <ScreenshotRecorder /> : surface === "scroll" ? <ScreenshotScrollHud /> : surface === "overlay" ? <ScreenshotOverlay /> : surface === "pin" ? <ScreenshotPin /> : surface === "panel" ? <ClipboardPanel /> : <AppRouter />}
+          {surface === "recorder" ? <ScreenshotRecorder /> : surface === "camera" ? <ScreenshotCamera /> : surface === "scroll" ? <ScreenshotScrollHud /> : surface === "overlay" ? <ScreenshotOverlay /> : surface === "pin" ? <ScreenshotPin /> : surface === "panel" ? <ClipboardPanel /> : <AppRouter />}
         </Suspense>
       </div>
     </ConfigProvider>

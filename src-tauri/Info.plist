@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Pixo 会打开摄像头，并在录屏区域右下角显示实时画面。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Pixo 会使用麦克风，把你的声音录进 MP4。</string>
 	<key>CFBundleAllowMixedLocalizations</key>
 	<true/>
 	<key>CFBundleLocalizations</key>
