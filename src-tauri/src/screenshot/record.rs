@@ -1818,9 +1818,10 @@ unsafe extern "C" {
 
 #[cfg(target_os = "windows")]
 fn host_pointer() -> Option<PointerSample> {
-    use windows::Win32::Foundation::POINT;
-    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
-    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    // `windows` in this module is the overlay helper. The Win32 crate is at the root.
+    use ::windows::Win32::Foundation::POINT;
+    use ::windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
+    use ::windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
     let mut point = POINT::default();
     if unsafe { GetCursorPos(&mut point) }.is_err() {
