@@ -35,6 +35,12 @@ sha2 = "0.10"
 tauri-plugin-autostart = "2"
 xcap = "0.9"
 tauri-plugin-dialog = "2"
+hmac = "0.12"
+russh = { version = "0.65.2", default-features = false, features = ["ring", "flate2", "rsa"] }
+sha1 = "0.10"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "sync", "time"] }
+zeroize = "1"
+russh-sftp = "3.0.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = { version = "11", features = ["macos_13_0"] }
@@ -43,8 +49,10 @@ objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSAppearance", 
 objc2-foundation = { version = "0.3", features = ["NSArray", "NSDictionary", "NSError", "NSFileManager", "NSGeometry", "NSString", "NSData", "NSURL", "NSUserDefaults", "NSValue", "objc2-core-foundation"] }
 objc2-vision = { version = "0.3", features = ["VNObservation", "VNRecognizeTextRequest", "VNRequest", "VNRequestHandler", "objc2-core-foundation"] }
 dispatch2 = "0.3"
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
 windows = { version = "0.62", features = [
   "Graphics_Imaging",
   "Media_Ocr",
@@ -65,6 +73,7 @@ windows = { version = "0.62", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { version = "3", features = ["wayland-data-control"] }
+keyring = { version = "3", default-features = false, features = ["sync-secret-service"] }
 wl-clipboard-rs = "0.9"
 x11rb = { version = "0.13", features = ["xfixes", "xtest"] }
 

@@ -25,3 +25,6 @@ dist-ssr
 
 # Code signing material
 *.p12
+
+# Local agent planning notes
+.planning/

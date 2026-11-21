@@ -3,6 +3,7 @@ mod panel_anchor;
 mod permissions;
 mod screenshot;
 mod shortcut;
+mod ssh;
 mod system_settings;
 mod tray;
 
@@ -42,6 +43,11 @@ pub fn run() {
                 app.manage(screenshot);
             } else {
                 eprintln!("screenshot init failed");
+            }
+            if let Ok(ssh) = ssh::initialize(app.handle().clone()) {
+                app.manage(ssh);
+            } else {
+                eprintln!("ssh init failed");
             }
             #[cfg(target_os = "macos")]
             if let Err(error) = shortcut::prepare_panel(app.handle()) {
@@ -129,21 +135,41 @@ pub fn run() {
             screenshot::commands::screenshot_record_download,
             screenshot::commands::screenshot_record_copy,
             screenshot::commands::screenshot_record_close,
+            ssh::commands::ssh_status,
+            ssh::commands::ssh_set_enabled,
+            ssh::commands::ssh_hosts_list,
+            ssh::commands::ssh_host_save,
+            ssh::commands::ssh_host_delete,
+            ssh::commands::ssh_host_forget_key,
+            ssh::commands::ssh_pick_key,
+            ssh::commands::ssh_connect,
+            ssh::commands::ssh_hostkey_decide,
+            ssh::commands::ssh_answer,
+            ssh::commands::ssh_write,
+            ssh::commands::ssh_resize,
+            ssh::commands::ssh_disconnect,
+            ssh::commands::ssh_pick_upload,
+            ssh::commands::ssh_release_upload,
+            ssh::commands::ssh_transfer_start,
+            ssh::commands::ssh_transfer_decide,
+            ssh::commands::ssh_transfer_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
 pub(crate) fn ensure_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
-    if app.get_webview_window("main").is_some() {
-        return Ok(());
-    }
-    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title("pixo")
-        .inner_size(1100.0, 720.0)
-        .min_inner_size(860.0, 600.0)
-        .background_color(window_canvas())
-        .build()?;
+    let window = if let Some(window) = app.get_webview_window("main") {
+        window
+    } else {
+        WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            .title("pixo")
+            .inner_size(1100.0, 720.0)
+            .min_inner_size(860.0, 600.0)
+            .background_color(window_canvas())
+            .build()?
+    };
+    ssh::install_drop(&window);
     Ok(())
 }
 

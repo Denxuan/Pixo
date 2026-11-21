@@ -38,6 +38,16 @@ function useSurface(): "app" | "panel" | "overlay" | "pin" | "recorder" | "camer
   return "app";
 }
 
+function ScrollbarTone() {
+  const { token } = antdTheme.useToken();
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--pixo-scrollbar", token.colorTextTertiary);
+    root.style.setProperty("--pixo-scrollbar-hover", token.colorTextSecondary);
+  }, [token.colorTextSecondary, token.colorTextTertiary]);
+  return null;
+}
+
 function useSettingsHydrated() {
   return useSyncExternalStore(
     (onChange) => useSettingsStore.persist.onFinishHydration(onChange),
@@ -74,8 +84,19 @@ export default function App() {
     void current.setBackgroundColor(dark ? SHELL_BACKGROUND.dark : SHELL_BACKGROUND.light).catch(() => undefined);
   }, [appWindow, dark, hydrated, mode]);
 
+  useEffect(() => {
+    ConfigProvider.config({
+      holderRender: (children) => <ConfigProvider button={{ autoInsertSpace: false }}>{children}</ConfigProvider>,
+      theme: {
+        ...(appWindow ? appTheme(dark) : {}),
+        algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
+      },
+    });
+  }, [appWindow, dark]);
+
   return (
     <ConfigProvider button={{ autoInsertSpace: false }} theme={{ ...(appWindow ? appTheme(dark) : {}), algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm }}>
+      <ScrollbarTone />
       <div className={dark ? "dark h-full overflow-hidden" : "h-full overflow-hidden"} style={{ colorScheme: dark ? "dark" : "light", background: surface === "panel" || surface === "recorder" || surface === "camera" || surface === "overlay" ? "transparent" : surface === "scroll" ? "#1c1c1c" : appWindow ? undefined : "#000" }}>
         <Suspense fallback={appWindow ? <BootScreen /> : null}>
           {surface === "recorder" ? <ScreenshotRecorder /> : surface === "camera" ? <ScreenshotCamera /> : surface === "scroll" ? <ScreenshotScrollHud /> : surface === "overlay" ? <ScreenshotOverlay /> : surface === "pin" ? <ScreenshotPin /> : surface === "panel" ? <ClipboardPanel /> : <AppRouter />}

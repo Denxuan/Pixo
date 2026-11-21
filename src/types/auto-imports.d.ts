@@ -17,10 +17,14 @@ declare global {
   const ClearOutlined: typeof import('@ant-design/icons').ClearOutlined
   const ClockCircleOutlined: typeof import('@ant-design/icons').ClockCircleOutlined
   const CloseOutlined: typeof import('@ant-design/icons').CloseOutlined
+  const CloudServerOutlined: typeof import('@ant-design/icons').CloudServerOutlined
   const CodeOutlined: typeof import('@ant-design/icons').CodeOutlined
   const ConfigProvider: typeof import('antd').ConfigProvider
   const CopyOutlined: typeof import('@ant-design/icons').CopyOutlined
   const DeleteOutlined: typeof import('@ant-design/icons').DeleteOutlined
+  const DisconnectOutlined: typeof import('@ant-design/icons').DisconnectOutlined
+  const Dropdown: typeof import('antd').Dropdown
+  const EditOutlined: typeof import('@ant-design/icons').EditOutlined
   const Empty: typeof import('antd').Empty
   const FileImageOutlined: typeof import('@ant-design/icons').FileImageOutlined
   const FileOutlined: typeof import('@ant-design/icons').FileOutlined
@@ -36,6 +40,7 @@ declare global {
   const InfoCircleOutlined: typeof import('@ant-design/icons').InfoCircleOutlined
   const Input: typeof import('antd').Input
   const InputNumber: typeof import('antd').InputNumber
+  const KeyOutlined: typeof import('@ant-design/icons').KeyOutlined
   const Layout: typeof import('antd').Layout
   const Link: typeof import('react-router').Link
   const List: typeof import('antd').List
@@ -48,9 +53,11 @@ declare global {
   const Outlet: typeof import('react-router').Outlet
   const PauseOutlined: typeof import('@ant-design/icons').PauseOutlined
   const PlayCircleOutlined: typeof import('@ant-design/icons').PlayCircleOutlined
+  const PlusOutlined: typeof import('@ant-design/icons').PlusOutlined
   const Popconfirm: typeof import('antd').Popconfirm
   const PushpinFilled: typeof import('@ant-design/icons').PushpinFilled
   const PushpinOutlined: typeof import('@ant-design/icons').PushpinOutlined
+  const ReloadOutlined: typeof import('@ant-design/icons').ReloadOutlined
   const Route: typeof import('react-router').Route
   const Routes: typeof import('react-router').Routes
   const ScissorOutlined: typeof import('@ant-design/icons').ScissorOutlined
@@ -68,6 +75,7 @@ declare global {
   const Tooltip: typeof import('antd').Tooltip
   const Trans: typeof import('react-i18next').Trans
   const Typography: typeof import('antd').Typography
+  const UploadOutlined: typeof import('@ant-design/icons').UploadOutlined
   const VideoCameraOutlined: typeof import('@ant-design/icons').VideoCameraOutlined
   const antdTheme: typeof import('antd').theme
   const cache: typeof import('react').cache

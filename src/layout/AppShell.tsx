@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import { clipboardStatus, takeClipboardMainRequest } from "@/api/clipboard";
 import { screenshotGetSettings } from "@/api/screenshot";
+import { sshStatus } from "@/api/ssh";
 import PermissionPrompt from "@/components/PermissionPrompt";
 import UpdatePrompt from "@/components/UpdatePrompt";
 import type { ClipboardStatus } from "@/types/clipboard";
@@ -35,18 +36,29 @@ export default function AppShell() {
   const navigate = useNavigate();
   const { token } = antdTheme.useToken();
   const [collapsed, setCollapsed] = useState(false);
+  const collapsedBySsh = useRef(false);
   const [clipboardOn, setClipboardOn] = useState<boolean | null>(null);
   const [screenshotOn, setScreenshotOn] = useState<boolean | null>(null);
+  const [sshOn, setSshOn] = useState<boolean | null>(null);
   const reduceMotion = useSyncExternalStore(subscribeMotion, () => motionQuery.matches);
   const onSettings = location.pathname.startsWith("/settings");
-  const selected = location.pathname.startsWith("/screenshot") ? "screenshot" : location.pathname.startsWith("/clipboard") ? "clipboard" : "";
+  const selected = location.pathname.startsWith("/screenshot")
+    ? "screenshot"
+    : location.pathname.startsWith("/ssh")
+      ? "ssh"
+      : location.pathname.startsWith("/clipboard")
+        ? "clipboard"
+        : "";
   const clipboardItem = { key: "clipboard", icon: <HistoryOutlined />, label: t("zdx.label.nav.clipboard") };
   const screenshotItem = { key: "screenshot", icon: <ScreenshotNavIcon />, label: t("zdx.label.nav.screenshot") };
+  const sshItem = { key: "ssh", icon: <CloudServerOutlined />, label: t("zdx.label.nav.ssh") };
   const showClipboard = !isDesktop() || clipboardOn !== false;
   const showScreenshot = !isDesktop() || screenshotOn !== false;
+  const showSsh = !isDesktop() || sshOn !== false;
   const navItems = [
     ...(showClipboard ? [clipboardItem] : []),
     ...(showScreenshot ? [screenshotItem] : []),
+    ...(showSsh ? [sshItem] : []),
   ];
 
   useEffect(() => {
@@ -83,6 +95,9 @@ export default function AppShell() {
     void screenshotGetSettings().then((settings) => {
       if (!disposed) setScreenshotOn(settings.enabled);
     }).catch(() => undefined);
+    void sshStatus().then((status) => {
+      if (!disposed) setSshOn(status.enabled);
+    }).catch(() => undefined);
     void listen<ClipboardStatus>("clipboard://status", (event) => {
       setClipboardOn(event.payload.enabled);
     }).then((unlisten) => {
@@ -95,10 +110,18 @@ export default function AppShell() {
       if (disposed) unlisten();
       else stopScreenshot = unlisten;
     });
+    let stopSsh: (() => void) | undefined;
+    void listen<boolean>("ssh://enabled", (event) => {
+      setSshOn(event.payload);
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stopSsh = unlisten;
+    });
     return () => {
       disposed = true;
       stopStatus?.();
       stopScreenshot?.();
+      stopSsh?.();
     };
   }, []);
 
@@ -106,6 +129,26 @@ export default function AppShell() {
     if (!isDesktop() || screenshotOn !== false || location.pathname !== "/screenshot") return;
     navigate("/settings", { replace: true });
   }, [location.pathname, navigate, screenshotOn]);
+
+  useEffect(() => {
+    if (!isDesktop() || sshOn !== false || location.pathname !== "/ssh") return;
+    navigate("/settings", { replace: true });
+  }, [location.pathname, navigate, sshOn]);
+
+  useEffect(() => {
+    const onSsh = location.pathname.startsWith("/ssh");
+    if (onSsh) {
+      setCollapsed((value) => {
+        if (!value) collapsedBySsh.current = true;
+        return true;
+      });
+      return;
+    }
+    if (collapsedBySsh.current) {
+      collapsedBySsh.current = false;
+      setCollapsed(false);
+    }
+  }, [location.pathname]);
 
   return (
     <Layout className="h-full overflow-hidden" style={{ height: "100%" }}>
@@ -138,6 +181,7 @@ export default function AppShell() {
             onClick={({ key }) => {
               if (key === "clipboard") navigate("/clipboard");
               if (key === "screenshot") navigate("/screenshot");
+              if (key === "ssh") navigate("/ssh");
             }}
             items={collapsed ? navItems : [{ type: "group", label: t("zdx.label.nav.tools"), children: navItems }]}
           />
