@@ -42,6 +42,7 @@ export default defineConfig(() => ({
             "Space",
             "Spin",
             "Switch",
+            "Drawer",
             "Dropdown",
             "Tabs",
             "Typography",
@@ -50,6 +51,7 @@ export default defineConfig(() => ({
           ],
           "@ant-design/icons": [
             "SendOutlined",
+            "ApiOutlined",
             "AppstoreOutlined",
             "CodeOutlined",
             "HistoryOutlined",

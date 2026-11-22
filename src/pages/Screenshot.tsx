@@ -1,5 +1,6 @@
 import { ScreenshotRequestError, openScreenRecordingSettings, screenshotRequestAccess, screenshotStart, screenshotStatus, toScreenshotError } from "@/api/screenshot";
 import Page from "@/components/Page";
+import ShotLibrary from "@/components/screenshot/ShotLibrary";
 import type { ShotStatus } from "@/types/screenshot";
 import { isDesktop } from "@/utils/desktop";
 import { screenshotErrorText, screenshotReasonText } from "@/utils/screenshotMessage";
@@ -123,6 +124,7 @@ export default function ScreenshotPage() {
           />
         </div>
       )}
+      {desktop && <ShotLibrary />}
       <Typography.Text type="secondary" className="text-xs">{t("zdx.text.screenshot.local")}</Typography.Text>
     </Page>
   );

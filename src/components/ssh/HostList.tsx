@@ -10,6 +10,9 @@ export default function HostList({
   onEdit,
   onDelete,
   onCreate,
+  onImport,
+  keepalive,
+  onKeepalive,
 }: {
   hosts: SshHost[];
   query: string;
@@ -20,6 +23,9 @@ export default function HostList({
   onEdit: (host: SshHost) => void;
   onDelete: (host: SshHost) => void;
   onCreate: () => void;
+  onImport: () => void;
+  keepalive: number;
+  onKeepalive: (seconds: number) => void;
 }) {
   const { t } = useTranslation();
   const needle = query.trim().toLocaleLowerCase();
@@ -48,9 +54,28 @@ export default function HostList({
           value={query}
           onChange={(event) => onQuery(event.target.value)}
         />
+        <Tooltip title={t("zdx.label.ssh.importConfig")}>
+          <Button aria-label={t("zdx.label.ssh.importConfig")} icon={<ImportOutlined />} onClick={onImport} />
+        </Tooltip>
         <Tooltip title={t("zdx.label.ssh.newHost")}>
           <Button aria-label={t("zdx.label.ssh.newHost")} icon={<PlusOutlined />} onClick={onCreate} />
         </Tooltip>
+      </div>
+      <div className="flex shrink-0 items-center gap-2 px-3 pb-3">
+        <Tooltip title={t("zdx.text.ssh.keepaliveHint")}>
+          <span className="shrink-0 text-xs">{t("zdx.label.ssh.keepalive")}</span>
+        </Tooltip>
+        <InputNumber
+          min={0}
+          max={600}
+          size="small"
+          className="w-20"
+          aria-label={t("zdx.label.ssh.keepalive")}
+          value={keepalive}
+          onChange={(value) => {
+            if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 600) onKeepalive(value);
+          }}
+        />
       </div>
       <div className="min-h-0 flex-1 overflow-auto px-2 pb-3" role="listbox" aria-label={t("zdx.label.ssh.hosts")}>
         {visible.length === 0 && (
@@ -78,6 +103,7 @@ export default function HostList({
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">{host.name}</div>
                     <div className="truncate text-xs" style={{ opacity: 0.65 }}>{host.username}@{host.host}:{host.port}</div>
+                    {(host.jumps?.length ?? 0) > 0 && <div className="truncate text-xs" style={{ opacity: 0.65 }}>{t("zdx.text.ssh.viaJump", { count: host.jumps.length })}</div>}
                   </div>
                   <Tooltip title={t("zdx.label.ssh.connect")}>
                     <Button type="text" size="small" aria-label={t("zdx.label.ssh.connect")} icon={<CloudServerOutlined />} onClick={(event) => { event.stopPropagation(); onConnect(host); }} />

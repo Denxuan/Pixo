@@ -8,12 +8,14 @@ export type DropRect = {
 };
 
 export type SshTransferEvent =
-  | { type: "started"; taskId: number; target: string; files: number; total?: number }
+  | { type: "started"; taskId: number; target: string; files: number; total?: number; direction?: "upload" | "download" }
   | { type: "progress"; taskId: number; name: string; done: number; total: number }
   | { type: "conflict"; taskId: number; name: string }
   | { type: "file"; taskId: number; name: string; status: "done" | "skipped" | "renamed" | "failed"; code?: string }
-  | { type: "finished"; taskId: number; uploaded: number; skipped: number; failed: number; target: string }
+  | { type: "finished"; taskId: number; uploaded: number; skipped: number; failed: number; target: string; direction?: "upload" | "download" }
   | { type: "failed"; taskId: number; code: string; params?: Record<string, unknown> };
+
+export type PaceSample = { at: number; done: number };
 
 export type TransferRow = {
   taskId: number;
@@ -26,6 +28,8 @@ export type TransferRow = {
   failedCount: number;
   target: string;
   code: string;
+  direction: "upload" | "download";
+  samples: PaceSample[];
 };
 
 export function emptyTransfer(taskId: number): TransferRow {
@@ -40,18 +44,41 @@ export function emptyTransfer(taskId: number): TransferRow {
     failedCount: 0,
     target: "",
     code: "",
+    direction: "upload",
+    samples: [],
   };
 }
 
-export function reduceTransfer(rows: TransferRow[], event: SshTransferEvent): TransferRow[] {
+function rememberPace(samples: PaceSample[], at: number, done: number): PaceSample[] {
+  const cutoff = at - 8000;
+  const next = samples.filter((sample) => sample.at >= cutoff);
+  next.push({ at, done });
+  return next.slice(-40);
+}
+
+export function reduceTransfer(rows: TransferRow[], event: SshTransferEvent, now = Date.now()): TransferRow[] {
   if (event.type === "conflict") return rows;
   const index = rows.findIndex((row) => row.taskId === event.taskId);
   const current = index >= 0 ? rows[index] : emptyTransfer(event.taskId);
   let next = current;
   if (event.type === "started") {
-    next = { ...current, target: event.target, status: "active", total: event.total ?? current.total, done: 0 };
+    next = {
+      ...current,
+      target: event.target,
+      status: "active",
+      total: event.total ?? current.total,
+      done: 0,
+      direction: event.direction ?? current.direction,
+      samples: [{ at: now, done: 0 }],
+    };
   } else if (event.type === "progress") {
-    next = { ...current, name: event.name, done: event.done, total: event.total };
+    next = {
+      ...current,
+      name: event.name,
+      done: event.done,
+      total: event.total,
+      samples: rememberPace(current.samples, now, event.done),
+    };
   } else if (event.type === "file") {
     next = { ...current, name: event.name };
   } else if (event.type === "finished") {
@@ -91,6 +118,42 @@ export function transferPercent(done: number, total: number): number {
 
 export function transferClosesItself(task: TransferRow): boolean {
   return task.status === "done" && task.failedCount === 0 && task.uploaded > 0;
+}
+
+export function transferCanRetry(task: TransferRow): boolean {
+  if (task.status === "failed") return true;
+  return task.status === "done" && task.failedCount > 0;
+}
+
+export function transferPace(samples: PaceSample[], now: number, total: number): { rate: number; remaining: number | null } {
+  if (samples.length < 2 || !Number.isFinite(now)) return { rate: 0, remaining: null };
+  const latest = samples[samples.length - 1];
+  if (!latest || now - latest.at > 2000) return { rate: 0, remaining: null };
+  const cutoff = latest.at - 4000;
+  const first = samples.find((sample) => sample.at >= cutoff) ?? samples[0];
+  const elapsed = (latest.at - first.at) / 1000;
+  const delta = latest.done - first.done;
+  if (elapsed < 0.2 || delta < 0 || !Number.isFinite(delta)) return { rate: 0, remaining: null };
+  const rate = delta / elapsed;
+  if (!Number.isFinite(rate) || rate <= 0) return { rate: 0, remaining: null };
+  if (!Number.isFinite(total) || total <= latest.done) return { rate, remaining: null };
+  return { rate, remaining: (total - latest.done) / rate };
+}
+
+export function formatRate(bytesPerSecond: number, language: string): string {
+  return `${formatBytes(bytesPerSecond, language)}/s`;
+}
+
+export function formatRemaining(seconds: number, language: string): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  const whole = Math.ceil(seconds);
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const secs = whole % 60;
+  const padded = new Intl.NumberFormat(language, { minimumIntegerDigits: 2, maximumFractionDigits: 0 });
+  const plain = new Intl.NumberFormat(language, { maximumFractionDigits: 0 });
+  if (hours > 0) return `${plain.format(hours)}:${padded.format(minutes)}:${padded.format(secs)}`;
+  return `${plain.format(minutes)}:${padded.format(secs)}`;
 }
 
 export function formatBytes(bytes: number, language: string): string {

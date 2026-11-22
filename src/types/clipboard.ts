@@ -28,6 +28,7 @@ export interface ClipSummary {
   copyCount: number;
   formatted: boolean;
   pinKey: string | null;
+  label: string | null;
 }
 
 export interface ClipDetail {
@@ -43,6 +44,7 @@ export interface ClipDetail {
   createdAt: number;
   lastCopiedAt: number;
   copyCount: number;
+  label: string | null;
 }
 
 export interface ClipListPage {

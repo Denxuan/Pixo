@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { clipboardStatus, takeClipboardMainRequest } from "@/api/clipboard";
 import { screenshotGetSettings } from "@/api/screenshot";
 import { sshStatus } from "@/api/ssh";
+import FirstRun from "@/components/FirstRun";
 import PermissionPrompt from "@/components/PermissionPrompt";
 import UpdatePrompt from "@/components/UpdatePrompt";
 import type { ClipboardStatus } from "@/types/clipboard";
@@ -15,8 +16,10 @@ const subscribeMotion = (onChange: () => void) => {
 };
 
 function mainWindowPath(path: string) {
-  if (path === "/settings" || path === "/settings/clipboard" || path === "/settings/screenshot") return path;
-  if (path === "/clipboard/settings") return "/settings/clipboard";
+  const clean = path.split("?")[0];
+  if (clean === "/settings" || clean === "/settings/clipboard" || clean === "/settings/screenshot") return clean;
+  if (clean === "/clipboard/settings") return "/settings/clipboard";
+  if (clean === "/clipboard" || clean === "/screenshot" || clean === "/ssh") return clean;
   return "/clipboard";
 }
 
@@ -65,10 +68,11 @@ export default function AppShell() {
     if (!isDesktop()) return;
     let stop: (() => void) | undefined;
     let disposed = false;
-    const open = (request: { path: string; enable: boolean }) => {
-      navigate(mainWindowPath(request.path), { state: request.enable ? { enable: true } : null });
+    const open = (request: { path: string; enable: boolean; hostId?: number | null }) => {
+      const hostId = typeof request.hostId === "number" ? request.hostId : null;
+      navigate(mainWindowPath(request.path), { state: request.enable || hostId ? { enable: request.enable, hostId } : null });
     };
-    void listen<{ path: string; enable: boolean }>("clipboard://open-main", (event) => {
+    void listen<{ path: string; enable: boolean; hostId?: number | null }>("clipboard://open-main", (event) => {
       open(event.payload);
       void takeClipboardMainRequest();
     }).then((unlisten) => {
@@ -223,6 +227,7 @@ export default function AppShell() {
       </Layout.Content>
       <PermissionPrompt />
       <UpdatePrompt />
+      <FirstRun />
     </Layout>
   );
 }

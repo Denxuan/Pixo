@@ -27,6 +27,10 @@ function SourceApp({ source }: { source: string }) {
   const [loaded, setLoaded] = useState<LoadedSource | null | undefined>(undefined);
 
   useEffect(() => {
+    if (source === "screenshot" || source === "Pixo") {
+      setLoaded({ name: source === "screenshot" ? t("zdx.label.clipboard.sourceScreenshot") : "Pixo", url: "" });
+      return;
+    }
     let alive = true;
     void loadSource(source).then((mark) => {
       if (alive) setLoaded(mark);
@@ -34,7 +38,7 @@ function SourceApp({ source }: { source: string }) {
     return () => {
       alive = false;
     };
-  }, [source]);
+  }, [source, t]);
 
   if (loaded === undefined) return null;
   const name = loaded?.name || source;
@@ -106,7 +110,9 @@ function ClipTitle({ item }: { item: ClipSummary }) {
   const { t } = useTranslation();
   const [full, setFull] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
-  const title = item.kind === "files" ? item.fileNames.join(", ") : item.preview || t("zdx.label.clipboard.image");
+  const content = item.kind === "files" ? item.fileNames.join(", ") : item.preview || t("zdx.label.clipboard.image");
+  const named = item.label?.trim() ?? "";
+  const title = named || content;
 
   useEffect(() => {
     return () => {
@@ -137,7 +143,10 @@ function ClipTitle({ item }: { item: ClipSummary }) {
 
   return (
     <Tooltip mouseEnterDelay={1} title={tooltip}>
-      <Typography.Text ellipsis style={{ flex: 1, minWidth: 0, margin: 0 }} onMouseEnter={load}>{title}</Typography.Text>
+      <span className="min-w-0 flex-1" onMouseEnter={load}>
+        <Typography.Text ellipsis style={{ display: "block", margin: 0 }}>{title}</Typography.Text>
+        {named && <Typography.Text ellipsis type="secondary" style={{ display: "block", margin: 0, fontSize: 12 }}>{content}</Typography.Text>}
+      </span>
     </Tooltip>
   );
 }

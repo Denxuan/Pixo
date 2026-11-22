@@ -139,6 +139,7 @@ pub struct Summary {
     pub copy_count: i64,
     pub formatted: bool,
     pub pin_key: Option<String>,
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -156,6 +157,7 @@ pub struct Detail {
     pub created_at: i64,
     pub last_copied_at: i64,
     pub copy_count: i64,
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

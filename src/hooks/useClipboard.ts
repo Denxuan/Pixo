@@ -50,6 +50,7 @@ export function useClipboardHistory() {
     setDebouncedQuery("");
   }, []);
   const suppressChangedUntil = useRef(0);
+  const quietCopies = useRef(new Set<number>());
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query), 200);
@@ -101,6 +102,7 @@ export function useClipboardHistory() {
     void listen<{ id?: number }>("clipboard://changed", (event) => {
       if (Date.now() < suppressChangedUntil.current) return;
       const id = event.payload?.id;
+      if (id != null && quietCopies.current.has(id)) return;
       if (id != null) setItems((current) => promoteClip(current, id));
       void loadRef.current();
     }).then((stop) => {
@@ -152,9 +154,13 @@ export function useClipboardHistory() {
       setStatus(next);
       return next;
     }),
-    copyItem: (id: number, options?: { plain?: boolean; paste?: boolean }) => run(async () => {
+    copyItem: (id: number, options?: { plain?: boolean; paste?: boolean; reorder?: boolean }) => run(async () => {
       const result = await clipboardCopy(id, options);
-      setItems((current) => promoteClip(current, id));
+      if (options?.reorder === false) quietCopies.current.add(id);
+      else {
+        quietCopies.current.delete(id);
+        setItems((current) => promoteClip(current, id));
+      }
       return result;
     }) as Promise<CopyResult>,
     suppressChanged: (ms = 1200) => {

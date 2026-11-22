@@ -6,6 +6,7 @@ pub mod commands;
 mod error;
 mod frame;
 mod hotkey;
+mod library;
 mod model;
 mod mp4;
 mod ocr;

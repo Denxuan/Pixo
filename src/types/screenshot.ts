@@ -77,6 +77,16 @@ export type ShotSettings = {
 export type CopyResult = { history: string };
 export type SaveResult = { path: string };
 
+export type ShotFile = {
+  id: number;
+  kind: string;
+  path: string;
+  name: string;
+  bytes: number;
+  createdAt: number;
+  text: string | null;
+};
+
 export type HighlightMode = "rect" | "ellipse" | "fill";
 export type TextForm = "plain" | "fill" | "stroke";
 export type RecordCursor = "off" | "highlight" | "click" | "both";

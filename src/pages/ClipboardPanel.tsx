@@ -2,6 +2,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { ClipboardRequestError, dismissClipboardPanel } from "@/api/clipboard";
 import HistoryList from "@/components/clipboard/HistoryList";
+import QuickShelf from "@/components/clipboard/QuickShelf";
 import Kbd from "@/components/Kbd";
 import { useClipboardHistory } from "@/hooks/useClipboard";
 import { CLIP_FILTERS, isClipFilter } from "@/types/clipboard";
@@ -159,7 +160,7 @@ export default function ClipboardPanel() {
     const seq = ++copySeq.current;
     try {
       history.suppressChanged();
-      const result = await history.copyItem(id, { plain: mode === "plain", paste: mode !== "copy" });
+      const result = await history.copyItem(id, { plain: mode === "plain", paste: mode !== "copy", reorder: dismiss });
       if (seq !== copySeq.current) return;
       if (result.missing.length > 0) {
         pendingClose.current = null;
@@ -324,6 +325,7 @@ export default function ClipboardPanel() {
         />
       </div>
       <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
+        <QuickShelf query={history.query} onNotice={(text) => { setMessageTone("warning"); setMessage(text); }} />
         {history.items.length === 0 && <Empty className="py-10" image={Empty.PRESENTED_IMAGE_SIMPLE} description={history.query ? t("zdx.text.clipboard.noResults") : t("zdx.text.clipboard.empty")} />}
         {history.items.length > 0 && (
           <HistoryList

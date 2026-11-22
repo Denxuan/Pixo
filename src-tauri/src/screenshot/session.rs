@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -13,6 +13,7 @@ use super::bytes::{decode_base64, decode_rgba_png, encode_jpeg};
 use super::capture::{self, CapturedMonitor};
 use super::clock::unique_file;
 use super::error::ScreenshotError;
+use super::library::{Library, LibraryItem};
 use super::frame;
 use super::model::{Editor, EditorDocument, Rect, ShotSettings};
 use super::snap::{Bounds, snap_windows};
@@ -109,6 +110,8 @@ struct Inner {
     pin_ready: Mutex<[Option<SyncSender<()>>; 8]>,
     shortcut: Mutex<Option<String>>,
     record_shortcut: Mutex<Option<String>>,
+    library: Mutex<Option<Library>>,
+    ocr_note: Mutex<Option<(String, Instant)>>,
     app: AppHandle,
     next_id: AtomicU64,
     starting: AtomicBool,
@@ -128,6 +131,7 @@ impl Clone for ScreenshotState {
 
 pub fn initialize(app: AppHandle) -> Result<ScreenshotState, ScreenshotError> {
     let settings = load_settings(&app)?;
+    let library = open_library(&app, &settings.save_dir);
     let state = ScreenshotState {
         inner: Arc::new(Inner {
             settings: Mutex::new(settings),
@@ -136,6 +140,8 @@ pub fn initialize(app: AppHandle) -> Result<ScreenshotState, ScreenshotError> {
             pin_ready: Mutex::new(std::array::from_fn(|_| None)),
             shortcut: Mutex::new(None),
             record_shortcut: Mutex::new(None),
+            library: Mutex::new(library),
+            ocr_note: Mutex::new(None),
             app: app.clone(),
             next_id: AtomicU64::new(1),
             starting: AtomicBool::new(false),
@@ -763,9 +769,114 @@ impl ScreenshotState {
             })?;
             path
         };
-        Ok(SaveResult {
-            path: path.to_string_lossy().into_owned(),
-        })
+        let saved = path.to_string_lossy().into_owned();
+        let note = self.take_ocr_note();
+        self.remember_file(Path::new(&saved), note.as_deref());
+        Ok(SaveResult { path: saved })
+    }
+
+    pub fn remember_file(&self, path: &Path, text: Option<&str>) {
+        let Some(saved) = self.with_library(|library| library.remember(path, text)) else {
+            return;
+        };
+        if let Err(error) = saved {
+            eprintln!("screenshot library: {}", error.code);
+        }
+    }
+
+    pub fn note_ocr(&self, text: &str) {
+        let clipped: String = text.trim().chars().take(8_000).collect();
+        if clipped.is_empty() {
+            return;
+        }
+        let attached = self
+            .with_library(|library| library.note_recent(&clipped, 120_000))
+            .and_then(Result::ok)
+            .unwrap_or(false);
+        let mut note = self
+            .inner
+            .ocr_note
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *note = if attached {
+            None
+        } else {
+            Some((clipped, Instant::now()))
+        };
+    }
+
+    pub fn library_list(&self, query: Option<&str>) -> Vec<LibraryItem> {
+        self.with_library(|library| library.list(query, 80))
+            .and_then(Result::ok)
+            .unwrap_or_default()
+    }
+
+    pub fn library_delete(&self, id: i64) -> Result<(), ScreenshotError> {
+        let save_dir = PathBuf::from(&self.lock_settings().save_dir);
+        self.with_library(|library| library.delete(id, &save_dir))
+            .ok_or_else(|| ScreenshotError::new("storage"))?
+    }
+
+    pub fn library_path(&self, id: i64) -> Result<String, ScreenshotError> {
+        Ok(self
+            .with_library(|library| library.get(id))
+            .ok_or_else(|| ScreenshotError::new("storage"))??
+            .path)
+    }
+
+    pub fn library_copy(&self, id: i64) -> Result<(), ScreenshotError> {
+        let item = self
+            .with_library(|library| library.get(id))
+            .ok_or_else(|| ScreenshotError::new("storage"))??;
+        let clipboard = self
+            .inner
+            .app
+            .try_state::<crate::clipboard::ClipboardState>()
+            .ok_or_else(|| ScreenshotError::new("storage"))?;
+        let bytes = fs::metadata(&item.path)
+            .map(|meta| meta.len())
+            .map_err(|_| ScreenshotError::new("not_found"))?;
+        if item.kind == "video" || bytes > 80 * 1024 * 1024 {
+            return clipboard
+                .copy_file_path(&item.path)
+                .map_err(clipboard_error);
+        }
+        let encoded = fs::read(&item.path).map_err(|_| ScreenshotError::new("storage"))?;
+        if encoded.starts_with(b"\x89PNG\r\n\x1a\n") {
+            clipboard
+                .record_produced_png(&encoded)
+                .map_err(clipboard_error)?;
+            return Ok(());
+        }
+        let image = image::load_from_memory(&encoded)
+            .map_err(|_| ScreenshotError::new("invalid_input"))?;
+        let rgba = image.to_rgba8();
+        clipboard
+            .record_produced_image(rgba.width(), rgba.height(), rgba.as_raw())
+            .map_err(clipboard_error)?;
+        Ok(())
+    }
+
+    fn take_ocr_note(&self) -> Option<String> {
+        let mut note = self
+            .inner
+            .ocr_note
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let (text, at) = note.take()?;
+        if at.elapsed() > Duration::from_secs(120) {
+            return None;
+        }
+        Some(text)
+    }
+
+    fn with_library<T>(&self, apply: impl FnOnce(&Library) -> T) -> Option<T> {
+        let library = self
+            .inner
+            .library
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        library.as_ref().map(apply)
     }
 
     pub fn pin(
@@ -1277,6 +1388,31 @@ fn snap_infos(monitors: &[MonitorInfo]) -> Vec<SnapInfo> {
         }
     }
     infos
+}
+
+fn open_library(app: &AppHandle, save_dir: &str) -> Option<Library> {
+    let root = app.path().app_data_dir().ok()?;
+    let directory = root.join("screenshot");
+    if fs::create_dir_all(&directory).is_err() {
+        return None;
+    }
+    match Library::open(&directory.join("library.db"), Path::new(save_dir)) {
+        Ok(library) => Some(library),
+        Err(error) => {
+            eprintln!("screenshot library: {}", error.code);
+            None
+        }
+    }
+}
+
+fn clipboard_error(error: crate::clipboard::ClipboardError) -> ScreenshotError {
+    ScreenshotError::new(match error.code {
+        "too_large" => "too_large",
+        "busy" => "busy",
+        "invalid_input" => "invalid_input",
+        "not_found" => "not_found",
+        _ => "storage",
+    })
 }
 
 fn cache_root(app: &AppHandle) -> Option<PathBuf> {

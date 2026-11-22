@@ -250,6 +250,44 @@ impl ClipboardState {
         Ok(())
     }
 
+    pub fn set_label(&self, id: i64, label: Option<&str>) -> Result<(), ClipboardError> {
+        lock(&self.inner.store).set_label(id, label)?;
+        self.inner.emit_change(id, "updated");
+        Ok(())
+    }
+
+    pub fn note_text(&self, text: &str, source: &str) -> Result<(), ClipboardError> {
+        let text = text.trim();
+        if text.is_empty()
+            || text.len() > 1024 * 1024
+            || source.is_empty()
+            || source.chars().count() > 64
+            || !source
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ':'))
+        {
+            return Err(ClipboardError::new("invalid_input"));
+        }
+        let settings = lock(&self.inner.settings).clone();
+        if settings.enabled && !settings.paused && settings.allows(ClipKind::Text) {
+            let rich = super::model::RichText::plain(text);
+            let hash = super::util::hash_rich(&rich);
+            let capture = Capture {
+                payload: Some(Payload::Text(rich)),
+                sensitive: false,
+                source_app: Some(source.to_string()),
+                types: vec!["text/plain".into()],
+            };
+            self.inner.record(capture, true)?;
+            self.arm(&hash);
+        }
+        if let Err(error) = super::io::write_text(text) {
+            self.disarm();
+            return Err(error);
+        }
+        Ok(())
+    }
+
     pub fn delete(&self, ids: Vec<i64>) -> Result<(), ClipboardError> {
         let removal = lock(&self.inner.store).delete_ids(&ids)?;
         remove_images(&self.inner.images_dir, &removal.image_hashes);

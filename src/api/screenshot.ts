@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { CopyResult, EditorDocument, SaveResult, SessionView, ShotSettings, ShotStatus } from "@/types/screenshot";
+import type { CopyResult, EditorDocument, SaveResult, SessionView, ShotFile, ShotSettings, ShotStatus } from "@/types/screenshot";
 import { isDesktop } from "@/utils/desktop";
 
 export class ScreenshotRequestError extends Error {
@@ -78,6 +78,26 @@ export function screenshotRequestAccess() {
 
 export function screenshotStart(hideSelf?: boolean) {
   return call<SessionView>("screenshot_start", { mode: "capture", hideSelf });
+}
+
+export function screenshotStartMode(mode: "capture" | "record") {
+  return call<SessionView>("screenshot_start", { mode });
+}
+
+export function screenshotLibrary(query?: string) {
+  return call<ShotFile[]>("screenshot_library_list", { query });
+}
+
+export function screenshotLibraryDelete(id: number) {
+  return call<void>("screenshot_library_delete", { id });
+}
+
+export function screenshotLibraryCopy(id: number) {
+  return call<void>("screenshot_library_copy", { id });
+}
+
+export function screenshotLibraryPath(id: number) {
+  return call<string>("screenshot_library_path", { id });
 }
 
 export function screenshotCurrent() {

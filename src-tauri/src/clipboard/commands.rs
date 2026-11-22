@@ -152,3 +152,22 @@ pub fn clipboard_update_settings(
 ) -> Result<Settings, ClipboardError> {
     state.update_settings(settings)
 }
+
+#[tauri::command]
+pub fn clipboard_set_label(
+    state: State<'_, ClipboardState>,
+    id: i64,
+    label: Option<String>,
+) -> Result<(), ClipboardError> {
+    state.set_label(id, label.as_deref())
+}
+
+#[tauri::command]
+pub fn clipboard_place_text(state: State<'_, ClipboardState>, text: String) -> Result<(), ClipboardError> {
+    state.note_text(&text, "Pixo")
+}
+
+#[tauri::command]
+pub fn clipboard_show_panel(app: tauri::AppHandle) {
+    crate::shortcut::show_panel(&app);
+}

@@ -140,8 +140,62 @@ pub async fn screenshot_recognize_text(
 }
 
 #[tauri::command]
-pub fn screenshot_copy_text(text: String) -> Result<(), ScreenshotError> {
-    super::ocr::copy_text(&text)
+pub fn screenshot_copy_text(app: AppHandle, text: String) -> Result<(), ScreenshotError> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.len() > 1024 * 1024 {
+        return Err(ScreenshotError::new("invalid_input"));
+    }
+    if let Some(clipboard) = app.try_state::<crate::clipboard::ClipboardState>() {
+        clipboard
+            .note_text(trimmed, "screenshot")
+            .map_err(|error| {
+                eprintln!("screenshot ocr clipboard: {}", error.code);
+                ScreenshotError::new(match error.code {
+                    "busy" => "busy",
+                    "too_large" => "too_large",
+                    "invalid_input" => "invalid_input",
+                    _ => "storage",
+                })
+            })?;
+    } else {
+        super::ocr::copy_text(trimmed)?;
+    }
+    if let Some(state) = app.try_state::<ScreenshotState>() {
+        state.note_ocr(trimmed);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn screenshot_library_list(
+    state: State<'_, ScreenshotState>,
+    query: Option<String>,
+) -> Vec<super::library::LibraryItem> {
+    state.library_list(query.as_deref())
+}
+
+#[tauri::command]
+pub fn screenshot_library_delete(
+    state: State<'_, ScreenshotState>,
+    id: i64,
+) -> Result<(), ScreenshotError> {
+    state.library_delete(id)
+}
+
+#[tauri::command]
+pub fn screenshot_library_copy(
+    state: State<'_, ScreenshotState>,
+    id: i64,
+) -> Result<(), ScreenshotError> {
+    state.library_copy(id)
+}
+
+#[tauri::command]
+pub fn screenshot_library_path(
+    state: State<'_, ScreenshotState>,
+    id: i64,
+) -> Result<String, ScreenshotError> {
+    state.library_path(id)
 }
 
 #[tauri::command]
@@ -379,10 +433,12 @@ pub fn screenshot_record_preview() -> Result<tauri::ipc::Response, ScreenshotErr
 }
 
 #[tauri::command]
-pub fn screenshot_record_download() -> Result<SaveResult, ScreenshotError> {
-    Ok(SaveResult {
-        path: super::record::download_preview()?,
-    })
+pub fn screenshot_record_download(app: AppHandle) -> Result<SaveResult, ScreenshotError> {
+    let path = super::record::download_preview()?;
+    if let Some(state) = app.try_state::<ScreenshotState>() {
+        state.remember_file(std::path::Path::new(&path), None);
+    }
+    Ok(SaveResult { path })
 }
 
 #[tauri::command]

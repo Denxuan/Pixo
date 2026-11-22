@@ -36,6 +36,8 @@ export function screenshotErrorText(t: Translate, error: ScreenshotRequestError)
       return t("zdx.text.screenshot.error.cancelled");
     case "desktop_only":
       return t("zdx.text.screenshot.error.desktop_only");
+    case "too_large":
+      return t("zdx.text.screenshot.error.too_large");
     default:
       return t("zdx.text.screenshot.error.unknown");
   }

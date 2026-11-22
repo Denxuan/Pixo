@@ -1,10 +1,11 @@
-import { ClipboardRequestError } from "@/api/clipboard";
+import { ClipboardRequestError, clipboardGet, clipboardPlaceText, clipboardSetLabel } from "@/api/clipboard";
 import HistoryList from "@/components/clipboard/HistoryList";
 import Page from "@/components/Page";
 import { useClipboardHistory } from "@/hooks/useClipboard";
 import { CLIP_FILTERS, isClipFilter, toSettingsUpdate } from "@/types/clipboard";
 import { clipboardErrorText, clipboardReasonText, clipboardStatusText } from "@/utils/clipboardMessage";
 import { isDesktop } from "@/utils/desktop";
+import { formatJson } from "@/utils/json";
 import { DEFAULT_DELETE_SHORTCUT, DEFAULT_PIN_SHORTCUT, eventMatchesShortcut } from "@/utils/shortcut";
 
 export default function ClipboardPage() {
@@ -14,10 +15,13 @@ export default function ClipboardPage() {
   const history = useClipboardHistory();
   const [activeId, setActiveId] = useState<number | null>(null);
   const [notice, setNotice] = useState("");
+  const [noticeTone, setNoticeTone] = useState<"success" | "warning">("success");
   const [clearAll, setClearAll] = useState(false);
   const [enableOpen, setEnableOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
+  const [labelDraft, setLabelDraft] = useState("");
   const desktop = isDesktop();
+  const active = history.items.find((item) => item.id === activeId) ?? null;
 
   useEffect(() => {
     const state = location.state as { enable?: boolean } | null;
@@ -27,6 +31,10 @@ export default function ClipboardPage() {
   }, [location.state, navigate]);
 
   useEffect(() => {
+    setLabelDraft(active?.label ?? "");
+  }, [active?.id, active?.label]);
+
+  useEffect(() => {
     if (history.items.length === 0) {
       setActiveId(null);
       return;
@@ -34,12 +42,48 @@ export default function ClipboardPage() {
     if (!history.items.some((item) => item.id === activeId)) setActiveId(history.items[0].id);
   }, [history.items, activeId]);
 
+  async function saveLabel() {
+    if (!active?.pinned) return;
+    const next = labelDraft.trim();
+    if (next === (active.label ?? "")) return;
+    try {
+      await clipboardSetLabel(active.id, next);
+      await history.reload();
+    } catch (error) {
+      if (error instanceof ClipboardRequestError) {
+        setNoticeTone("warning");
+        setNotice(clipboardErrorText(t, error));
+      }
+    }
+  }
+
+  async function transform(kind: "format" | "compact" | "trim") {
+    if (!active) return;
+    try {
+      const detail = await clipboardGet(active.id);
+      const text = detail.text ?? "";
+      const next = kind === "trim" ? text.trim() : formatJson(text, kind === "compact");
+      if (!next) return;
+      await clipboardPlaceText(next);
+      setNoticeTone("success");
+      setNotice(t("zdx.text.clipboard.transformed"));
+      await history.reload();
+    } catch (error) {
+      setNoticeTone("warning");
+      setNotice(error instanceof ClipboardRequestError ? clipboardErrorText(t, error) : t("zdx.text.clipboard.jsonInvalid"));
+    }
+  }
+
   async function copy(id: number) {
     try {
       const result = await history.copyItem(id);
+      setNoticeTone(result.missing.length > 0 ? "warning" : "success");
       setNotice(result.missing.length > 0 ? t("zdx.text.clipboard.fileMissing", { count: result.missing.length }) : t("zdx.text.clipboard.copied"));
     } catch (error) {
-      if (error instanceof ClipboardRequestError) setNotice(clipboardErrorText(t, error));
+      if (error instanceof ClipboardRequestError) {
+        setNoticeTone("warning");
+        setNotice(clipboardErrorText(t, error));
+      }
     }
   }
 
@@ -99,7 +143,7 @@ export default function ClipboardPage() {
             cancelText={t("zdx.label.clipboard.cancel")}
             okButtonProps={{ danger: true }}
             placement="bottomRight"
-            onConfirm={() => history.clearHistory(!clearAll).then(() => setNotice(t(clearAll ? "zdx.text.clipboard.clearedAll" : "zdx.text.clipboard.cleared")))}
+            onConfirm={() => history.clearHistory(!clearAll).then(() => { setNoticeTone("success"); setNotice(t(clearAll ? "zdx.text.clipboard.clearedAll" : "zdx.text.clipboard.cleared")); })}
           >
             <Button danger icon={<ClearOutlined />} onMouseDown={(event) => setClearAll(event.altKey && event.shiftKey)}>{t("zdx.label.clipboard.clear")}</Button>
           </Popconfirm>
@@ -139,6 +183,27 @@ export default function ClipboardPage() {
                 }}
               />
             </Flex>
+            {active?.pinned && (
+              <Input
+                aria-label={t("zdx.label.clipboard.pinTitle")}
+                placeholder={t("zdx.placeholder.clipboard.pinTitle")}
+                value={labelDraft}
+                onChange={(event) => setLabelDraft(event.target.value)}
+                onBlur={() => void saveLabel()}
+                onPressEnter={() => void saveLabel()}
+                style={{ maxWidth: 360 }}
+              />
+            )}
+            {active?.kind === "text" && (
+              <Flex gap={8} wrap>
+                <Button onClick={() => void transform("format")}>{t("zdx.label.clipboard.formatJson")}</Button>
+                <Button onClick={() => void transform("compact")}>{t("zdx.label.clipboard.compactJson")}</Button>
+                <Button onClick={() => void transform("trim")}>{t("zdx.label.clipboard.trimText")}</Button>
+                <Button onClick={() => void history.copyItem(active.id, { plain: true }).then(() => { setNoticeTone("success"); setNotice(t("zdx.text.clipboard.copied")); }).catch((error) => {
+                  if (error instanceof ClipboardRequestError) { setNoticeTone("warning"); setNotice(clipboardErrorText(t, error)); }
+                })}>{t("zdx.label.clipboard.pastePlain")}</Button>
+              </Flex>
+            )}
             <div className="-mr-2 min-h-0 flex-1 overflow-auto pr-2">
               {history.loading && history.items.length === 0 && (
                 <Flex align="center" gap={8}>
@@ -154,7 +219,7 @@ export default function ClipboardPage() {
                 </>
               )}
             </div>
-            {notice && <Alert type="success" showIcon closable message={notice} onClose={() => setNotice("")} />}
+            {notice && <Alert type={noticeTone} showIcon closable message={notice} onClose={() => setNotice("")} />}
             {history.error && history.error.code !== "desktop_only" && <Alert type="error" showIcon message={clipboardErrorText(t, history.error)} />}
           </>
         )}

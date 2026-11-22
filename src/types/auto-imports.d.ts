@@ -10,6 +10,7 @@ export {}
 declare global {
   const Activity: typeof import('react').Activity
   const Alert: typeof import('antd').Alert
+  const ApiOutlined: typeof import('@ant-design/icons').ApiOutlined
   const AppstoreOutlined: typeof import('@ant-design/icons').AppstoreOutlined
   const Avatar: typeof import('antd').Avatar
   const Button: typeof import('antd').Button
@@ -23,6 +24,7 @@ declare global {
   const CopyOutlined: typeof import('@ant-design/icons').CopyOutlined
   const DeleteOutlined: typeof import('@ant-design/icons').DeleteOutlined
   const DisconnectOutlined: typeof import('@ant-design/icons').DisconnectOutlined
+  const Drawer: typeof import('antd').Drawer
   const Dropdown: typeof import('antd').Dropdown
   const EditOutlined: typeof import('@ant-design/icons').EditOutlined
   const Empty: typeof import('antd').Empty

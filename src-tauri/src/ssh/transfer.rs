@@ -11,7 +11,7 @@ use tokio::sync::{oneshot, watch};
 
 use super::cwd::CwdState;
 use super::error::SshError;
-use super::remote::{join_remote, parent_remote, renamed_file};
+use super::remote::{join_remote, normalize_absolute, parent_remote, renamed_file, valid_component};
 
 const CHUNK: usize = 256 * 1024;
 const MAX_ROOTS: usize = 500;
@@ -721,6 +721,401 @@ fn no_space(text: &str) -> bool {
     lower.contains("no space") || lower.contains("disk full") || lower.contains("quota")
 }
 
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteEntry {
+    pub name: String,
+    pub path: String,
+    pub kind: String,
+    pub size: u64,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteListing {
+    pub path: String,
+    pub parent: Option<String>,
+    pub entries: Vec<RemoteEntry>,
+}
+
+struct RemoteFile {
+    relative: String,
+    remote: String,
+    bytes: u64,
+}
+
+pub async fn list_dir(sftp: &SftpSession, path: &str) -> Result<RemoteListing, SshError> {
+    let mut entries = Vec::new();
+    let listed = sftp.read_dir(path).await.map_err(|error| map_sftp(&error))?;
+    for entry in listed {
+        let name = entry.file_name();
+        if !super::remote::valid_component(&name) {
+            continue;
+        }
+        let kind = match entry.file_type() {
+            FileType::Dir => "dir",
+            FileType::File => "file",
+            FileType::Symlink => "link",
+            FileType::Other => "other",
+        };
+        entries.push(RemoteEntry {
+            name,
+            path: entry.path(),
+            kind: kind.to_string(),
+            size: entry.metadata().size.unwrap_or(0),
+        });
+    }
+    entries.sort_by(|left, right| {
+        right
+            .kind
+            .eq("dir")
+            .cmp(&left.kind.eq("dir"))
+            .then_with(|| left.name.to_ascii_lowercase().cmp(&right.name.to_ascii_lowercase()))
+    });
+    Ok(RemoteListing {
+        path: path.to_string(),
+        parent: parent_remote(path),
+        entries,
+    })
+}
+
+pub async fn make_dir(sftp: &SftpSession, path: &str) -> Result<(), SshError> {
+    let path = checked_remote(path)?;
+    sftp.create_dir(path).await.map_err(|error| map_sftp(&error))
+}
+
+pub async fn rename_path(sftp: &SftpSession, from: &str, to: &str) -> Result<(), SshError> {
+    let from = checked_remote(from)?;
+    let to = checked_remote(to)?;
+    if from == to {
+        return Err(SshError::new("invalid_input"));
+    }
+    sftp.rename(from, to).await.map_err(|error| map_sftp(&error))
+}
+
+pub async fn remove_path(sftp: &SftpSession, path: &str) -> Result<(), SshError> {
+    let path = checked_remote(path)?;
+    let mut pending = vec![(path, false)];
+    let mut removed = 0usize;
+    while let Some((current, expanded)) = pending.pop() {
+        if removed > MAX_FILES || pending.len() > MAX_FILES {
+            return Err(SshError::new("transfer_failed"));
+        }
+        if expanded {
+            sftp.remove_dir(current).await.map_err(|error| map_sftp(&error))?;
+            removed += 1;
+            continue;
+        }
+        let meta = sftp
+            .symlink_metadata(&current)
+            .await
+            .map_err(|error| map_sftp(&error))?;
+        if meta.file_type() != FileType::Dir {
+            sftp.remove_file(current).await.map_err(|error| map_sftp(&error))?;
+            removed += 1;
+            continue;
+        }
+        pending.push((current.clone(), true));
+        let listed = sftp.read_dir(&current).await.map_err(|error| map_sftp(&error))?;
+        for entry in listed {
+            let name = entry.file_name();
+            if !valid_component(&name) {
+                continue;
+            }
+            let child = join_remote(&current, &name).ok_or_else(|| SshError::new("invalid_input"))?;
+            if entry.file_type() == FileType::Dir {
+                pending.push((child, false));
+            } else {
+                sftp.remove_file(child).await.map_err(|error| map_sftp(&error))?;
+                removed += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn checked_remote(path: &str) -> Result<String, SshError> {
+    let path = normalize_absolute(path).ok_or_else(|| SshError::new("invalid_input"))?;
+    let name = path.rsplit('/').next().unwrap_or("");
+    if path == "/" || !valid_component(name) {
+        return Err(SshError::new("invalid_input"));
+    }
+    Ok(path)
+}
+
+pub async fn receive_all(
+    sftp: &SftpSession,
+    root: &Path,
+    paths: &[String],
+    task_id: u64,
+    progress: &Channel<Value>,
+    cancel: &mut watch::Receiver<bool>,
+    gate: &DecisionGate,
+) -> Result<(), SshError> {
+    let mut files = Vec::new();
+    let mut directories = Vec::new();
+    let mut skipped = 0u64;
+    for path in paths {
+        collect_remote(sftp, path, "", &mut files, &mut directories, &mut skipped, 0).await?;
+    }
+    for directory in &directories {
+        let path = local_within(root, directory).ok_or_else(|| SshError::new("invalid_input"))?;
+        std::fs::create_dir_all(&path).map_err(|error| map_local_io(&error))?;
+        if !stays_under(root, &path)? {
+            return Err(SshError::new("transfer_failed"));
+        }
+    }
+    let total_bytes = files.iter().fold(0u64, |sum, file| sum.saturating_add(file.bytes));
+    let _ = progress.send(json!({
+        "type": "started",
+        "taskId": task_id,
+        "direction": "download",
+        "target": root.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
+        "files": files.len(),
+        "total": total_bytes,
+    }));
+    let mut sent = 0u64;
+    let mut downloaded = 0u64;
+    let mut failed = 0u64;
+    for file in &files {
+        if *cancel.borrow() {
+            return Err(SshError::new("cancelled"));
+        }
+        let name = file.relative.rsplit('/').next().unwrap_or(&file.relative);
+        match save_remote_file(sftp, root, file, task_id, progress, cancel, gate, &mut sent, total_bytes).await {
+            Ok(Item::Skipped) => skipped += 1,
+            Ok(_) => downloaded += 1,
+            Err(error) if error.code == "cancelled" => return Err(error),
+            Err(error) => {
+                failed += 1;
+                emit_file(progress, task_id, name, "failed", Some(error.code));
+            }
+        }
+    }
+    let _ = progress.send(json!({
+        "type": "finished",
+        "taskId": task_id,
+        "direction": "download",
+        "uploaded": downloaded,
+        "skipped": skipped,
+        "failed": failed,
+        "target": root.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
+    }));
+    Ok(())
+}
+
+async fn collect_remote(
+    sftp: &SftpSession,
+    remote: &str,
+    parent: &str,
+    files: &mut Vec<RemoteFile>,
+    directories: &mut Vec<String>,
+    skipped: &mut u64,
+    depth: usize,
+) -> Result<(), SshError> {
+    let mut pending = vec![(remote.to_string(), parent.to_string(), depth)];
+    while let Some((remote, parent, depth)) = pending.pop() {
+        if files.len() > MAX_FILES || depth > 64 {
+            return Err(SshError::new("too_many"));
+        }
+        let meta = sftp
+            .symlink_metadata(&remote)
+            .await
+            .map_err(|error| map_sftp(&error))?;
+        let name = remote
+            .rsplit('/')
+            .next()
+            .filter(|part| !part.is_empty())
+            .unwrap_or(remote.as_str());
+        if !super::remote::valid_component(name) && remote != "/" {
+            return Err(SshError::new("invalid_input"));
+        }
+        let relative = if parent.is_empty() {
+            name.to_string()
+        } else {
+            format!("{parent}/{name}")
+        };
+        match meta.file_type() {
+            FileType::Symlink | FileType::Other => *skipped += 1,
+            FileType::File => files.push(RemoteFile {
+                relative,
+                remote,
+                bytes: meta.size.unwrap_or(0),
+            }),
+            FileType::Dir => {
+                directories.push(relative.clone());
+                let listed = sftp.read_dir(&remote).await.map_err(|error| map_sftp(&error))?;
+                for entry in listed {
+                    let child = entry.file_name();
+                    if !super::remote::valid_component(&child) {
+                        continue;
+                    }
+                    pending.push((entry.path(), relative.clone(), depth + 1));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn save_remote_file(
+    sftp: &SftpSession,
+    root: &Path,
+    file: &RemoteFile,
+    task_id: u64,
+    progress: &Channel<Value>,
+    cancel: &mut watch::Receiver<bool>,
+    gate: &DecisionGate,
+    sent: &mut u64,
+    total_bytes: u64,
+) -> Result<Item, SshError> {
+    let mut destination = local_within(root, &file.relative).ok_or_else(|| SshError::new("invalid_input"))?;
+    let name = file.relative.rsplit('/').next().unwrap_or(&file.relative).to_string();
+    if local_exists(&destination) {
+        match gate.choose_for(progress, task_id, &name, cancel).await? {
+            Policy::Skip => {
+                *sent = sent.saturating_add(file.bytes);
+                emit_progress(progress, task_id, &name, *sent, total_bytes);
+                emit_file(progress, task_id, &name, "skipped", None);
+                return Ok(Item::Skipped);
+            }
+            Policy::Rename => {
+                destination = local_renamed(&destination).ok_or_else(|| SshError::new("transfer_failed"))?;
+            }
+            Policy::Overwrite => {
+                let meta = std::fs::symlink_metadata(&destination).map_err(|error| map_local_io(&error))?;
+                if meta.is_dir() {
+                    return Err(SshError::new("transfer_failed"));
+                }
+            }
+        }
+    }
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| map_local_io(&error))?;
+        if !stays_under(root, parent)? {
+            return Err(SshError::new("transfer_failed"));
+        }
+    }
+    let mut temp_name = destination.as_os_str().to_os_string();
+    temp_name.push(".pixo-part");
+    let temp = PathBuf::from(temp_name);
+    let result = write_local_part(sftp, file, &temp, &name, task_id, progress, cancel, sent, total_bytes).await;
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+        return result.map(|_| Item::Uploaded);
+    }
+    if local_exists(&destination) {
+        let meta = std::fs::symlink_metadata(&destination).map_err(|error| map_local_io(&error))?;
+        if meta.is_dir() {
+            let _ = std::fs::remove_file(&temp);
+            return Err(SshError::new("transfer_failed"));
+        }
+        std::fs::remove_file(&destination).map_err(|error| map_local_io(&error))?;
+    }
+    if std::fs::rename(&temp, &destination).is_err() {
+        let _ = std::fs::remove_file(&temp);
+        return Err(SshError::new("transfer_failed"));
+    }
+    emit_file(progress, task_id, &name, "done", None);
+    Ok(Item::Uploaded)
+}
+
+async fn write_local_part(
+    sftp: &SftpSession,
+    file: &RemoteFile,
+    temp: &Path,
+    name: &str,
+    task_id: u64,
+    progress: &Channel<Value>,
+    cancel: &watch::Receiver<bool>,
+    sent: &mut u64,
+    total_bytes: u64,
+) -> Result<(), SshError> {
+    let mut remote = sftp.open(&file.remote).await.map_err(|error| map_sftp(&error))?;
+    let mut local = tokio::fs::File::create(temp).await.map_err(|error| map_local_io(&error))?;
+    let mut buffer = vec![0u8; CHUNK];
+    let mut reported = Instant::now() - Duration::from_secs(1);
+    emit_progress(progress, task_id, name, *sent, total_bytes);
+    loop {
+        if *cancel.borrow() {
+            return Err(SshError::new("cancelled"));
+        }
+        let read = remote.read(&mut buffer).await.map_err(|error| map_remote_io(&error))?;
+        if read == 0 {
+            break;
+        }
+        local
+            .write_all(&buffer[..read])
+            .await
+            .map_err(|error| map_local_io(&error))?;
+        *sent = sent.saturating_add(read as u64);
+        if reported.elapsed() >= Duration::from_millis(200) {
+            emit_progress(progress, task_id, name, *sent, total_bytes);
+            reported = Instant::now();
+        }
+    }
+    local.flush().await.map_err(|error| map_local_io(&error))?;
+    emit_progress(progress, task_id, name, *sent, total_bytes);
+    Ok(())
+}
+
+pub fn local_within(root: &Path, relative: &str) -> Option<PathBuf> {
+    let mut path = root.to_path_buf();
+    if relative.is_empty() {
+        return Some(path);
+    }
+    for part in relative.split('/') {
+        if !super::remote::valid_component(part) {
+            return None;
+        }
+        path.push(part);
+    }
+    Some(path)
+}
+
+fn local_exists(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
+}
+
+fn local_renamed(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_str()?;
+    let parent = path.parent()?;
+    for index in 1..=999 {
+        let next = renamed_file(name, index)?;
+        let candidate = parent.join(&next);
+        if !local_exists(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn stays_under(root: &Path, path: &Path) -> Result<bool, SshError> {
+    let mut cursor = root.to_path_buf();
+    if std::fs::symlink_metadata(&cursor)
+        .map(|meta| meta.file_type().is_symlink())
+        .unwrap_or(true)
+    {
+        return Ok(false);
+    }
+    let relative = path.strip_prefix(root).map_err(|_| SshError::new("transfer_failed"))?;
+    for part in relative.components() {
+        let std::path::Component::Normal(part) = part else {
+            return Ok(false);
+        };
+        cursor.push(part);
+        let meta = match std::fs::symlink_metadata(&cursor) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+            Err(error) => return Err(map_local_io(&error)),
+        };
+        if meta.file_type().is_symlink() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
@@ -775,5 +1170,15 @@ mod tests {
         );
         assert!(collect_limited(std::slice::from_ref(&dir), 0).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn download_paths_stay_inside_the_chosen_directory() {
+        let root = std::path::Path::new("/tmp/pixo-download");
+        let kept = super::local_within(root, "logs/app.log").unwrap();
+        assert_eq!(kept, root.join("logs").join("app.log"));
+        assert!(super::local_within(root, "../secret").is_none());
+        assert!(super::local_within(root, "logs/../secret").is_none());
+        assert!(super::local_within(root, "logs/").is_none());
     }
 }

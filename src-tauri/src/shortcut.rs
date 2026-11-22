@@ -56,6 +56,39 @@ pub fn show_from_status(app: &AppHandle, rect: tauri::Rect) {
         .run_on_main_thread(move || present(&app, false, Placement::Status(rect)));
 }
 
+pub fn present_tool(app: &AppHandle, path: &str, host_id: Option<i64>) {
+    let app = app.clone();
+    let path = path.to_string();
+    let _ = app.clone().run_on_main_thread(move || {
+        hide_panel(&app);
+        if crate::ensure_main_window(&app).is_err() {
+            return;
+        }
+        let Some(window) = app.get_webview_window("main") else {
+            return;
+        };
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = window.emit(
+            "clipboard://open-main",
+            serde_json::json!({ "path": path, "enable": false, "hostId": host_id }),
+        );
+    });
+}
+
+#[tauri::command]
+pub fn launcher_open(app: AppHandle, path: String, host_id: Option<i64>) {
+    let allowed = matches!(
+        path.as_str(),
+        "/clipboard" | "/screenshot" | "/ssh"
+    );
+    if !allowed || (host_id.is_some() && path != "/ssh") {
+        return;
+    }
+    present_tool(&app, &path, host_id);
+}
+
 pub fn present_main(app: &AppHandle, path: &str, enable: bool) {
     let app = app.clone();
     let path = path.to_string();

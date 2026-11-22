@@ -2,6 +2,15 @@ import { SshRequestError, sshAnswer, sshHostKeyDecide } from "@/api/ssh";
 import type { SshSessionEvent } from "@/types/ssh";
 import { sshErrorText } from "@/utils/sshMessage";
 
+type PromptEvent = Extract<SshSessionEvent, { type: "prompt" }>;
+
+function promptHeading(t: (key: string, options?: Record<string, unknown>) => string, prompt: PromptEvent | null, hostName?: string) {
+  const name = prompt?.hostName || hostName || "";
+  if (!prompt || prompt.kind === "password") return t("zdx.text.ssh.passwordPrompt", { name });
+  if (prompt.kind === "passphrase") return t("zdx.text.ssh.passphrasePrompt", { name });
+  return prompt.label || prompt.title || t("zdx.text.ssh.keyboardPrompt", { name });
+}
+
 export type SshDecision = {
   sessionId: number;
   hostName: string;
@@ -79,7 +88,7 @@ export default function SessionPrompt({
         )}
       </Modal>
       <Modal
-        title={t(prompt?.kind === "passphrase" ? "zdx.text.ssh.passphrasePrompt" : "zdx.text.ssh.passwordPrompt", { name: decision?.hostName ?? "" })}
+        title={promptHeading(t, prompt, decision?.hostName)}
         open={prompt !== null}
         okText={t("zdx.label.ssh.confirm")}
         cancelText={t("zdx.label.ssh.cancel")}
@@ -94,18 +103,33 @@ export default function SessionPrompt({
         }}
       >
         <Flex vertical gap={12}>
-          <Input.Password
-            autoFocus
-            aria-label={t("zdx.label.ssh.secret")}
-            value={secret}
-            onChange={(event) => setSecret(event.target.value)}
-            onCopy={(event) => event.preventDefault()}
-            onCut={(event) => event.preventDefault()}
-            onPressEnter={() => {
-              if (!decision || !prompt) return;
-              void run(() => sshAnswer(decision.sessionId, prompt.promptId, secret, remember, false));
-            }}
-          />
+          {prompt?.title && prompt.title !== prompt.label && <div>{prompt.title}</div>}
+          {prompt?.instructions && <div>{prompt.instructions}</div>}
+          {prompt?.echo ? (
+            <Input
+              autoFocus
+              aria-label={prompt.label || t("zdx.label.ssh.secret")}
+              value={secret}
+              onChange={(event) => setSecret(event.target.value)}
+              onPressEnter={() => {
+                if (!decision || !prompt) return;
+                void run(() => sshAnswer(decision.sessionId, prompt.promptId, secret, remember, false));
+              }}
+            />
+          ) : (
+            <Input.Password
+              autoFocus
+              aria-label={prompt?.label || t("zdx.label.ssh.secret")}
+              value={secret}
+              onChange={(event) => setSecret(event.target.value)}
+              onCopy={(event) => event.preventDefault()}
+              onCut={(event) => event.preventDefault()}
+              onPressEnter={() => {
+                if (!decision || !prompt) return;
+                void run(() => sshAnswer(decision.sessionId, prompt.promptId, secret, remember, false));
+              }}
+            />
+          )}
           {prompt?.canRemember && (
             <Checkbox checked={remember} onChange={(event) => setRemember(event.target.checked)}>
               {t(prompt.kind === "passphrase" ? "zdx.label.ssh.rememberPassphrase" : "zdx.label.ssh.rememberPassword")}

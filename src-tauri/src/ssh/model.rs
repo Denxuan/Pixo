@@ -8,6 +8,7 @@ use super::shell::shell_single_quote;
 pub enum AuthKind {
     Password,
     Key,
+    Agent,
 }
 
 impl AuthKind {
@@ -15,6 +16,7 @@ impl AuthKind {
         match self {
             Self::Password => "password",
             Self::Key => "key",
+            Self::Agent => "agent",
         }
     }
 
@@ -22,6 +24,7 @@ impl AuthKind {
         match value {
             "password" => Some(Self::Password),
             "key" => Some(Self::Key),
+            "agent" => Some(Self::Agent),
             _ => None,
         }
     }
@@ -42,6 +45,10 @@ pub struct Host {
     pub start_dir: Option<String>,
     pub term: String,
     pub sort_order: i64,
+    #[serde(default)]
+    pub jumps: Vec<i64>,
+    #[serde(default)]
+    pub agent_forward: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -59,6 +66,10 @@ pub struct HostDraft {
     pub remember: bool,
     pub start_dir: Option<String>,
     pub term: Option<String>,
+    #[serde(default)]
+    pub jumps: Vec<i64>,
+    #[serde(default)]
+    pub agent_forward: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +85,34 @@ pub struct NormalizedHost {
     pub remember: bool,
     pub start_dir: Option<String>,
     pub term: String,
+    pub jumps: Vec<i64>,
+    pub agent_forward: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Snippet {
+    pub id: i64,
+    pub title: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnippetDraft {
+    pub id: Option<i64>,
+    pub title: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardView {
+    pub id: u64,
+    pub session_id: u64,
+    pub local_port: u16,
+    pub remote_host: String,
+    pub remote_port: u16,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,6 +120,8 @@ pub struct NormalizedHost {
 pub struct SshStatus {
     pub enabled: bool,
     pub keyring_available: bool,
+    pub agent_available: bool,
+    pub keepalive_secs: u32,
 }
 
 pub fn normalize(draft: HostDraft) -> Result<NormalizedHost, SshError> {
@@ -117,7 +158,7 @@ pub fn normalize(draft: HostDraft) -> Result<NormalizedHost, SshError> {
         _ => None,
     };
     let key_path = match draft.auth {
-        AuthKind::Password => None,
+        AuthKind::Password | AuthKind::Agent => None,
         AuthKind::Key => {
             let path = draft.key_path.as_deref().map(str::trim).unwrap_or("");
             if path.is_empty() || path.len() > 1024 || path.chars().any(|char| char == '\0') {
@@ -126,6 +167,17 @@ pub fn normalize(draft: HostDraft) -> Result<NormalizedHost, SshError> {
             Some(path.to_string())
         }
     };
+    let mut jumps = Vec::new();
+    for jump in draft.jumps {
+        if jump <= 0 || Some(jump) == draft.id || jumps.contains(&jump) {
+            return Err(SshError::new("invalid_input"));
+        }
+        jumps.push(jump);
+    }
+    if jumps.len() > 8 {
+        return Err(SshError::new("invalid_input"));
+    }
+    let remember = matches!(draft.auth, AuthKind::Password | AuthKind::Key) && draft.remember;
     let start_dir = match draft.start_dir.as_deref().map(str::trim) {
         Some(dir) if !dir.is_empty() => {
             shell_single_quote(dir)?;
@@ -151,9 +203,11 @@ pub fn normalize(draft: HostDraft) -> Result<NormalizedHost, SshError> {
         username: username.to_string(),
         auth: draft.auth,
         key_path,
-        remember: draft.remember,
+        remember,
         start_dir,
         term,
+        jumps,
+        agent_forward: draft.agent_forward,
     })
 }
 
@@ -205,6 +259,8 @@ mod tests {
             remember: false,
             start_dir: Some(" /var/tmp ".into()),
             term: None,
+            jumps: Vec::new(),
+            agent_forward: false,
         }
     }
 
@@ -217,6 +273,7 @@ mod tests {
         assert_eq!(host.group_name, None);
         assert_eq!(host.start_dir.as_deref(), Some("/var/tmp"));
         assert!(!host.remember);
+        assert!(!host.agent_forward);
     }
 
     #[test]

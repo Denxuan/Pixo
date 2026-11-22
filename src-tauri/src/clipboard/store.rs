@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS clip_items (
   source_app TEXT,
   pinned INTEGER NOT NULL DEFAULT 0,
   pin_key TEXT,
+  label TEXT,
   created_at INTEGER NOT NULL,
   last_copied_at INTEGER NOT NULL,
   copy_count INTEGER NOT NULL DEFAULT 1,
@@ -35,7 +36,7 @@ CREATE TABLE IF NOT EXISTS clip_settings (
 );
 ";
 
-const SELECT_COLUMNS: &str = "id, kind, content_hash, text, files_json, image_width, image_height, size_bytes, source_app, pinned, created_at, last_copied_at, copy_count, CASE WHEN (html IS NOT NULL AND length(html) > 0) OR (rtf IS NOT NULL AND length(rtf) > 0) THEN 1 ELSE 0 END, pin_key";
+const SELECT_COLUMNS: &str = "id, kind, content_hash, text, files_json, image_width, image_height, size_bytes, source_app, pinned, created_at, last_copied_at, copy_count, CASE WHEN (html IS NOT NULL AND length(html) > 0) OR (rtf IS NOT NULL AND length(rtf) > 0) THEN 1 ELSE 0 END, pin_key, label";
 
 #[derive(Debug, Clone)]
 struct ItemRow {
@@ -53,6 +54,7 @@ struct ItemRow {
     copy_count: i64,
     formatted: i64,
     pin_key: Option<String>,
+    label: Option<String>,
 }
 
 #[derive(Debug)]
@@ -112,6 +114,10 @@ impl Store {
                 conn.execute_batch("ALTER TABLE clip_items ADD COLUMN pin_key TEXT;")
                     .map_err(storage)?;
             }
+            if version < 4 {
+                conn.execute_batch("ALTER TABLE clip_items ADD COLUMN label TEXT;")
+                    .map_err(storage)?;
+            }
         }
         if version < 3 {
             backfill_pin_keys(&conn).map_err(storage)?;
@@ -119,7 +125,9 @@ impl Store {
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_clip_items_pin_key ON clip_items (pin_key) WHERE pin_key IS NOT NULL;",
             )
             .map_err(storage)?;
-            conn.pragma_update(None, "user_version", 3)
+        }
+        if version < 4 {
+            conn.pragma_update(None, "user_version", 4)
                 .map_err(storage)?;
         }
         Ok(Self { conn })
@@ -269,7 +277,7 @@ impl Store {
                 "SELECT {SELECT_COLUMNS} FROM clip_items
                  WHERE (?1 IS NULL OR kind = ?1)
                    AND (?2 = 0 OR pinned = 1)
-                   AND (?3 IS NULL OR IFNULL(text, '') LIKE ?3 ESCAPE '\\' OR IFNULL(files_json, '') LIKE ?3 ESCAPE '\\')
+                   AND (?3 IS NULL OR IFNULL(text, '') LIKE ?3 ESCAPE '\\' OR IFNULL(files_json, '') LIKE ?3 ESCAPE '\\' OR IFNULL(label, '') LIKE ?3 ESCAPE '\\')
                    AND (
                      ?4 IS NULL
                      OR pinned < ?4
@@ -395,6 +403,27 @@ impl Store {
                 params![key, id],
             )
             .map_err(storage)?;
+        Ok(())
+    }
+
+    pub fn set_label(&mut self, id: i64, label: Option<&str>) -> Result<(), ClipboardError> {
+        let cleaned = match label.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(value) if value.chars().count() > 80 => {
+                return Err(ClipboardError::new("invalid_input"));
+            }
+            Some(value) => Some(value.to_string()),
+            None => None,
+        };
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE clip_items SET label = ?1 WHERE id = ?2",
+                params![cleaned, id],
+            )
+            .map_err(storage)?;
+        if changed == 0 {
+            return Err(ClipboardError::new("not_found"));
+        }
         Ok(())
     }
 
@@ -680,6 +709,7 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ItemRow> {
         copy_count: row.get(12)?,
         formatted: row.get(13)?,
         pin_key: row.get(14)?,
+        label: row.get(15)?,
     })
 }
 
@@ -710,6 +740,7 @@ impl ItemRow {
             copy_count: self.copy_count,
             formatted: self.formatted != 0,
             pin_key: self.pin_key.as_ref().filter(|key| !key.is_empty()).cloned(),
+            label: cleaned_label(self.label.as_deref()),
         }
     }
 
@@ -727,8 +758,16 @@ impl ItemRow {
             created_at: self.created_at,
             last_copied_at: self.last_copied_at,
             copy_count: self.copy_count,
+            label: cleaned_label(self.label.as_deref()),
         }
     }
+}
+
+fn cleaned_label(label: Option<&str>) -> Option<String> {
+    label
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn cursor_of(summary: &Summary) -> String {
@@ -1152,7 +1191,7 @@ mod tests {
             .unwrap()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         let store = Store::open(&database).unwrap();
         assert_eq!(
             store.list(None, None, false, None, 10).unwrap().items[0].preview,
@@ -1202,5 +1241,24 @@ mod tests {
             b"legacy-wal"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_label_is_searchable_and_can_be_cleared() {
+        let (mut store, directory) = test_store();
+        let added = store.upsert(text_request("named", "build command", 1)).unwrap();
+        let id = match added {
+            UpsertResult::Added(item) => item.id,
+            UpsertResult::Updated { summary } => summary.id,
+            UpsertResult::Ignored => panic!("item was ignored"),
+        };
+        store.set_label(id, Some("  release  ")).unwrap();
+        let found = store.list(Some("release"), None, false, None, 10).unwrap();
+        assert_eq!(found.items.len(), 1);
+        assert_eq!(found.items[0].label.as_deref(), Some("release"));
+        store.set_label(id, Some("   ")).unwrap();
+        assert!(store.get(id).unwrap().label.is_none());
+        assert!(store.set_label(id, Some(&"x".repeat(81))).is_err());
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

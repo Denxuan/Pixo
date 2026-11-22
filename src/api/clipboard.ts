@@ -156,6 +156,22 @@ export function clipboardUpdateSettings(settings: ClipboardSettingsUpdate): Prom
   return call("clipboard_update_settings", { settings });
 }
 
+export function clipboardSetLabel(id: number, label: string) {
+  return call<void>("clipboard_set_label", { id, label });
+}
+
+export function clipboardPlaceText(text: string) {
+  return call<void>("clipboard_place_text", { text });
+}
+
+export function clipboardShowPanel() {
+  return call<void>("clipboard_show_panel");
+}
+
+export function launcherOpen(path: string, hostId?: number) {
+  return call<void>("launcher_open", { path, hostId });
+}
+
 export function dismissClipboardPanel() {
   if (!isDesktop()) return;
   return invoke("clipboard_dismiss_panel");

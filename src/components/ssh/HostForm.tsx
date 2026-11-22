@@ -14,18 +14,24 @@ type FormValues = {
   remember?: boolean;
   startDir?: string;
   term?: string;
+  jumps?: number[];
+  agentForward?: boolean;
 };
 
 export default function HostForm({
   host,
+  hosts,
   open,
   keyringAvailable,
+  agentAvailable,
   onClose,
   onSaved,
 }: {
   host: SshHost | null;
+  hosts: SshHost[];
   open: boolean;
   keyringAvailable: boolean;
+  agentAvailable: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -49,6 +55,8 @@ export default function HostForm({
       remember: host?.remember ?? false,
       startDir: host?.startDir ?? "",
       term: host?.term ?? "xterm-256color",
+      jumps: host?.jumps ?? [],
+      agentForward: host?.agentForward ?? false,
     });
   }, [form, host, open]);
 
@@ -88,6 +96,8 @@ export default function HostForm({
       remember: keyringAvailable ? Boolean(values.remember) : Boolean(host?.remember),
       startDir: values.startDir,
       term: values.term,
+      jumps: values.jumps ?? [],
+      agentForward: Boolean(values.agentForward),
     };
     setBusy(true);
     setError("");
@@ -151,6 +161,7 @@ export default function HostForm({
             options={[
               { value: "password", label: t("zdx.label.ssh.authPassword") },
               { value: "key", label: t("zdx.label.ssh.authKey") },
+              { value: "agent", label: t("zdx.label.ssh.authAgent") },
             ]}
           />
         </Form.Item>
@@ -163,13 +174,30 @@ export default function HostForm({
             />
           </Form.Item>
         )}
-        {keyringAvailable ? (
+        {auth === "agent" ? (
+          <Typography.Paragraph type="secondary">{t(agentAvailable ? "zdx.text.ssh.agentHint" : "zdx.text.ssh.agentMissing")}</Typography.Paragraph>
+        ) : keyringAvailable ? (
           <Form.Item name="remember" valuePropName="checked" extra={t("zdx.text.ssh.rememberHint")}>
             <Checkbox>{t(auth === "key" ? "zdx.label.ssh.rememberPassphrase" : "zdx.label.ssh.rememberPassword")}</Checkbox>
           </Form.Item>
         ) : (
           <Typography.Paragraph type="secondary">{t("zdx.text.ssh.keyringUnavailable")}</Typography.Paragraph>
         )}
+        <Form.Item name="agentForward" valuePropName="checked" extra={t("zdx.text.ssh.agentForwardHint")}>
+          <Checkbox>{t("zdx.label.ssh.agentForward")}</Checkbox>
+        </Form.Item>
+        <Form.Item name="jumps" label={t("zdx.label.ssh.jumps")} extra={t("zdx.text.ssh.jumpsHint")}>
+          <Select
+            mode="multiple"
+            allowClear
+            aria-label={t("zdx.label.ssh.jumps")}
+            placeholder={t("zdx.placeholder.ssh.jumps")}
+            options={hosts.filter((item) => item.id !== host?.id).map((item) => ({
+              value: item.id,
+              label: `${item.name} (${item.username}@${item.host})`,
+            }))}
+          />
+        </Form.Item>
         <Form.Item name="startDir" label={t("zdx.label.ssh.startDir")}>
           <Input placeholder={t("zdx.placeholder.ssh.startDir")} />
         </Form.Item>

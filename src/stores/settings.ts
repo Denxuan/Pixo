@@ -8,19 +8,23 @@ export const useSettingsStore = createZustandStore<{
   language: Language;
   background: boolean;
   trayIcon: TrayIconId;
+  introduced: boolean;
   setMode: (mode: ThemeMode) => void;
   setLanguage: (language: Language) => void;
   setBackground: (background: boolean) => void;
   setTrayIcon: (trayIcon: TrayIconId) => void;
+  setIntroduced: (introduced: boolean) => void;
 }>()(persist((set) => ({
   mode: "system",
   language: "zh-CN",
   background: false,
   trayIcon: "board",
+  introduced: false,
   setMode: (mode) => set({ mode }),
   setLanguage: (language) => set({ language }),
   setBackground: (background) => set({ background }),
   setTrayIcon: (trayIcon) => set({ trayIcon }),
+  setIntroduced: (introduced) => set({ introduced }),
 // Keep the existing key so users retain their saved theme.
 }), { name: "pixo-theme" }));
 

@@ -1,15 +1,17 @@
 use std::collections::HashMap;
+use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use russh::client::{self, Handler, Msg};
+use russh::client::{self, AuthResult, Handler, Msg};
 use russh::keys::{Algorithm, PrivateKeyWithHashAlg};
-use russh::{ChannelMsg, Disconnect};
+use russh::{ChannelMsg, ChannelOpenFailure, Disconnect, MethodKind, Sig};
 use serde_json::{Value, json};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::{mpsc, oneshot, watch};
 use zeroize::{Zeroize, Zeroizing};
@@ -17,9 +19,11 @@ use zeroize::{Zeroize, Zeroizing};
 use super::auth::{self, LoadedKey};
 use super::cwd::CwdState;
 use super::error::{SshError, log_ssh};
+use super::flow::{OutputWindow, wait_for_output_room};
 use super::grant;
 use super::known_hosts::{Decision, KeyChange, KnownStore, user_known_hosts_path};
-use super::model::{AuthKind, Host, HostDraft, SshStatus, normalize};
+use super::forward::parse_forward;
+use super::model::{AuthKind, ForwardView, Host, HostDraft, Snippet, SnippetDraft, SshStatus, normalize};
 use super::remote::normalize_absolute;
 use super::secret::{self, SecretKind};
 use super::shell::{cwd_hook, shell_single_quote};
@@ -30,9 +34,23 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const PROMPT_TIMEOUT: Duration = Duration::from_secs(120);
 const OUTPUT_FLUSH: Duration = Duration::from_millis(16);
 const OUTPUT_LIMIT: usize = 64 * 1024;
+const REPLAY_TTL: Duration = Duration::from_secs(30 * 60);
+const REPLAY_LIMIT: usize = 32;
+
+#[derive(Clone)]
+enum TransferPlan {
+    Upload { paths: Vec<PathBuf> },
+    Download { root: PathBuf, remote: Vec<String> },
+}
+
+struct Replay {
+    plan: TransferPlan,
+    at: Instant,
+}
 
 enum Input {
     Write(Vec<u8>),
+    Interrupt,
     Resize { cols: u32, rows: u32 },
     Close,
 }
@@ -53,6 +71,22 @@ struct Bridge {
     prompt: Mutex<Option<PromptSlot>>,
     next_prompt: AtomicU64,
     failure: Mutex<Option<SshError>>,
+    output: OutputWindow,
+}
+
+struct ForwardRun {
+    local_port: u16,
+    remote_host: String,
+    remote_port: u16,
+    cancel: watch::Sender<bool>,
+    task: tauri::async_runtime::JoinHandle<()>,
+}
+
+impl Drop for ForwardRun {
+    fn drop(&mut self) {
+        let _ = self.cancel.send(true);
+        self.task.abort();
+    }
 }
 
 #[derive(Clone)]
@@ -62,6 +96,7 @@ struct SessionControl {
     handle: Arc<AsyncMutex<Option<client::Handle<ClientHandler>>>>,
     cwd: Arc<Mutex<CwdState>>,
     transfers: Arc<Mutex<HashMap<u64, TransferSlot>>>,
+    forwards: Arc<Mutex<HashMap<u64, ForwardRun>>>,
 }
 
 struct Inner {
@@ -69,6 +104,7 @@ struct Inner {
     store: Mutex<Store>,
     known: Mutex<KnownStore>,
     sessions: Mutex<HashMap<u64, SessionControl>>,
+    replays: Mutex<HashMap<u64, Replay>>,
     next_id: AtomicU64,
     next_task: AtomicU64,
 }
@@ -105,6 +141,7 @@ pub fn initialize(app: AppHandle) -> Result<SshState, SshError> {
             store: Mutex::new(store),
             known: Mutex::new(known),
             sessions: Mutex::new(HashMap::new()),
+            replays: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             next_task: AtomicU64::new(1),
         }),
@@ -113,27 +150,60 @@ pub fn initialize(app: AppHandle) -> Result<SshState, SshError> {
 
 impl SshState {
     pub fn status(&self) -> Result<SshStatus, SshError> {
-        Ok(self.status_of(lock(&self.inner.store).enabled()?))
+        let store = lock(&self.inner.store);
+        Ok(self.status_of(store.enabled()?, store.keepalive()?))
     }
 
     pub fn set_enabled(&self, enabled: bool) -> Result<SshStatus, SshError> {
         lock(&self.inner.store).set_enabled(enabled)?;
         if !enabled {
             self.disconnect_all();
+            lock(&self.inner.replays).clear();
         }
         let _ = self.inner.app.emit("ssh://enabled", enabled);
-        Ok(self.status_of(enabled))
+        self.status()
     }
 
-    fn status_of(&self, enabled: bool) -> SshStatus {
+    pub fn set_keepalive(&self, seconds: u32) -> Result<SshStatus, SshError> {
+        lock(&self.inner.store).set_keepalive(seconds)?;
+        self.status()
+    }
+
+    fn status_of(&self, enabled: bool, keepalive_secs: u32) -> SshStatus {
         SshStatus {
             enabled,
             keyring_available: secret::available(),
+            agent_available: super::agent::available(),
+            keepalive_secs,
         }
     }
 
     pub fn list(&self) -> Result<Vec<Host>, SshError> {
         lock(&self.inner.store).list()
+    }
+
+    pub fn snippets(&self) -> Result<Vec<Snippet>, SshError> {
+        let store = lock(&self.inner.store);
+        if !store.enabled()? {
+            return Err(SshError::new("disabled"));
+        }
+        store.snippets()
+    }
+
+    pub fn save_snippet(&self, draft: &SnippetDraft) -> Result<Snippet, SshError> {
+        let store = lock(&self.inner.store);
+        if !store.enabled()? {
+            return Err(SshError::new("disabled"));
+        }
+        store.save_snippet(draft)
+    }
+
+    pub fn delete_snippet(&self, id: i64) -> Result<(), SshError> {
+        let store = lock(&self.inner.store);
+        if !store.enabled()? {
+            return Err(SshError::new("disabled"));
+        }
+        store.delete_snippet(id)
     }
 
     pub fn save(&self, draft: HostDraft) -> Result<Host, SshError> {
@@ -158,12 +228,93 @@ impl SshState {
         lock(&self.inner.store).save(&host, now_millis())
     }
 
-    pub fn delete(&self, id: i64) -> Result<(), SshError> {
+    pub fn delete(&self, id: i64, detach: bool) -> Result<(), SshError> {
         let host = lock(&self.inner.store).get(id)?;
+        let names = lock(&self.inner.store).dependent_names(id)?;
+        if !names.is_empty() && !detach {
+            return Err(SshError::with_params(
+                "jump_in_use",
+                serde_json::json!({ "hosts": names.join("、") }),
+            ));
+        }
         if host.remember {
             secret::delete_host(id)?;
         }
-        lock(&self.inner.store).delete(id)
+        lock(&self.inner.store).delete(id, true)
+    }
+
+    pub fn config_preview(&self) -> Result<Vec<super::config_import::ConfigPreview>, SshError> {
+        let entries = super::config_import::load_user_config()?;
+        let hosts = lock(&self.inner.store).list()?;
+        let existing = hosts
+            .iter()
+            .map(|host| (host.host.clone(), host.port, host.username.clone()))
+            .collect::<Vec<_>>();
+        Ok(super::config_import::preview(&entries, &existing))
+    }
+
+    pub fn config_import(&self, indexes: &[u32]) -> Result<Vec<Host>, SshError> {
+        if indexes.len() > 500 {
+            return Err(SshError::new("invalid_input"));
+        }
+        let entries = super::config_import::load_user_config()?;
+        let chosen = super::config_import::expand_selection(&entries, indexes);
+        if chosen.is_empty() {
+            return Err(SshError::new("invalid_input"));
+        }
+        let mut ids = HashMap::<String, i64>::new();
+        let mut created = Vec::new();
+        for index in chosen {
+            let entry = &entries[index as usize];
+            let host = self.save(HostDraft {
+                id: None,
+                name: entry.alias.clone(),
+                group_name: None,
+                host: entry.host.clone(),
+                port: entry.port,
+                username: entry.username.clone(),
+                auth: if entry.key_path.is_some() {
+                    AuthKind::Key
+                } else {
+                    AuthKind::Password
+                },
+                key_path: entry.key_path.clone(),
+                remember: false,
+                start_dir: None,
+                term: None,
+                jumps: Vec::new(),
+                agent_forward: false,
+            })?;
+            ids.insert(entry.alias.to_ascii_lowercase(), host.id);
+            created.push((host, entry.jumps.clone()));
+        }
+        let mut saved = Vec::new();
+        for (host, jumps) in created {
+            let jump_ids = jumps
+                .iter()
+                .filter_map(|name| ids.get(&name.to_ascii_lowercase()).copied())
+                .collect::<Vec<_>>();
+            if jump_ids.is_empty() || jump_ids.len() != jumps.len() {
+                saved.push(host);
+                continue;
+            }
+            saved.push(self.save(HostDraft {
+                id: Some(host.id),
+                name: host.name,
+                group_name: host.group_name,
+                host: host.host,
+                port: host.port,
+                username: host.username,
+                auth: host.auth,
+                key_path: host.key_path,
+                remember: host.remember,
+                start_dir: host.start_dir,
+                term: Some(host.term),
+                jumps: jump_ids,
+                agent_forward: host.agent_forward,
+            })?);
+        }
+        Ok(saved)
     }
 
     pub fn forget_key(&self, id: i64) -> Result<(), SshError> {
@@ -190,6 +341,7 @@ impl SshState {
             prompt: Mutex::new(None),
             next_prompt: AtomicU64::new(1),
             failure: Mutex::new(None),
+            output: OutputWindow::new(),
         });
         let (input, input_rx) = mpsc::unbounded_channel();
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
@@ -201,6 +353,7 @@ impl SshState {
                 handle: Arc::new(AsyncMutex::new(None)),
                 cwd: Arc::new(Mutex::new(CwdState::new())),
                 transfers: Arc::new(Mutex::new(HashMap::new())),
+                forwards: Arc::new(Mutex::new(HashMap::new())),
             },
         );
         let inner = Arc::clone(&self.inner);
@@ -222,6 +375,85 @@ impl SshState {
             .await;
         });
         Ok(id)
+    }
+
+    pub async fn open_forward(
+        &self,
+        session_id: u64,
+        local_port: u32,
+        remote_host: &str,
+        remote_port: u32,
+    ) -> Result<ForwardView, SshError> {
+        let target = parse_forward(local_port, remote_host, remote_port)?;
+        let control = control(&self.inner, session_id)?;
+        {
+            let slot = control.handle.lock().await;
+            if slot.as_ref().is_none_or(|handle| handle.is_closed()) {
+                return Err(SshError::new("disconnected"));
+            }
+        }
+        if lock(&control.forwards).len() >= 8 {
+            return Err(SshError::new("forward_limit"));
+        }
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, target.local_port))
+            .await
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AddrInUse {
+                    SshError::new("port_in_use")
+                } else {
+                    eprintln!("ssh forward: {error}");
+                    SshError::new("connect_failed")
+                }
+            })?;
+        let (cancel, cancel_rx) = watch::channel(false);
+        let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
+        let handle = Arc::clone(&control.handle);
+        let host = target.remote_host.clone();
+        let port = u32::from(target.remote_port);
+        let task = tauri::async_runtime::spawn(async move {
+            accept_forward(listener, handle, host, port, cancel_rx).await;
+        });
+        lock(&control.forwards).insert(
+            id,
+            ForwardRun {
+                local_port: target.local_port,
+                remote_host: target.remote_host.clone(),
+                remote_port: target.remote_port,
+                cancel,
+                task,
+            },
+        );
+        Ok(ForwardView {
+            id,
+            session_id,
+            local_port: target.local_port,
+            remote_host: target.remote_host,
+            remote_port: target.remote_port,
+        })
+    }
+
+    pub fn list_forwards(&self, session_id: u64) -> Result<Vec<ForwardView>, SshError> {
+        let control = control(&self.inner, session_id)?;
+        let mut items = lock(&control.forwards)
+            .iter()
+            .map(|(id, run)| ForwardView {
+                id: *id,
+                session_id,
+                local_port: run.local_port,
+                remote_host: run.remote_host.clone(),
+                remote_port: run.remote_port,
+            })
+            .collect::<Vec<_>>();
+        items.sort_by_key(|item| item.local_port);
+        Ok(items)
+    }
+
+    pub fn close_forward(&self, session_id: u64, id: u64) -> Result<(), SshError> {
+        let control = control(&self.inner, session_id)?;
+        lock(&control.forwards)
+            .remove(&id)
+            .map(|_| ())
+            .ok_or_else(|| SshError::new("not_found"))
     }
 
     pub fn decide_host_key(&self, session_id: u64, accept: bool) -> Result<(), SshError> {
@@ -275,6 +507,21 @@ impl SshState {
             .map_err(|_| SshError::new("disconnected"))
     }
 
+    pub fn interrupt(&self, session_id: u64) -> Result<(), SshError> {
+        let control = control(&self.inner, session_id)?;
+        control
+            .input
+            .send(Input::Interrupt)
+            .map_err(|_| SshError::new("disconnected"))
+    }
+
+    pub fn ack(&self, session_id: u64, bytes: u64) -> Result<(), SshError> {
+        if let Ok(control) = control(&self.inner, session_id) {
+            control.bridge.output.release(bytes);
+        }
+        Ok(())
+    }
+
     pub fn resize(&self, session_id: u64, cols: u32, rows: u32) -> Result<(), SshError> {
         let control = control(&self.inner, session_id)?;
         control
@@ -297,9 +544,24 @@ impl SshState {
         token: String,
         progress: Channel<Value>,
     ) -> Result<u64, SshError> {
-        let control = control(&self.inner, session_id)?;
         let paths = grant::take(&token)?;
+        self.launch_upload(session_id, paths, progress)
+    }
+
+    fn launch_upload(
+        &self,
+        session_id: u64,
+        paths: Vec<PathBuf>,
+        progress: Channel<Value>,
+    ) -> Result<u64, SshError> {
+        let control = control(&self.inner, session_id)?;
         let task_id = self.inner.next_task.fetch_add(1, Ordering::Relaxed);
+        self.remember_plan(
+            task_id,
+            TransferPlan::Upload {
+                paths: paths.clone(),
+            },
+        );
         let (cancel, cancel_rx) = watch::channel(false);
         let gate = Arc::new(DecisionGate::default());
         lock(&control.transfers).insert(
@@ -312,29 +574,167 @@ impl SshState {
         let handle = Arc::clone(&control.handle);
         let cwd = Arc::clone(&control.cwd);
         let transfers = Arc::clone(&control.transfers);
+        let bridge = Arc::clone(&control.bridge);
         tauri::async_runtime::spawn(async move {
-            let outcome = run_upload(
-                handle,
-                cwd,
-                paths,
-                task_id,
-                progress.clone(),
-                cancel_rx,
-                gate,
-            )
-            .await;
+            let outcome = run_upload(handle, cwd, paths, task_id, progress.clone(), cancel_rx, gate).await;
             lock(&transfers).remove(&task_id);
             if let Err(error) = outcome {
-                log_ssh("upload", 0, error.code);
-                let _ = progress.send(json!({
-                    "type": "failed",
-                    "taskId": task_id,
-                    "code": error.code,
-                    "params": error.params,
-                }));
+                report_transfer_failure(&progress, task_id, error, *bridge.cancel.borrow());
             }
         });
         Ok(task_id)
+    }
+
+    pub async fn list_dir(
+        &self,
+        session_id: u64,
+        path: String,
+    ) -> Result<transfer::RemoteListing, SshError> {
+        let control = control(&self.inner, session_id)?;
+        let path = if path.trim().is_empty() {
+            lock(&control.cwd)
+                .path()
+                .unwrap_or_else(|| "/".to_string())
+        } else {
+            normalize_absolute(&path).ok_or_else(|| SshError::new("invalid_input"))?
+        };
+        let sftp = open_sftp(&control.handle).await?;
+        let listing = transfer::list_dir(&sftp, &path).await;
+        let _ = sftp.close().await;
+        listing
+    }
+
+    pub async fn make_dir(&self, session_id: u64, path: String) -> Result<(), SshError> {
+        let control = control(&self.inner, session_id)?;
+        let sftp = open_sftp(&control.handle).await?;
+        let result = transfer::make_dir(&sftp, &path).await;
+        let _ = sftp.close().await;
+        result
+    }
+
+    pub async fn rename_path(&self, session_id: u64, from: String, to: String) -> Result<(), SshError> {
+        let control = control(&self.inner, session_id)?;
+        let sftp = open_sftp(&control.handle).await?;
+        let result = transfer::rename_path(&sftp, &from, &to).await;
+        let _ = sftp.close().await;
+        result
+    }
+
+    pub async fn remove_paths(&self, session_id: u64, paths: Vec<String>) -> Result<(), SshError> {
+        if paths.is_empty() || paths.len() > 100 {
+            return Err(SshError::new("invalid_input"));
+        }
+        let control = control(&self.inner, session_id)?;
+        let sftp = open_sftp(&control.handle).await?;
+        let mut result = Ok(());
+        for path in paths {
+            if let Err(error) = transfer::remove_path(&sftp, &path).await {
+                result = Err(error);
+                break;
+            }
+        }
+        let _ = sftp.close().await;
+        result
+    }
+
+    pub fn download(
+        &self,
+        session_id: u64,
+        token: String,
+        remote_paths: Vec<String>,
+        progress: Channel<Value>,
+    ) -> Result<u64, SshError> {
+        if remote_paths.is_empty() || remote_paths.len() > 500 {
+            return Err(SshError::new("invalid_input"));
+        }
+        let mut paths = Vec::new();
+        for path in remote_paths {
+            paths.push(normalize_absolute(&path).ok_or_else(|| SshError::new("invalid_input"))?);
+        }
+        let local = grant::take(&token)?;
+        if local.len() != 1 {
+            return Err(SshError::new("invalid_input"));
+        }
+        let root = local.into_iter().next().unwrap_or_default();
+        if !root.is_dir() {
+            return Err(SshError::new("invalid_input"));
+        }
+        self.launch_download(session_id, root, paths, progress)
+    }
+
+    fn launch_download(
+        &self,
+        session_id: u64,
+        root: PathBuf,
+        paths: Vec<String>,
+        progress: Channel<Value>,
+    ) -> Result<u64, SshError> {
+        if !root.is_dir() {
+            return Err(SshError::new("invalid_input"));
+        }
+        let control = control(&self.inner, session_id)?;
+        let task_id = self.inner.next_task.fetch_add(1, Ordering::Relaxed);
+        self.remember_plan(
+            task_id,
+            TransferPlan::Download {
+                root: root.clone(),
+                remote: paths.clone(),
+            },
+        );
+        let (cancel, cancel_rx) = watch::channel(false);
+        let gate = Arc::new(DecisionGate::default());
+        lock(&control.transfers).insert(
+            task_id,
+            TransferSlot {
+                cancel,
+                gate: Arc::clone(&gate),
+            },
+        );
+        let handle = Arc::clone(&control.handle);
+        let transfers = Arc::clone(&control.transfers);
+        let bridge = Arc::clone(&control.bridge);
+        tauri::async_runtime::spawn(async move {
+            let outcome = run_download(handle, root, paths, task_id, progress.clone(), cancel_rx, gate).await;
+            lock(&transfers).remove(&task_id);
+            if let Err(error) = outcome {
+                report_transfer_failure(&progress, task_id, error, *bridge.cancel.borrow());
+            }
+        });
+        Ok(task_id)
+    }
+
+    pub fn retry_transfer(
+        &self,
+        session_id: u64,
+        task_id: u64,
+        progress: Channel<Value>,
+    ) -> Result<u64, SshError> {
+        let plan = lock(&self.inner.replays)
+            .get(&task_id)
+            .map(|replay| replay.plan.clone())
+            .ok_or_else(|| SshError::new("not_found"))?;
+        let new_id = match plan {
+            TransferPlan::Upload { paths } => self.launch_upload(session_id, paths, progress)?,
+            TransferPlan::Download { root, remote } => self.launch_download(session_id, root, remote, progress)?,
+        };
+        self.forget_transfer(task_id);
+        Ok(new_id)
+    }
+
+    pub fn forget_transfer(&self, task_id: u64) {
+        lock(&self.inner.replays).remove(&task_id);
+    }
+
+    fn remember_plan(&self, task_id: u64, plan: TransferPlan) {
+        let mut map = lock(&self.inner.replays);
+        let now = Instant::now();
+        map.retain(|_, replay| now.saturating_duration_since(replay.at) < REPLAY_TTL);
+        if !map.contains_key(&task_id) && map.len() >= REPLAY_LIMIT {
+            if let Some(oldest) = map.iter().min_by_key(|(_, replay)| replay.at).map(|(id, _)| *id) {
+                map.remove(&oldest);
+            }
+        }
+        map.insert(task_id, Replay { plan, at: now });
     }
 
     pub fn decide_transfer(
@@ -393,6 +793,7 @@ fn cancel_session(control: &SessionControl) {
     for slot in lock(&control.transfers).values() {
         let _ = slot.cancel.send(true);
     }
+    lock(&control.forwards).clear();
 }
 
 async fn run_session(
@@ -458,40 +859,14 @@ async fn open_shell(
     handle_slot: Arc<AsyncMutex<Option<client::Handle<ClientHandler>>>>,
     cwd: Arc<Mutex<CwdState>>,
 ) -> Result<(), SshError> {
-    let socket = match tokio::time::timeout(
-        CONNECT_TIMEOUT,
-        TcpStream::connect((host.host.as_str(), host.port)),
-    )
-    .await
-    {
-        Ok(Ok(socket)) => socket,
-        Ok(Err(error)) => return Err(map_io(&error)),
-        Err(_) => return Err(SshError::new("timeout")),
+    let jump_hosts = {
+        let store = lock(&inner.store);
+        host.jumps
+            .iter()
+            .map(|id| store.get(*id))
+            .collect::<Result<Vec<_>, _>>()?
     };
-    let _ = socket.set_nodelay(true);
-    let mut config = client::Config::default();
-    config.keepalive_interval = Some(Duration::from_secs(30));
-    config.keepalive_max = 3;
-    config.nodelay = true;
-    let handler = ClientHandler {
-        inner: Arc::clone(&inner),
-        bridge: Arc::clone(bridge),
-        events: events.clone(),
-        host: host.host.clone(),
-        port: host.port,
-    };
-    let mut handle = match client::connect_stream(Arc::new(config), socket, handler).await {
-        Ok(handle) => handle,
-        Err(error) => return Err(take_failure(bridge).unwrap_or_else(|| map_russh(&error.0))),
-    };
-    if let Some(error) = take_failure(bridge) {
-        return Err(error);
-    }
-    if *bridge.cancel.borrow() {
-        return Err(SshError::new("cancelled"));
-    }
-    emit(events, json!({"type": "state", "state": "authenticating"}));
-    authenticate(&mut handle, &inner, host, bridge, events).await?;
+    let (handle, jumps) = dial(&inner, host, &jump_hosts, bridge, events).await?;
     {
         let mut slot = handle_slot.lock().await;
         *slot = Some(handle);
@@ -517,6 +892,9 @@ async fn open_shell(
         .request_shell(false)
         .await
         .map_err(|error| map_russh(&error))?;
+    if host.agent_forward {
+        let _ = channel.agent_forward(false).await;
+    }
     let nonce = grant::nonce();
     if let Some(dir) = &host.start_dir {
         if let Some(path) = normalize_absolute(dir) {
@@ -568,8 +946,116 @@ async fn open_shell(
     if let Some(handle) = handle_slot.lock().await.take() {
         let _ = handle.disconnect(Disconnect::ByApplication, "", "").await;
     }
+    for jump in jumps {
+        let _ = jump.disconnect(Disconnect::ByApplication, "", "").await;
+    }
     let _ = write_task.await;
     Ok(())
+}
+
+async fn dial(
+    inner: &Arc<Inner>,
+    target: &Host,
+    jumps: &[Host],
+    bridge: &Arc<Bridge>,
+    events: &Channel<Value>,
+) -> Result<(client::Handle<ClientHandler>, Vec<client::Handle<ClientHandler>>), SshError> {
+    let mut previous = None;
+    let mut kept = Vec::new();
+    for (index, hop) in jumps.iter().chain(std::iter::once(target)).enumerate() {
+        let handle = connect_hop(inner, hop, previous.as_ref(), bridge, events).await?;
+        if let Some(prior) = previous.take() {
+            kept.push(prior);
+        }
+        previous = Some(handle);
+        if index == jumps.len() {
+            break;
+        }
+    }
+    Ok((
+        previous.ok_or_else(|| SshError::new("disconnected"))?,
+        kept,
+    ))
+}
+
+async fn connect_hop(
+    inner: &Arc<Inner>,
+    hop: &Host,
+    via: Option<&client::Handle<ClientHandler>>,
+    bridge: &Arc<Bridge>,
+    events: &Channel<Value>,
+) -> Result<client::Handle<ClientHandler>, SshError> {
+    match via {
+        None => {
+            let socket = match tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                TcpStream::connect((hop.host.as_str(), hop.port)),
+            )
+            .await
+            {
+                Ok(Ok(socket)) => socket,
+                Ok(Err(error)) => return Err(map_io(&error)),
+                Err(_) => return Err(SshError::new("timeout")),
+            };
+            let _ = socket.set_nodelay(true);
+            finish_connect(inner, hop, socket, bridge, events).await
+        }
+        Some(via) => {
+            let channel = match tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                via.channel_open_direct_tcpip(hop.host.as_str(), hop.port as u32, "127.0.0.1", 0),
+            )
+            .await
+            {
+                Ok(Ok(channel)) => channel,
+                Ok(Err(error)) => return Err(map_russh(&error)),
+                Err(_) => return Err(SshError::new("timeout")),
+            };
+            finish_connect(inner, hop, channel.into_stream(), bridge, events).await
+        }
+    }
+}
+
+async fn finish_connect<S>(
+    inner: &Arc<Inner>,
+    hop: &Host,
+    stream: S,
+    bridge: &Arc<Bridge>,
+    events: &Channel<Value>,
+) -> Result<client::Handle<ClientHandler>, SshError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let keepalive = lock(&inner.store).keepalive().unwrap_or(30);
+    let mut config = client::Config::default();
+    config.keepalive_interval = if keepalive == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(u64::from(keepalive)))
+    };
+    config.keepalive_max = 3;
+    config.nodelay = true;
+    let handler = ClientHandler {
+        inner: Arc::clone(inner),
+        bridge: Arc::clone(bridge),
+        events: events.clone(),
+        host: hop.host.clone(),
+        port: hop.port,
+        forward_agent: hop.agent_forward,
+    };
+    let mut handle = match client::connect_stream(Arc::new(config), stream, handler).await {
+        Ok(handle) => handle,
+        Err(error) => return Err(take_failure(bridge).unwrap_or_else(|| map_russh(&error.0))),
+    };
+    if let Some(error) = take_failure(bridge) {
+        return Err(error);
+    }
+    if *bridge.cancel.borrow() {
+        return Err(SshError::new("cancelled"));
+    }
+    emit(events, json!({"type": "state", "state": "authenticating"}));
+    authenticate(&mut handle, inner, hop, bridge, events).await?;
+    Ok(handle)
 }
 
 async fn open_sftp(
@@ -648,6 +1134,21 @@ async fn run_upload(
     result
 }
 
+async fn run_download(
+    handle: Arc<AsyncMutex<Option<client::Handle<ClientHandler>>>>,
+    root: std::path::PathBuf,
+    paths: Vec<String>,
+    task_id: u64,
+    progress: Channel<Value>,
+    mut cancel: watch::Receiver<bool>,
+    gate: Arc<DecisionGate>,
+) -> Result<(), SshError> {
+    let sftp = open_sftp(&handle).await?;
+    let result = transfer::receive_all(&sftp, &root, &paths, task_id, &progress, &mut cancel, gate.as_ref()).await;
+    let _ = sftp.close().await;
+    result
+}
+
 async fn authenticate(
     handle: &mut client::Handle<ClientHandler>,
     inner: &Inner,
@@ -656,27 +1157,7 @@ async fn authenticate(
     events: &Channel<Value>,
 ) -> Result<(), SshError> {
     match host.auth {
-        AuthKind::Password => {
-            if let Some(saved) = saved_secret(events, host, SecretKind::Password).await {
-                if password_accepted(handle, &host.username, saved.as_str()).await? {
-                    return Ok(());
-                }
-                forget_secret(events, host.id, SecretKind::Password).await;
-            }
-            let reply = prompt_reply(bridge, events, "password", host.remember).await?;
-            if !password_accepted(handle, &host.username, reply.secret.as_str()).await? {
-                return Err(SshError::new("auth_failed"));
-            }
-            keep_secret(
-                inner,
-                events,
-                host.id,
-                SecretKind::Password,
-                reply.secret.as_str(),
-                reply.remember,
-            )
-            .await;
-        }
+        AuthKind::Password => password_auth(handle, inner, host, bridge, events).await?,
         AuthKind::Key => {
             let path = host.key_path.as_deref().unwrap_or("");
             let key = match auth::load_private_key(path, None) {
@@ -694,8 +1175,19 @@ async fn authenticate(
                     if let Some(key) = unlocked {
                         key
                     } else {
-                        let reply =
-                            prompt_reply(bridge, events, "passphrase", host.remember).await?;
+                        let reply = prompt_reply(
+                            bridge,
+                            events,
+                            "passphrase",
+                            true,
+                            host.remember,
+                            &host.name,
+                            "",
+                            "",
+                            "",
+                            false,
+                        )
+                        .await?;
                         match auth::load_private_key(path, Some(reply.secret.as_str())) {
                             LoadedKey::Ready(key) => {
                                 keep_secret(
@@ -731,12 +1223,322 @@ async fn authenticate(
                 )
                 .await
                 .map_err(|error| map_russh(&error))?;
-            if !result.success() {
-                return Err(SshError::new("auth_failed"));
-            }
+            continue_auth(handle, inner, host, bridge, events, result, false).await?;
+        }
+        AuthKind::Agent => {
+            let hash = match handle.best_supported_rsa_hash().await {
+                Ok(value) => value.flatten(),
+                Err(_) => None,
+            };
+            let agent = agent_result(handle, host, hash).await;
+            let result = if agent.success() {
+                agent
+            } else {
+                let files = default_key_result(handle, host, hash).await?;
+                if files.success() || wants_keyboard(&files) || !wants_keyboard(&agent) {
+                    files
+                } else {
+                    agent
+                }
+            };
+            continue_auth(handle, inner, host, bridge, events, result, false).await?;
         }
     }
     Ok(())
+}
+
+async fn password_auth(
+    handle: &mut client::Handle<ClientHandler>,
+    inner: &Inner,
+    host: &Host,
+    bridge: &Bridge,
+    events: &Channel<Value>,
+) -> Result<(), SshError> {
+    match handle.authenticate_none(host.username.as_str()).await {
+        Ok(result) if result.success() => return Ok(()),
+        Ok(result)
+            if wants_keyboard(&result) && !offers_method(&result, MethodKind::Password) =>
+        {
+            if keyboard_interactive(handle, inner, host, bridge, events).await? {
+                return Ok(());
+            }
+            return Err(SshError::new("auth_failed"));
+        }
+        Ok(_) => {}
+        Err(error) if handle.is_closed() => return Err(map_russh(&error)),
+        Err(_) => {}
+    }
+    if let Some(saved) = saved_secret(events, host, SecretKind::Password).await {
+        let result = password_result(handle, &host.username, saved.as_str()).await?;
+        if result.success() {
+            return Ok(());
+        }
+        forget_secret(events, host.id, SecretKind::Password).await;
+        if wants_keyboard(&result) && !offers_method(&result, MethodKind::Password) {
+            return continue_auth(handle, inner, host, bridge, events, result, true).await;
+        }
+    }
+    let reply = prompt_reply(
+        bridge,
+        events,
+        "password",
+        true,
+        host.remember,
+        &host.name,
+        "",
+        "",
+        "",
+        false,
+    )
+    .await?;
+    let result = password_result(handle, &host.username, reply.secret.as_str()).await?;
+    if result.success() {
+        keep_secret(
+            inner,
+            events,
+            host.id,
+            SecretKind::Password,
+            reply.secret.as_str(),
+            reply.remember,
+        )
+        .await;
+        return Ok(());
+    }
+    continue_auth(handle, inner, host, bridge, events, result, true).await
+}
+
+async fn continue_auth(
+    handle: &mut client::Handle<ClientHandler>,
+    inner: &Inner,
+    host: &Host,
+    bridge: &Bridge,
+    events: &Channel<Value>,
+    result: AuthResult,
+    password_fallback: bool,
+) -> Result<(), SshError> {
+    if result.success() {
+        return Ok(());
+    }
+    let follow = match &result {
+        AuthResult::Failure { partial_success, .. } => wants_keyboard(&result) && (*partial_success || password_fallback),
+        AuthResult::Success => false,
+    };
+    if follow && keyboard_interactive(handle, inner, host, bridge, events).await? {
+        return Ok(());
+    }
+    Err(SshError::new("auth_failed"))
+}
+
+async fn keyboard_interactive(
+    handle: &mut client::Handle<ClientHandler>,
+    inner: &Inner,
+    host: &Host,
+    bridge: &Bridge,
+    events: &Channel<Value>,
+) -> Result<bool, SshError> {
+    let mut step = handle
+        .authenticate_keyboard_interactive_start(host.username.as_str(), Option::<String>::None)
+        .await
+        .map_err(|error| map_russh(&error))?;
+    let mut remembered: Option<Zeroizing<String>> = None;
+    let mut remember_flag = false;
+    for _ in 0..8 {
+        match step {
+            client::KeyboardInteractiveAuthResponse::Success => {
+                if let Some(secret) = remembered.as_ref() {
+                    keep_secret(
+                        inner,
+                        events,
+                        host.id,
+                        SecretKind::Password,
+                        secret.as_str(),
+                        remember_flag,
+                    )
+                    .await;
+                }
+                return Ok(true);
+            }
+            client::KeyboardInteractiveAuthResponse::Failure { .. } => return Ok(false),
+            client::KeyboardInteractiveAuthResponse::InfoRequest {
+                name,
+                instructions,
+                prompts,
+            } => {
+                if prompts.len() > 8 {
+                    return Err(SshError::new("auth_failed"));
+                }
+                if prompts.is_empty() {
+                    step = handle
+                        .authenticate_keyboard_interactive_respond(Vec::new())
+                        .await
+                        .map_err(|error| map_russh(&error))?;
+                    continue;
+                }
+                let mut answers = Vec::with_capacity(prompts.len());
+                let heading = visible_prompt(&name);
+                let detail = visible_prompt(&instructions);
+                for (index, prompt) in prompts.iter().enumerate() {
+                    let label = visible_prompt(&prompt.prompt);
+                    let allow_remember = prompts.len() == 1
+                        && !prompt.echo
+                        && matches!(host.auth, AuthKind::Password)
+                        && password_like(&label);
+                    let reply = prompt_reply(
+                        bridge,
+                        events,
+                        "keyboard",
+                        allow_remember,
+                        host.remember,
+                        &host.name,
+                        if index == 0 { heading.as_str() } else { "" },
+                        if index == 0 { detail.as_str() } else { "" },
+                        &label,
+                        prompt.echo,
+                    )
+                    .await?;
+                    if reply.secret.len() > 4096 {
+                        return Err(SshError::new("invalid_input"));
+                    }
+                    if allow_remember {
+                        remembered = Some(Zeroizing::new(reply.secret.to_string()));
+                        remember_flag = reply.remember;
+                    }
+                    answers.push(reply.secret.to_string());
+                }
+                step = handle
+                    .authenticate_keyboard_interactive_respond(answers)
+                    .await
+                    .map_err(|error| map_russh(&error))?;
+            }
+        }
+    }
+    Err(SshError::new("auth_failed"))
+}
+
+fn wants_keyboard(result: &AuthResult) -> bool {
+    offers_method(result, MethodKind::KeyboardInteractive)
+}
+
+fn offers_method(result: &AuthResult, method: MethodKind) -> bool {
+    let AuthResult::Failure { remaining_methods, .. } = result else {
+        return false;
+    };
+    format!("{remaining_methods:?}").contains(&format!("{method:?}"))
+}
+
+fn password_like(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let secret = lower.contains("password")
+        || lower.contains("passphrase")
+        || text.contains("密码")
+        || text.contains("口令");
+    let one_time = lower.contains("code")
+        || lower.contains("otp")
+        || lower.contains("verification")
+        || lower.contains("one-time")
+        || lower.contains("token")
+        || text.contains("验证")
+        || text.contains("一次性");
+    secret && !one_time
+}
+
+fn visible_prompt(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        if out.chars().count() >= 200 {
+            break;
+        }
+        if ch == '\n' || ch == '\r' || ch == '\t' {
+            out.push(' ');
+        } else if !ch.is_control() {
+            out.push(ch);
+        }
+    }
+    out.trim().to_string()
+}
+
+fn auth_failure() -> AuthResult {
+    AuthResult::Failure {
+        remaining_methods: russh::MethodSet::empty(),
+        partial_success: false,
+    }
+}
+
+async fn agent_result(
+    handle: &mut client::Handle<ClientHandler>,
+    host: &Host,
+    hash: Option<russh::keys::HashAlg>,
+) -> AuthResult {
+    let Ok(mut client) = super::agent::open().await else {
+        return auth_failure();
+    };
+    if let Some(binding) = handle.agent_session_binding() {
+        if client.bind_session(binding, false).await.is_err() {
+            let Ok(fresh) = super::agent::open().await else {
+                return auth_failure();
+            };
+            client = fresh;
+        }
+    }
+    let Ok(keys) = client.request_identities().await else {
+        return auth_failure();
+    };
+    let mut last = auth_failure();
+    for identity in keys {
+        let rsa = match &identity {
+            russh::keys::agent::AgentIdentity::PublicKey { key, .. } => {
+                matches!(key.algorithm(), Algorithm::Rsa { .. })
+            }
+            russh::keys::agent::AgentIdentity::Certificate { certificate, .. } => {
+                matches!(certificate.public_key().algorithm(), Algorithm::Rsa { .. })
+            }
+        };
+        let key_hash = if rsa { hash } else { None };
+        if rsa && key_hash.is_none() {
+            continue;
+        }
+        let accepted = match identity {
+            russh::keys::agent::AgentIdentity::Certificate { certificate, .. } => handle
+                .authenticate_certificate_with(host.username.as_str(), certificate, key_hash, &mut client)
+                .await,
+            russh::keys::agent::AgentIdentity::PublicKey { key, .. } => handle
+                .authenticate_publickey_with(host.username.as_str(), key, key_hash, &mut client)
+                .await,
+        };
+        match accepted {
+            Ok(result) if result.success() => return result,
+            Ok(result) => last = result,
+            Err(_) => {}
+        }
+    }
+    last
+}
+
+async fn default_key_result(
+    handle: &mut client::Handle<ClientHandler>,
+    host: &Host,
+    hash: Option<russh::keys::HashAlg>,
+) -> Result<AuthResult, SshError> {
+    let mut last = auth_failure();
+    for path in auth::default_identity_files() {
+        let key = match auth::load_private_key(&path.to_string_lossy(), None) {
+            LoadedKey::Ready(key) => key,
+            LoadedKey::Encrypted | LoadedKey::Failed => continue,
+        };
+        let rsa = matches!(key.algorithm(), Algorithm::Rsa { .. });
+        if rsa && hash.is_none() {
+            continue;
+        }
+        let result = handle
+            .authenticate_publickey(&host.username, PrivateKeyWithHashAlg::new(std::sync::Arc::new(key), hash))
+            .await
+            .map_err(|error| map_russh(&error))?;
+        if result.success() {
+            return Ok(result);
+        }
+        last = result;
+    }
+    Ok(last)
 }
 
 async fn write_loop(
@@ -753,6 +1555,11 @@ async fn write_loop(
                     emit_cwd(&events, &path);
                 }
                 writer.data_bytes(data).await.is_err()
+            }
+            Input::Interrupt => {
+                let _ = lock(&cwd).feed_input(&[3]);
+                let _ = writer.signal(Sig::INT).await;
+                writer.data_bytes(vec![3]).await.is_err()
             }
             Input::Resize { cols, rows } => {
                 let (cols, rows) = clamp_size(cols, rows);
@@ -778,6 +1585,15 @@ async fn pump(
     let mut flush_at: Option<tokio::time::Instant> = None;
     let mut cancel = bridge.cancel.subscribe();
     loop {
+        if bridge.output.blocked() {
+            // Bytes already pulled off the channel still have to reach the terminal,
+            // or the matching ack never arrives and the reader stays paused.
+            bridge.output.charge(emit_output(output, &mut pending));
+            flush_at = None;
+            if !wait_for_output_room(&bridge.output, &mut cancel).await {
+                break;
+            }
+        }
         let flush_ready = flush_at.is_some();
         let sleep = tokio::time::sleep_until(
             flush_at.unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(3600)),
@@ -805,7 +1621,7 @@ async fn pump(
                         }
                         pending.extend_from_slice(&visible);
                         if pending.len() >= OUTPUT_LIMIT {
-                            emit_output(output, &mut pending);
+                            bridge.output.charge(emit_output(output, &mut pending));
                             flush_at = None;
                         }
                     }
@@ -819,24 +1635,24 @@ async fn pump(
                         }
                         pending.extend_from_slice(&visible);
                         if pending.len() >= OUTPUT_LIMIT {
-                            emit_output(output, &mut pending);
+                            bridge.output.charge(emit_output(output, &mut pending));
                             flush_at = None;
                         }
                     }
                     Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | Some(ChannelMsg::ExitStatus { .. }) | None => {
-                        emit_output(output, &mut pending);
+                        bridge.output.charge(emit_output(output, &mut pending));
                         return;
                     }
                     _ => {}
                 }
             }
             _ = &mut sleep, if flush_ready => {
-                emit_output(output, &mut pending);
+                bridge.output.charge(emit_output(output, &mut pending));
                 flush_at = None;
             }
         }
     }
-    emit_output(output, &mut pending);
+    bridge.output.charge(emit_output(output, &mut pending));
 }
 
 struct ClientHandler {
@@ -845,6 +1661,7 @@ struct ClientHandler {
     events: Channel<Value>,
     host: String,
     port: u16,
+    forward_agent: bool,
 }
 
 impl Handler for ClientHandler {
@@ -902,6 +1719,21 @@ impl Handler for ClientHandler {
                 Ok(true)
             }
         }
+    }
+
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: russh::Channel<Msg>,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        if !self.forward_agent {
+            reply.reject(ChannelOpenFailure::AdministrativelyProhibited).await;
+            return Ok(());
+        }
+        reply.accept().await;
+        tauri::async_runtime::spawn(super::agent::relay(channel));
+        Ok(())
     }
 }
 
@@ -1042,28 +1874,33 @@ async fn blocking_secret(
     .map_err(|_| SshError::new("storage"))?
 }
 
-async fn password_accepted(
+async fn password_result(
     handle: &mut client::Handle<ClientHandler>,
     username: &str,
     password: &str,
-) -> Result<bool, SshError> {
-    let result = handle
+) -> Result<AuthResult, SshError> {
+    handle
         .authenticate_password(username, password)
         .await
-        .map_err(|error| map_russh(&error))?;
-    Ok(result.success())
+        .map_err(|error| map_russh(&error))
 }
 
 async fn prompt_reply(
     bridge: &Bridge,
     events: &Channel<Value>,
     kind: &str,
+    allow_remember: bool,
     remember: bool,
+    host_name: &str,
+    title: &str,
+    instructions: &str,
+    label: &str,
+    echo: bool,
 ) -> Result<PromptReply, SshError> {
     if *bridge.cancel.borrow() {
         return Err(SshError::new("cancelled"));
     }
-    let can_remember = secret::available();
+    let can_remember = allow_remember && secret::available();
     let remember = remember && can_remember;
     let id = bridge.next_prompt.fetch_add(1, Ordering::Relaxed);
     let receiver = {
@@ -1079,6 +1916,11 @@ async fn prompt_reply(
             "kind": kind,
             "canRemember": can_remember,
             "remember": remember,
+            "hostName": host_name,
+            "title": title,
+            "instructions": instructions,
+            "label": label,
+            "echo": echo,
         }),
     );
     let mut cancel = bridge.cancel.subscribe();
@@ -1105,6 +1947,25 @@ async fn prompt_reply(
     })
 }
 
+fn transfer_failure_code(code: &'static str, session_cancelled: bool) -> &'static str {
+    if code == "cancelled" && session_cancelled {
+        "disconnected"
+    } else {
+        code
+    }
+}
+
+fn report_transfer_failure(progress: &Channel<Value>, task_id: u64, error: SshError, session_cancelled: bool) {
+    let code = transfer_failure_code(error.code, session_cancelled);
+    log_ssh("transfer", 0, code);
+    let _ = progress.send(json!({
+        "type": "failed",
+        "taskId": task_id,
+        "code": code,
+        "params": error.params,
+    }));
+}
+
 fn emit_notice(events: &Channel<Value>, code: &str) {
     emit(
         events,
@@ -1128,12 +1989,69 @@ fn emit_cwd(events: &Channel<Value>, path: &str) {
     emit(events, json!({"type": "cwd", "path": path}));
 }
 
-fn emit_output(output: &Channel<InvokeResponseBody>, pending: &mut Vec<u8>) {
+fn emit_output(output: &Channel<InvokeResponseBody>, pending: &mut Vec<u8>) -> u64 {
     if pending.is_empty() {
-        return;
+        return 0;
     }
     let bytes = std::mem::take(pending);
+    let sent = bytes.len() as u64;
     let _ = output.send(InvokeResponseBody::Raw(bytes));
+    sent
+}
+
+async fn accept_forward(
+    listener: TcpListener,
+    handle: Arc<AsyncMutex<Option<client::Handle<ClientHandler>>>>,
+    remote_host: String,
+    remote_port: u32,
+    mut cancel: watch::Receiver<bool>,
+) {
+    if *cancel.borrow() {
+        return;
+    }
+    loop {
+        tokio::select! {
+            changed = cancel.changed() => {
+                if changed.is_err() || *cancel.borrow() {
+                    break;
+                }
+            }
+            accepted = listener.accept() => {
+                let Ok((socket, peer)) = accepted else {
+                    continue;
+                };
+                let handle = Arc::clone(&handle);
+                let remote_host = remote_host.clone();
+                let mut stop = cancel.clone();
+                tauri::async_runtime::spawn(async move {
+                    let channel = {
+                        let slot = handle.lock().await;
+                        let Some(session) = slot.as_ref() else {
+                            return;
+                        };
+                        session
+                            .channel_open_direct_tcpip(
+                                remote_host,
+                                remote_port,
+                                peer.ip().to_string(),
+                                u32::from(peer.port()),
+                            )
+                            .await
+                            .ok()
+                    };
+                    let Some(channel) = channel else {
+                        return;
+                    };
+                    let mut remote = channel.into_stream();
+                    let mut local = socket;
+                    tokio::select! {
+                        _ = stop.changed() => {}
+                        _ = tokio::io::copy_bidirectional(&mut local, &mut remote) => {}
+                    }
+                });
+            }
+        }
+    }
 }
 
 fn clamp_size(cols: u32, rows: u32) -> (u32, u32) {
@@ -1194,6 +2112,41 @@ fn storage(error: impl std::fmt::Display) -> SshError {
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use russh::{MethodKind, MethodSet};
+
+    use super::{auth_failure, offers_method, password_like, transfer_failure_code, wants_keyboard, AuthResult};
+
+    #[test]
+    fn a_disconnect_is_not_reported_as_a_user_cancel() {
+        assert_eq!(transfer_failure_code("cancelled", true), "disconnected");
+        assert_eq!(transfer_failure_code("cancelled", false), "cancelled");
+        assert_eq!(transfer_failure_code("timeout", true), "timeout");
+    }
+
+    #[test]
+    fn keyboard_interactive_is_detected_from_the_server_list() {
+        let mut methods = MethodSet::empty();
+        methods.push(MethodKind::KeyboardInteractive);
+        let result = AuthResult::Failure {
+            remaining_methods: methods,
+            partial_success: true,
+        };
+        assert!(wants_keyboard(&result));
+        assert!(!offers_method(&result, MethodKind::Password));
+        assert!(!wants_keyboard(&auth_failure()));
+    }
+
+    #[test]
+    fn one_time_prompts_are_not_stored() {
+        assert!(password_like("Password:"));
+        assert!(password_like("密码"));
+        assert!(!password_like("Verification code:"));
+        assert!(!password_like(""));
+    }
 }
 
 fn now_millis() -> i64 {
