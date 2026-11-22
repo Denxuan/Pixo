@@ -1,4 +1,4 @@
-import { SshRequestError, sshAnswer, sshHostKeyDecide } from "@/api/ssh";
+import { SshRequestError } from "@/api/ssh";
 import type { SshSessionEvent } from "@/types/ssh";
 import { sshErrorText } from "@/utils/sshMessage";
 
@@ -20,9 +20,13 @@ export type SshDecision = {
 export default function SessionPrompt({
   decision,
   onDone,
+  onHostKey,
+  onAnswer,
 }: {
   decision: SshDecision | null;
   onDone: () => void;
+  onHostKey: (sessionId: number, accept: boolean) => Promise<void>;
+  onAnswer: (sessionId: number, promptId: number, secret: string, remember: boolean, cancel: boolean) => Promise<void>;
 }) {
   const { t } = useTranslation();
   const [secret, setSecret] = useState("");
@@ -66,14 +70,14 @@ export default function SessionPrompt({
             onDone();
             return;
           }
-          void run(() => sshHostKeyDecide(decision.sessionId, false));
+          void run(() => onHostKey(decision.sessionId, false));
         }}
         onOk={() => {
           if (!decision || hostkey?.status !== "unknown") {
             onDone();
             return;
           }
-          void run(() => sshHostKeyDecide(decision.sessionId, true));
+          void run(() => onHostKey(decision.sessionId, true));
         }}
       >
         {hostkey && (
@@ -95,11 +99,11 @@ export default function SessionPrompt({
         confirmLoading={busy}
         onCancel={() => {
           if (!decision || !prompt) return;
-          void run(() => sshAnswer(decision.sessionId, prompt.promptId, "", false, true));
+          void run(() => onAnswer(decision.sessionId, prompt.promptId, "", false, true));
         }}
         onOk={() => {
           if (!decision || !prompt) return;
-          void run(() => sshAnswer(decision.sessionId, prompt.promptId, secret, remember, false));
+          void run(() => onAnswer(decision.sessionId, prompt.promptId, secret, remember, false));
         }}
       >
         <Flex vertical gap={12}>
@@ -113,7 +117,7 @@ export default function SessionPrompt({
               onChange={(event) => setSecret(event.target.value)}
               onPressEnter={() => {
                 if (!decision || !prompt) return;
-                void run(() => sshAnswer(decision.sessionId, prompt.promptId, secret, remember, false));
+                void run(() => onAnswer(decision.sessionId, prompt.promptId, secret, remember, false));
               }}
             />
           ) : (
@@ -126,7 +130,7 @@ export default function SessionPrompt({
               onCut={(event) => event.preventDefault()}
               onPressEnter={() => {
                 if (!decision || !prompt) return;
-                void run(() => sshAnswer(decision.sessionId, prompt.promptId, secret, remember, false));
+                void run(() => onAnswer(decision.sessionId, prompt.promptId, secret, remember, false));
               }}
             />
           )}

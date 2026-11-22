@@ -91,6 +91,17 @@ pub fn encode_jpeg(
     Ok(bytes)
 }
 
+pub fn preview_jpeg(encoded: &[u8], max_edge: u32) -> Result<Vec<u8>, ScreenshotError> {
+    if encoded.len() > 40 * 1024 * 1024 {
+        return Err(ScreenshotError::new("too_large"));
+    }
+    let image = image::load_from_memory(encoded).map_err(|_| ScreenshotError::new("invalid_input"))?;
+    let edge = max_edge.clamp(32, 480);
+    let thumb = image.thumbnail(edge, edge);
+    let rgba = thumb.to_rgba8();
+    encode_jpeg(rgba.width(), rgba.height(), rgba.as_raw(), 70)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +111,12 @@ mod tests {
         assert_eq!(decode_base64("TWFu").unwrap(), b"Man");
         assert_eq!(decode_base64("TWE=").unwrap(), b"Ma");
         assert_eq!(decode_base64("TQ==").unwrap(), b"M");
+    }
+
+    #[test]
+    fn shrinks_a_png_into_a_jpeg_preview() {
+        let png = encode_png(8, 4, &[255, 0, 0, 255].repeat(32)).unwrap();
+        let jpeg = preview_jpeg(&png, 4).unwrap();
+        assert!(jpeg.starts_with(&[0xFF, 0xD8]));
     }
 }

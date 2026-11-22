@@ -1,4 +1,5 @@
-import { sshEndpoint, tabsAfterClose } from "@/utils/sshTabs";
+import { pushRecent } from "@/utils/sshSessions";
+import { focusExistingSession, sshEndpoint, tabsAfterClose } from "@/utils/sshTabs";
 import { expect, test } from "vitest";
 
 const tabs = [{ key: "a" }, { key: "b" }, { key: "c" }];
@@ -34,6 +35,22 @@ test("closing tabs to the right leaves the chosen session and those before it", 
 
 test("closing every tab leaves no session selected", () => {
   expect(tabsAfterClose(tabs, "b", () => true)).toEqual({ tabs: [], activeKey: "" });
+});
+
+test("recent hosts stay newest first and drop duplicates", () => {
+  expect(pushRecent([2, 3], 1)).toEqual([1, 2, 3]);
+  expect(pushRecent([1, 2, 3], 2)).toEqual([2, 1, 3]);
+  expect(pushRecent([1, 2, 3, 4, 5, 6, 7, 8], 9)).toEqual([9, 1, 2, 3, 4, 5, 6, 7]);
+});
+
+test("an open host is focused, and a closed one is reconnected", () => {
+  const open = [
+    { key: "a", hostId: 1, phase: "ready" as const },
+    { key: "b", hostId: 2, phase: "closed" as const },
+  ];
+  expect(focusExistingSession(open, 1)).toEqual({ key: "a", reconnect: false });
+  expect(focusExistingSession(open, 2)).toEqual({ key: "b", reconnect: true });
+  expect(focusExistingSession(open, 3)).toBeNull();
 });
 
 test("a connection string omits port 22 and brackets an ipv6 address", () => {

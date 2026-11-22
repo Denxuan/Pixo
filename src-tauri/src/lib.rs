@@ -1,4 +1,5 @@
 mod clipboard;
+mod docker;
 mod panel_anchor;
 mod permissions;
 mod screenshot;
@@ -48,6 +49,11 @@ pub fn run() {
                 app.manage(ssh);
             } else {
                 eprintln!("ssh init failed");
+            }
+            if let Ok(docker) = docker::initialize(app.handle().clone()) {
+                app.manage(docker);
+            } else {
+                eprintln!("docker init failed");
             }
             #[cfg(target_os = "macos")]
             if let Err(error) = shortcut::prepare_panel(app.handle()) {
@@ -120,6 +126,7 @@ pub fn run() {
             screenshot::commands::screenshot_library_delete,
             screenshot::commands::screenshot_library_copy,
             screenshot::commands::screenshot_library_path,
+            screenshot::commands::screenshot_library_thumb,
             screenshot::commands::screenshot_scroll,
             screenshot::commands::screenshot_scroll_stop,
             screenshot::commands::screenshot_scroll_set_auto,
@@ -179,6 +186,40 @@ pub fn run() {
             ssh::commands::ssh_snippets_list,
             ssh::commands::ssh_snippet_save,
             ssh::commands::ssh_snippet_delete,
+            docker::commands::docker_status,
+            docker::commands::docker_set_enabled,
+            docker::commands::docker_endpoints_list,
+            docker::commands::docker_endpoint_save,
+            docker::commands::docker_endpoint_delete,
+            docker::commands::docker_local_sockets,
+            docker::commands::docker_contexts_preview,
+            docker::commands::docker_contexts_import,
+            docker::commands::docker_pick_file,
+            docker::commands::docker_connect,
+            docker::commands::docker_disconnect,
+            docker::commands::docker_hostkey_decide,
+            docker::commands::docker_answer,
+            docker::commands::docker_summary,
+            docker::commands::docker_containers,
+            docker::commands::docker_container_action,
+            docker::commands::docker_container_inspect,
+            docker::commands::docker_container_logs,
+            docker::commands::docker_task_stop,
+            docker::commands::docker_images,
+            docker::commands::docker_image_inspect,
+            docker::commands::docker_image_remove,
+            docker::commands::docker_image_pull,
+            docker::commands::docker_networks,
+            docker::commands::docker_network_inspect,
+            docker::commands::docker_network_remove,
+            docker::commands::docker_volumes,
+            docker::commands::docker_volume_inspect,
+            docker::commands::docker_volume_remove,
+            docker::commands::docker_compose_projects,
+            docker::commands::docker_compose_preview,
+            docker::commands::docker_compose_import,
+            docker::commands::docker_compose_import_engine,
+            docker::commands::docker_compose_forget,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

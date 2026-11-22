@@ -256,7 +256,7 @@ impl ClipboardState {
         Ok(())
     }
 
-    pub fn note_text(&self, text: &str, source: &str) -> Result<(), ClipboardError> {
+    pub fn note_text(&self, text: &str, source: &str) -> Result<Option<i64>, ClipboardError> {
         let text = text.trim();
         if text.is_empty()
             || text.len() > 1024 * 1024
@@ -269,7 +269,7 @@ impl ClipboardState {
             return Err(ClipboardError::new("invalid_input"));
         }
         let settings = lock(&self.inner.settings).clone();
-        if settings.enabled && !settings.paused && settings.allows(ClipKind::Text) {
+        let recorded = if settings.enabled && !settings.paused && settings.allows(ClipKind::Text) {
             let rich = super::model::RichText::plain(text);
             let hash = super::util::hash_rich(&rich);
             let capture = Capture {
@@ -278,14 +278,17 @@ impl ClipboardState {
                 source_app: Some(source.to_string()),
                 types: vec!["text/plain".into()],
             };
-            self.inner.record(capture, true)?;
+            let id = self.inner.record(capture, true)?.map(|item| item.id);
             self.arm(&hash);
-        }
+            id
+        } else {
+            None
+        };
         if let Err(error) = super::io::write_text(text) {
             self.disarm();
             return Err(error);
         }
-        Ok(())
+        Ok(recorded)
     }
 
     pub fn delete(&self, ids: Vec<i64>) -> Result<(), ClipboardError> {

@@ -19,7 +19,7 @@ function mainWindowPath(path: string) {
   const clean = path.split("?")[0];
   if (clean === "/settings" || clean === "/settings/clipboard" || clean === "/settings/screenshot") return clean;
   if (clean === "/clipboard/settings") return "/settings/clipboard";
-  if (clean === "/clipboard" || clean === "/screenshot" || clean === "/ssh") return clean;
+  if (clean === "/clipboard" || clean === "/screenshot" || clean === "/ssh" || clean === "/docker") return clean;
   return "/clipboard";
 }
 
@@ -39,7 +39,7 @@ export default function AppShell() {
   const navigate = useNavigate();
   const { token } = antdTheme.useToken();
   const [collapsed, setCollapsed] = useState(false);
-  const collapsedBySsh = useRef(false);
+  const collapsedByTool = useRef(false);
   const [clipboardOn, setClipboardOn] = useState<boolean | null>(null);
   const [screenshotOn, setScreenshotOn] = useState<boolean | null>(null);
   const [sshOn, setSshOn] = useState<boolean | null>(null);
@@ -49,12 +49,15 @@ export default function AppShell() {
     ? "screenshot"
     : location.pathname.startsWith("/ssh")
       ? "ssh"
-      : location.pathname.startsWith("/clipboard")
+      : location.pathname.startsWith("/docker")
+        ? "docker"
+        : location.pathname.startsWith("/clipboard")
         ? "clipboard"
         : "";
   const clipboardItem = { key: "clipboard", icon: <HistoryOutlined />, label: t("zdx.label.nav.clipboard") };
   const screenshotItem = { key: "screenshot", icon: <ScreenshotNavIcon />, label: t("zdx.label.nav.screenshot") };
   const sshItem = { key: "ssh", icon: <CloudServerOutlined />, label: t("zdx.label.nav.ssh") };
+  const dockerItem = { key: "docker", icon: <DockerOutlined />, label: t("zdx.label.nav.docker") };
   const showClipboard = !isDesktop() || clipboardOn !== false;
   const showScreenshot = !isDesktop() || screenshotOn !== false;
   const showSsh = !isDesktop() || sshOn !== false;
@@ -62,6 +65,7 @@ export default function AppShell() {
     ...(showClipboard ? [clipboardItem] : []),
     ...(showScreenshot ? [screenshotItem] : []),
     ...(showSsh ? [sshItem] : []),
+    dockerItem,
   ];
 
   useEffect(() => {
@@ -140,16 +144,16 @@ export default function AppShell() {
   }, [location.pathname, navigate, sshOn]);
 
   useEffect(() => {
-    const onSsh = location.pathname.startsWith("/ssh");
-    if (onSsh) {
+    const onTool = location.pathname.startsWith("/ssh") || location.pathname.startsWith("/docker");
+    if (onTool) {
       setCollapsed((value) => {
-        if (!value) collapsedBySsh.current = true;
+        if (!value) collapsedByTool.current = true;
         return true;
       });
       return;
     }
-    if (collapsedBySsh.current) {
-      collapsedBySsh.current = false;
+    if (collapsedByTool.current) {
+      collapsedByTool.current = false;
       setCollapsed(false);
     }
   }, [location.pathname]);
@@ -186,6 +190,7 @@ export default function AppShell() {
               if (key === "clipboard") navigate("/clipboard");
               if (key === "screenshot") navigate("/screenshot");
               if (key === "ssh") navigate("/ssh");
+              if (key === "docker") navigate("/docker");
             }}
             items={collapsed ? navItems : [{ type: "group", label: t("zdx.label.nav.tools"), children: navItems }]}
           />

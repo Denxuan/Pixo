@@ -1,6 +1,6 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
-import { ScreenshotRequestError, screenshotLibrary, screenshotLibraryCopy, screenshotLibraryDelete, screenshotLibraryPath } from "@/api/screenshot";
+import { ScreenshotRequestError, screenshotLibrary, screenshotLibraryCopy, screenshotLibraryDelete, screenshotLibraryPath, screenshotLibraryThumb } from "@/api/screenshot";
 import type { ShotFile } from "@/types/screenshot";
 import { screenshotErrorText } from "@/utils/screenshotMessage";
 import { formatBytes, formatRelativeTime } from "@/utils/time";
@@ -28,7 +28,7 @@ export default function ShotLibrary() {
     setError("");
     try {
       await screenshotLibraryCopy(id);
-      setNotice(t("zdx.text.clipboard.transformed"));
+      setNotice(t("zdx.text.clipboard.copied"));
     } catch (caught) {
       if (caught instanceof ScreenshotRequestError) setError(screenshotErrorText(t, caught));
     }
@@ -62,42 +62,64 @@ export default function ShotLibrary() {
       {notice && <Alert type="success" showIcon closable message={notice} onClose={() => setNotice("")} />}
       {items.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("zdx.text.screenshot.libraryEmpty")} />}
       {items.length > 0 && (
-        <List
-          dataSource={items}
-          rowKey="id"
-          renderItem={(item) => (
-            <List.Item
-              actions={[
-                <Button key="copy" type="link" onClick={() => void copy(item.id)}>{t("zdx.label.screenshot.copyShot")}</Button>,
-                <Button key="reveal" type="link" onClick={() => void reveal(item.id)}>{t("zdx.label.screenshot.reveal")}</Button>,
-                <Popconfirm
-                  key="delete"
-                  title={t("zdx.label.screenshot.deleteShot")}
-                  okText={t("zdx.label.clipboard.confirm")}
-                  cancelText={t("zdx.label.clipboard.cancel")}
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => remove(item.id)}
-                >
-                  <Button type="link" danger>{t("zdx.label.screenshot.deleteShot")}</Button>
-                </Popconfirm>,
-              ]}
-            >
-              <List.Item.Meta
-                title={<span className="truncate">{item.text?.trim() || item.name}</span>}
-                description={
-                  <span style={{ color: token.colorTextTertiary }}>
-                    {item.kind === "video" ? t("zdx.label.screenshot.cardRecord") : t("zdx.label.screenshot.cardCapture")}
-                    {" · "}
-                    {formatBytes(item.bytes, i18n.language)}
-                    {" · "}
-                    {formatRelativeTime(item.createdAt, i18n.language)}
-                  </span>
-                }
-              />
-            </List.Item>
-          )}
-        />
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
+          {items.map((item) => (
+            <div key={item.id} className="flex flex-col overflow-hidden" style={{ border: `1px solid ${token.colorBorderSecondary}`, borderRadius: token.borderRadiusLG, background: token.colorBgContainer }}>
+              <ShotPreview item={item} />
+              <div className="flex min-w-0 flex-1 flex-col gap-2 p-3">
+                <Typography.Text className="truncate" title={item.text?.trim() || item.name}>{item.text?.trim() || item.name}</Typography.Text>
+                <Typography.Text type="secondary" className="text-xs">
+                  {item.kind === "video" ? t("zdx.label.screenshot.cardRecord") : t("zdx.label.screenshot.cardCapture")}
+                  {" · "}
+                  {formatBytes(item.bytes, i18n.language)}
+                  {" · "}
+                  {formatRelativeTime(item.createdAt, i18n.language)}
+                </Typography.Text>
+                <div className="mt-auto flex flex-wrap gap-1">
+                  <Button size="small" type="link" onClick={() => void copy(item.id)}>{t("zdx.label.screenshot.copyShot")}</Button>
+                  <Button size="small" type="link" onClick={() => void reveal(item.id)}>{t("zdx.label.screenshot.reveal")}</Button>
+                  <Popconfirm
+                    title={t("zdx.label.screenshot.deleteShot")}
+                    okText={t("zdx.label.clipboard.confirm")}
+                    cancelText={t("zdx.label.clipboard.cancel")}
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => remove(item.id)}
+                  >
+                    <Button size="small" type="link" danger>{t("zdx.label.screenshot.deleteShot")}</Button>
+                  </Popconfirm>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </Flex>
+  );
+}
+
+function ShotPreview({ item }: { item: ShotFile }) {
+  const { token } = antdTheme.useToken();
+  const [url, setUrl] = useState("");
+
+  useEffect(() => {
+    if (item.kind === "video") return;
+    let alive = true;
+    let objectUrl = "";
+    void screenshotLibraryThumb(item.id).then((bytes) => {
+      if (!alive) return;
+      const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+      objectUrl = URL.createObjectURL(new Blob([buffer], { type: "image/jpeg" }));
+      setUrl(objectUrl);
+    }).catch(() => undefined);
+    return () => {
+      alive = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [item.id, item.kind]);
+
+  return (
+    <div className="flex h-36 items-center justify-center overflow-hidden" style={{ background: token.colorFillQuaternary }}>
+      {url ? <img src={url} alt="" className="h-full w-full object-cover" /> : item.kind === "video" ? <VideoCameraOutlined style={{ fontSize: 28, color: token.colorTextTertiary }} /> : <FileImageOutlined style={{ fontSize: 28, color: token.colorTextTertiary }} />}
+    </div>
   );
 }

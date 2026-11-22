@@ -100,6 +100,10 @@ export function screenshotLibraryPath(id: number) {
   return call<string>("screenshot_library_path", { id });
 }
 
+export async function screenshotLibraryThumb(id: number) {
+  return toBytes(await call<unknown>("screenshot_library_thumb", { id }));
+}
+
 export function screenshotCurrent() {
   return call<SessionView>("screenshot_current");
 }

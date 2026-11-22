@@ -163,7 +163,10 @@ pub fn clipboard_set_label(
 }
 
 #[tauri::command]
-pub fn clipboard_place_text(state: State<'_, ClipboardState>, text: String) -> Result<(), ClipboardError> {
+pub fn clipboard_place_text(
+    state: State<'_, ClipboardState>,
+    text: String,
+) -> Result<Option<i64>, ClipboardError> {
     state.note_text(&text, "Pixo")
 }
 

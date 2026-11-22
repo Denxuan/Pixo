@@ -1,5 +1,6 @@
 import AppShell from "@/layout/AppShell";
 import ClipboardPage from "@/pages/Clipboard";
+import DockerPage from "@/pages/Docker";
 import ScreenshotPage from "@/pages/Screenshot";
 import SshPage from "@/pages/Ssh";
 import SystemSettingsPage from "@/pages/SystemSettings";
@@ -13,6 +14,7 @@ export default function AppRouter() {
           <Route path="/clipboard" element={<ClipboardPage />} />
           <Route path="/screenshot" element={<ScreenshotPage />} />
           <Route path="/ssh" element={<SshPage />} />
+          <Route path="/docker" element={<DockerPage />} />
           <Route path="/clipboard/settings" element={<Navigate to="/settings/clipboard" replace />} />
           <Route path="/settings/:section?" element={<SystemSettingsPage />} />
           <Route path="*" element={<Navigate to="/clipboard" replace />} />

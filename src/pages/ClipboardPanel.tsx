@@ -1,12 +1,12 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-import { ClipboardRequestError, dismissClipboardPanel } from "@/api/clipboard";
+import { ClipboardRequestError, clipboardGet, clipboardPlaceText, clipboardSetLabel, dismissClipboardPanel } from "@/api/clipboard";
 import HistoryList from "@/components/clipboard/HistoryList";
-import QuickShelf from "@/components/clipboard/QuickShelf";
 import Kbd from "@/components/Kbd";
 import { useClipboardHistory } from "@/hooks/useClipboard";
 import { CLIP_FILTERS, isClipFilter } from "@/types/clipboard";
 import { clipboardErrorText } from "@/utils/clipboardMessage";
+import { formatJson } from "@/utils/json";
 import { DEFAULT_DELETE_SHORTCUT, DEFAULT_PIN_SHORTCUT, eventMatchesShortcut, formatShortcut, isApplePlatform } from "@/utils/shortcut";
 
 function focusSearch() {
@@ -27,10 +27,14 @@ export default function ClipboardPanel() {
   const [messageTone, setMessageTone] = useState<"success" | "warning">("success");
   const [clearOpen, setClearOpen] = useState(false);
   const [clearAll, setClearAll] = useState(false);
+  const [labelDraft, setLabelDraft] = useState("");
   const copyTimer = useRef(0);
   const copySeq = useRef(0);
   const selectedId = useRef<number | null>(null);
   const pendingClose = useRef<number | null>(null);
+  const titleFocus = useRef<(() => void) | null>(null);
+  const labelFocused = useRef(false);
+  const focusTitle = useRef(false);
   const copyOnSelect = history.settings?.copyOnSelect !== false;
   const pasteAutomatically = history.settings?.pasteAutomatically !== false;
   const macos = isApplePlatform();
@@ -48,13 +52,14 @@ export default function ClipboardPanel() {
   };
   const panelHelpKey = pasteAutomatically ? "zdx.text.clipboard.panelHelpPaste" : copyOnSelect ? "zdx.text.clipboard.panelHelpSelect" : "zdx.text.clipboard.panelHelp";
   const panelHelp = t(panelHelpKey, { ...shortcutHelp, plain: hintKeys.plain });
-  const numberShortcuts = Array.from({ length: 9 }, (_, index) => {
-    const number = String(index + 1);
+  const numberShortcuts = Array.from({ length: 9 }, (_, position) => {
+    const number = String(position + 1);
     return {
       copy: formatShortcut(`CommandOrControl+${number}`, macos),
       paste: formatShortcut(`Alt+${number}`, macos),
     };
   });
+  const active = history.items[index];
 
   useEffect(() => {
     void history.loadSettings();
@@ -66,8 +71,8 @@ export default function ClipboardPanel() {
     const previous = nodes.map((node) => node.style.background);
     for (const node of nodes) node.style.background = "transparent";
     return () => {
-      nodes.forEach((node, index) => {
-        node.style.background = previous[index] ?? "";
+      nodes.forEach((node, position) => {
+        node.style.background = previous[position] ?? "";
       });
     };
   }, []);
@@ -76,6 +81,7 @@ export default function ClipboardPanel() {
     const onShown = () => {
       history.clearQuery();
       history.setFilter("all");
+      selectedId.current = null;
       setIndex(0);
       setMessage("");
       setMessageTone("success");
@@ -135,26 +141,34 @@ export default function ClipboardPanel() {
   }, []);
 
   useEffect(() => {
-    if (index > history.items.length - 1) setIndex(Math.max(history.items.length - 1, 0));
-  }, [history.items.length, index]);
-
-  useEffect(() => {
-    selectedId.current = history.items[index]?.id ?? null;
-  }, [index]);
-
-  useEffect(() => {
     const id = selectedId.current;
-    if (id == null) return;
-    const next = history.items.findIndex((item) => item.id === id);
-    if (next >= 0 && next !== index) setIndex(next);
+    if (id != null) {
+      const next = history.items.findIndex((item) => item.id === id);
+      if (next >= 0) {
+        if (next !== index) setIndex(next);
+        return;
+      }
+    }
+    const clamped = Math.min(index, Math.max(history.items.length - 1, 0));
+    if (clamped !== index) setIndex(clamped);
+    selectedId.current = history.items[clamped]?.id ?? null;
   }, [history.items, index]);
-
-  const active = history.items[index];
 
   useEffect(() => {
     if (!active) return;
     document.getElementById(`clip-${active.id}`)?.scrollIntoView({ block: "nearest" });
   }, [active]);
+
+  useEffect(() => {
+    if (labelFocused.current) return;
+    setLabelDraft(active?.label ?? "");
+  }, [active?.id, active?.label]);
+
+  useEffect(() => {
+    if (!active?.pinned || !focusTitle.current) return;
+    focusTitle.current = false;
+    titleFocus.current?.();
+  }, [active?.id, active?.pinned]);
 
   async function useItem(id: number, mode: "copy" | "paste" | "plain", dismiss: boolean) {
     const seq = ++copySeq.current;
@@ -190,7 +204,10 @@ export default function ClipboardPanel() {
 
   function choose(id: number, pointer?: { altKey: boolean; shiftKey: boolean }) {
     const next = history.items.findIndex((item) => item.id === id);
-    if (next >= 0) setIndex(next);
+    if (next >= 0) {
+      selectedId.current = id;
+      setIndex(next);
+    }
     const mode = selectedMode(pointer);
     if (mode === "copy" && (!copyOnSelect || pendingClose.current === id)) return;
     pendingClose.current = id;
@@ -208,6 +225,7 @@ export default function ClipboardPanel() {
     const next = Math.min(Math.max(index + delta, 0), Math.max(history.items.length - 1, 0));
     const item = history.items[next];
     if (!item || next === index) return;
+    selectedId.current = item.id;
     setIndex(next);
     if (copyOnSelect) queueCopy(item.id);
   }
@@ -218,8 +236,58 @@ export default function ClipboardPanel() {
     setClearOpen(true);
   }
 
+  async function saveLabel() {
+    if (!active?.pinned) return;
+    const next = labelDraft.trim();
+    if (next === (active.label ?? "")) return;
+    try {
+      await clipboardSetLabel(active.id, next);
+      await history.reload();
+    } catch (error) {
+      if (error instanceof ClipboardRequestError) {
+        setMessageTone("warning");
+        setMessage(clipboardErrorText(t, error));
+      }
+    }
+  }
+
+  async function transform(kind: "format" | "compact" | "trim") {
+    if (active?.kind !== "text") return;
+    try {
+      const detail = await clipboardGet(active.id);
+      const text = detail.text ?? "";
+      const next = kind === "trim" ? text.trim() : formatJson(text, kind === "compact");
+      if (!next) return;
+      const placed = await clipboardPlaceText(next);
+      if (placed == null) {
+        setMessageTone("success");
+        setMessage(t("zdx.text.clipboard.transformed"));
+        return;
+      }
+      await history.reload();
+      await useItem(placed, "paste", true);
+    } catch (error) {
+      setMessageTone("warning");
+      setMessage(error instanceof ClipboardRequestError ? clipboardErrorText(t, error) : t("zdx.text.clipboard.jsonInvalid"));
+    }
+  }
+
+  async function pinActive(pinned: boolean) {
+    if (!active) return;
+    if (pinned) focusTitle.current = true;
+    await history.pinItem(active.id, pinned);
+  }
+
   function onKeyDown(event: React.KeyboardEvent) {
     if (clearOpen || event.nativeEvent.isComposing) return;
+    const field = event.target instanceof Element ? event.target.closest("input, textarea") : null;
+    if (field instanceof HTMLInputElement && field.id === "clipboard-pin-title") {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        field.blur();
+      }
+      return;
+    }
     if (event.key !== "Escape" && event.target instanceof Element && event.target.closest(".ant-select")) return;
     const digit = /^Digit([1-9])$/.exec(event.code) ?? /^Numpad([1-9])$/.exec(event.code);
     const position = digit ? Number(digit[1]) - 1 : null;
@@ -248,6 +316,7 @@ export default function ClipboardPanel() {
       window.clearTimeout(copyTimer.current);
       void useItem(item.id, event.shiftKey ? "plain" : "paste", true);
     } else if (event.key === "Enter") {
+      if (event.target instanceof Element && event.target.closest("button")) return;
       event.preventDefault();
       window.clearTimeout(copyTimer.current);
       if (active) void useItem(active.id, selectedMode({ altKey: event.altKey, shiftKey: event.shiftKey }), true);
@@ -259,7 +328,7 @@ export default function ClipboardPanel() {
       void useItem(item.id, pasteAutomatically ? "paste" : "copy", true);
     } else if (eventMatchesShortcut(event, pinShortcut)) {
       event.preventDefault();
-      if (active) void history.pinItem(active.id, !active.pinned);
+      if (active) void pinActive(!active.pinned);
     } else if (eventMatchesShortcut(event, deleteShortcut)) {
       event.preventDefault();
       window.clearTimeout(copyTimer.current);
@@ -268,16 +337,16 @@ export default function ClipboardPanel() {
   }
 
   const keyHints = pasteAutomatically
-    ? [
-        { keys: formatShortcut("Enter", macos), label: t("zdx.label.clipboard.paste") },
-        { keys: hintKeys.paste, label: t("zdx.label.clipboard.copy") },
-        { keys: hintKeys.plain, label: t("zdx.label.clipboard.pastePlain") },
-      ]
-    : [
-        { keys: formatShortcut("Enter", macos), label: t("zdx.label.clipboard.copy") },
-        { keys: hintKeys.paste, label: t("zdx.label.clipboard.paste") },
-        { keys: hintKeys.plain, label: t("zdx.label.clipboard.pastePlain") },
-      ];
+      ? [
+          { keys: formatShortcut("Enter", macos), label: t("zdx.label.clipboard.paste") },
+          { keys: hintKeys.paste, label: t("zdx.label.clipboard.copy") },
+          { keys: hintKeys.plain, label: t("zdx.label.clipboard.pastePlain") },
+        ]
+      : [
+          { keys: formatShortcut("Enter", macos), label: t("zdx.label.clipboard.copy") },
+          { keys: hintKeys.paste, label: t("zdx.label.clipboard.paste") },
+          { keys: hintKeys.plain, label: t("zdx.label.clipboard.pastePlain") },
+        ];
   const helpContent = (
     <Flex vertical gap={6} style={{ maxWidth: 320 }}>
       <span>{panelHelp}</span>
@@ -325,7 +394,6 @@ export default function ClipboardPanel() {
         />
       </div>
       <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
-        <QuickShelf query={history.query} onNotice={(text) => { setMessageTone("warning"); setMessage(text); }} />
         {history.items.length === 0 && <Empty className="py-10" image={Empty.PRESENTED_IMAGE_SIMPLE} description={history.query ? t("zdx.text.clipboard.noResults") : t("zdx.text.clipboard.empty")} />}
         {history.items.length > 0 && (
           <HistoryList
@@ -336,13 +404,45 @@ export default function ClipboardPanel() {
               window.clearTimeout(copyTimer.current);
               void useItem(id, "copy", true);
             }}
-            onPin={(id, pinned) => void history.pinItem(id, pinned)}
+            onPin={(id, pinned) => {
+              if (pinned && active?.id === id) focusTitle.current = true;
+              void history.pinItem(id, pinned);
+            }}
             onDelete={(id) => void history.deleteItem(id)}
             numberShortcuts={numberShortcuts}
           />
         )}
       </div>
       {message && <Alert type={messageTone} showIcon message={message} style={{ margin: "0 8px 8px" }} />}
+      {(active?.pinned || active?.kind === "text") && (
+        <div className="flex shrink-0 flex-col gap-2 px-3 pb-2">
+          {active.pinned && (
+            <Input
+              id="clipboard-pin-title"
+              size="small"
+              aria-label={t("zdx.label.clipboard.pinTitle")}
+              placeholder={t("zdx.placeholder.clipboard.pinTitle")}
+              value={labelDraft}
+              ref={(node) => {
+                titleFocus.current = () => node?.focus();
+              }}
+              onFocus={() => { labelFocused.current = true; }}
+              onBlur={() => {
+                labelFocused.current = false;
+                void saveLabel();
+              }}
+              onPressEnter={() => void saveLabel()}
+            />
+          )}
+          {active.kind === "text" && (
+            <div className="flex flex-wrap gap-2">
+              <Button size="small" onClick={() => void transform("format")}>{t("zdx.label.clipboard.formatJson")}</Button>
+              <Button size="small" onClick={() => void transform("compact")}>{t("zdx.label.clipboard.compactJson")}</Button>
+              <Button size="small" onClick={() => void transform("trim")}>{t("zdx.label.clipboard.trimText")}</Button>
+            </div>
+          )}
+        </div>
+      )}
       <div data-tauri-drag-region className="flex h-10 shrink-0 items-center gap-2 pl-3 pr-1.5" style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, background: token.colorFillQuaternary }}>
         <div data-tauri-drag-region aria-label={t("zdx.label.clipboard.shortcutHints")} className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
           {keyHints.map((hint) => (

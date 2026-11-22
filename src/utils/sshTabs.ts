@@ -16,3 +16,12 @@ export function tabsAfterClose<T extends { key: string }>(
   if (next.some((tab) => tab.key === activeKey)) return { tabs: next, activeKey };
   return { tabs: next, activeKey: next[Math.min(activeIndex, next.length - 1)]?.key ?? "" };
 }
+
+export function focusExistingSession(
+  tabs: { key: string; hostId: number; phase: string }[],
+  hostId: number,
+): { key: string; reconnect: boolean } | null {
+  const existing = tabs.find((tab) => tab.hostId === hostId);
+  if (!existing) return null;
+  return { key: existing.key, reconnect: existing.phase === "closed" };
+}

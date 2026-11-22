@@ -2,6 +2,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { clipboardSetEnabled, clipboardStatus } from "@/api/clipboard";
 import { screenshotGetSettings, screenshotSetEnabled } from "@/api/screenshot";
+import { dockerSetEnabled, dockerStatus } from "@/api/docker";
 import { sshSetEnabled, sshStatus } from "@/api/ssh";
 import { getAutostart, setAutostart, setBackground, setTrayIcon } from "@/api/system";
 import { TRAY_ICONS, TrayMarkGlyph, type TrayIconId } from "@/components/icons/TrayMark";
@@ -161,6 +162,7 @@ export default function SystemSettingsPage() {
   const [clipboardOn, setClipboardOn] = useState(false);
   const [screenshotOn, setScreenshotOn] = useState(true);
   const [sshOn, setSshOn] = useState(false);
+  const [dockerOn, setDockerOn] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -173,12 +175,13 @@ export default function SystemSettingsPage() {
   useEffect(() => {
     if (!desktop) { setLoading(false); return; }
     let alive = true;
-    void Promise.all([getAutostart(), clipboardStatus(), screenshotGetSettings(), sshStatus()]).then(([enabled, clipboard, screenshot, ssh]) => {
+    void Promise.all([getAutostart(), clipboardStatus(), screenshotGetSettings(), sshStatus(), dockerStatus()]).then(([enabled, clipboard, screenshot, ssh, docker]) => {
       if (!alive) return;
       setAutostartState(enabled);
       setClipboardOn(clipboard.enabled);
       setScreenshotOn(screenshot.enabled);
       setSshOn(ssh.enabled);
+      setDockerOn(docker.enabled);
     }).catch(() => { if (alive) setError(true); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
@@ -189,7 +192,7 @@ export default function SystemSettingsPage() {
     navigate("/settings", { replace: true });
   }, [desktop, loading, location.pathname, navigate, screenshotOn]);
 
-  async function update(kind: "autostart" | "background" | "clipboard" | "screenshot" | "ssh", enabled: boolean) {
+  async function update(kind: "autostart" | "background" | "clipboard" | "screenshot" | "ssh" | "docker", enabled: boolean) {
     setBusy(true);
     setError(false);
     try {
@@ -200,8 +203,10 @@ export default function SystemSettingsPage() {
         const next = await screenshotSetEnabled(enabled);
         setScreenshotOn(next.enabled);
         if (!next.enabled && location.pathname === "/settings/screenshot") navigate("/settings", { replace: true });
-      } else {
+      } else if (kind === "ssh") {
         setSshOn((await sshSetEnabled(enabled)).enabled);
+      } else {
+        setDockerOn((await dockerSetEnabled(enabled)).enabled);
       }
     } catch { setError(true); }
     finally { setBusy(false); }
@@ -214,6 +219,16 @@ export default function SystemSettingsPage() {
       okText: t(enabled ? "zdx.label.ssh.enable" : "zdx.label.ssh.confirm"),
       cancelText: t("zdx.label.ssh.cancel"),
       onOk: () => update("ssh", enabled),
+    });
+  }
+
+  function changeDocker(enabled: boolean) {
+    Modal.confirm({
+      title: t(enabled ? "zdx.text.docker.enableTitle" : "zdx.text.docker.disableTitle"),
+      content: t(enabled ? "zdx.text.docker.enableBody" : "zdx.text.docker.disableBody"),
+      okText: t(enabled ? "zdx.label.docker.enable" : "zdx.label.docker.confirm"),
+      cancelText: t("zdx.label.docker.cancel"),
+      onOk: () => update("docker", enabled),
     });
   }
 
@@ -254,6 +269,9 @@ export default function SystemSettingsPage() {
                 </SettingRow>
                 <SettingRow label={t("zdx.label.system.sshFeature")} description={t("zdx.text.system.sshFeature")}>
                   <Switch aria-label={t("zdx.label.system.sshFeature")} checked={sshOn} disabled={!desktop || loading || busy} onChange={changeSsh} />
+                </SettingRow>
+                <SettingRow label={t("zdx.label.system.dockerFeature")} description={t("zdx.text.system.dockerFeature")}>
+                  <Switch aria-label={t("zdx.label.system.dockerFeature")} checked={dockerOn} disabled={!desktop || loading || busy} onChange={changeDocker} />
                 </SettingRow>
               </SettingGroup>
               <SettingGroup title={t("zdx.label.system.startup")}>

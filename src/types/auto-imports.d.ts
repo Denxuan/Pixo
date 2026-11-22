@@ -12,22 +12,28 @@ declare global {
   const Alert: typeof import('antd').Alert
   const ApiOutlined: typeof import('@ant-design/icons').ApiOutlined
   const AppstoreOutlined: typeof import('@ant-design/icons').AppstoreOutlined
+  const AutoComplete: typeof import('antd').AutoComplete
   const Avatar: typeof import('antd').Avatar
   const Button: typeof import('antd').Button
+  const CaretRightOutlined: typeof import('@ant-design/icons').CaretRightOutlined
   const Checkbox: typeof import('antd').Checkbox
   const ClearOutlined: typeof import('@ant-design/icons').ClearOutlined
   const ClockCircleOutlined: typeof import('@ant-design/icons').ClockCircleOutlined
   const CloseOutlined: typeof import('@ant-design/icons').CloseOutlined
+  const CloudDownloadOutlined: typeof import('@ant-design/icons').CloudDownloadOutlined
   const CloudServerOutlined: typeof import('@ant-design/icons').CloudServerOutlined
   const CodeOutlined: typeof import('@ant-design/icons').CodeOutlined
   const ConfigProvider: typeof import('antd').ConfigProvider
   const CopyOutlined: typeof import('@ant-design/icons').CopyOutlined
   const DeleteOutlined: typeof import('@ant-design/icons').DeleteOutlined
   const DisconnectOutlined: typeof import('@ant-design/icons').DisconnectOutlined
+  const DockerOutlined: typeof import('@ant-design/icons').DockerOutlined
   const Drawer: typeof import('antd').Drawer
   const Dropdown: typeof import('antd').Dropdown
   const EditOutlined: typeof import('@ant-design/icons').EditOutlined
   const Empty: typeof import('antd').Empty
+  const EyeOutlined: typeof import('@ant-design/icons').EyeOutlined
+  const FileAddOutlined: typeof import('@ant-design/icons').FileAddOutlined
   const FileImageOutlined: typeof import('@ant-design/icons').FileImageOutlined
   const FileOutlined: typeof import('@ant-design/icons').FileOutlined
   const FileTextOutlined: typeof import('@ant-design/icons').FileTextOutlined
@@ -59,6 +65,7 @@ declare global {
   const Popconfirm: typeof import('antd').Popconfirm
   const PushpinFilled: typeof import('@ant-design/icons').PushpinFilled
   const PushpinOutlined: typeof import('@ant-design/icons').PushpinOutlined
+  const RedoOutlined: typeof import('@ant-design/icons').RedoOutlined
   const ReloadOutlined: typeof import('@ant-design/icons').ReloadOutlined
   const Route: typeof import('react-router').Route
   const Routes: typeof import('react-router').Routes
@@ -70,10 +77,13 @@ declare global {
   const SettingOutlined: typeof import('@ant-design/icons').SettingOutlined
   const Space: typeof import('antd').Space
   const Spin: typeof import('antd').Spin
+  const StopOutlined: typeof import('@ant-design/icons').StopOutlined
   const StrictMode: typeof import('react').StrictMode
   const Suspense: typeof import('react').Suspense
   const Switch: typeof import('antd').Switch
+  const Table: typeof import('antd').Table
   const Tabs: typeof import('antd').Tabs
+  const Tag: typeof import('antd').Tag
   const Tooltip: typeof import('antd').Tooltip
   const Trans: typeof import('react-i18next').Trans
   const Typography: typeof import('antd').Typography

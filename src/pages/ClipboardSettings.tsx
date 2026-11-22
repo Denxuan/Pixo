@@ -2,6 +2,7 @@ import { ClipboardRequestError, clipboardGetSettings, clipboardStatus, clipboard
 import ExcludedAppsField from "@/components/clipboard/ExcludedAppsField";
 import ShortcutField from "@/components/clipboard/ShortcutField";
 import { SettingGroup, SettingRow } from "@/components/SettingGroup";
+import { useAutosave } from "@/hooks/useAutosave";
 import type { ClipboardSettings, ClipboardStatus } from "@/types/clipboard";
 import { toSettingsUpdate } from "@/types/clipboard";
 import { clipboardErrorText } from "@/utils/clipboardMessage";
@@ -21,9 +22,10 @@ export default function ClipboardSettingsPage() {
   const [ignored, setIgnored] = useState("");
   const [error, setError] = useState("");
   const [confirmCount, setConfirmCount] = useState<number | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [loading, setLoading] = useState(desktop);
+  const [confirming, setConfirming] = useState(false);
+  const [settingsLoaded, setSettingsLoaded] = useState(!desktop);
+  const [statusLoaded, setStatusLoaded] = useState(!desktop);
+  const loading = desktop && (!settingsLoaded || !statusLoaded);
   const translate = useRef(t);
   translate.current = t;
 
@@ -32,7 +34,9 @@ export default function ClipboardSettingsPage() {
     let alive = true;
     void clipboardStatus().then((current) => {
       if (alive) setStatus(current);
-    }).catch(() => undefined);
+    }).catch(() => undefined).finally(() => {
+      if (alive) setStatusLoaded(true);
+    });
     void clipboardGetSettings()
       .then((current) => {
         if (!alive) return;
@@ -54,24 +58,20 @@ export default function ClipboardSettingsPage() {
         setError(clipboardErrorText(translate.current, toClipboardError(caught)));
       })
       .finally(() => {
-        if (alive) setLoading(false);
+        if (alive) setSettingsLoaded(true);
       });
     return () => {
       alive = false;
     };
   }, [desktop]);
 
-  async function save(confirm: boolean) {
-    if (!draft) return;
+  const payload = useMemo(() => {
+    if (!draft || !statusLoaded || textMb == null || imageMb == null) return null;
     const maxItems = Number(draft.maxItems);
     const retentionDays = Number(draft.retentionDays);
-    const maxTextBytes = megabytesToBytes(textMb == null ? "" : String(textMb));
-    const maxImageBytes = megabytesToBytes(imageMb == null ? "" : String(imageMb));
-    if (!Number.isFinite(maxItems) || !Number.isFinite(retentionDays) || !Number.isFinite(maxTextBytes) || !Number.isFinite(maxImageBytes)) {
-      setSaved(false);
-      setError(t("zdx.text.clipboard.error.invalid_input"));
-      return;
-    }
+    const maxTextBytes = megabytesToBytes(String(textMb));
+    const maxImageBytes = megabytesToBytes(String(imageMb));
+    if (!Number.isFinite(maxItems) || !Number.isFinite(retentionDays) || !Number.isFinite(maxTextBytes) || !Number.isFinite(maxImageBytes)) return null;
     const next: ClipboardSettings = {
       ...draft,
       maxItems,
@@ -81,47 +81,76 @@ export default function ClipboardSettingsPage() {
       excludedApps: status?.canReadSourceApp ? excludedApps : excluded.split("\n"),
       ignoredTypes: ignored.split("\n"),
     };
-    setSaving(true);
-    setSaved(false);
+    return next;
+  }, [draft, excluded, excludedApps, ignored, imageMb, status, statusLoaded, textMb]);
+  const payloadRef = useRef(payload);
+  payloadRef.current = payload;
+  const confirmedKey = useRef("");
+
+  useAutosave(payload, async (next, isCurrent) => {
     try {
-      await clipboardUpdateSettings(toSettingsUpdate(next, confirm));
+      await clipboardUpdateSettings(toSettingsUpdate(next));
+      if (!isCurrent()) return false;
       setConfirmCount(null);
       setError("");
-      setSaved(true);
+      return true;
+    } catch (caught) {
+      if (!isCurrent()) return false;
+      if (caught instanceof ClipboardRequestError && caught.code === "needs_confirm") {
+        if (confirmedKey.current === JSON.stringify(next)) {
+          setConfirmCount(null);
+          setError("");
+          return true;
+        }
+        setConfirmCount(Number(caught.params.count ?? 0));
+        setError("");
+        return true;
+      }
+      if (caught instanceof ClipboardRequestError) setError(clipboardErrorText(translate.current, caught));
+      else setError(translate.current("zdx.text.clipboard.error.unknown"));
+      return false;
+    }
+  });
+
+  async function confirmPrune() {
+    const next = payloadRef.current;
+    if (!next) return;
+    setConfirming(true);
+    try {
+      await clipboardUpdateSettings(toSettingsUpdate(next, true));
+      confirmedKey.current = JSON.stringify(next);
+      setConfirmCount(null);
+      setError("");
     } catch (caught) {
       if (caught instanceof ClipboardRequestError && caught.code === "needs_confirm") {
         setConfirmCount(Number(caught.params.count ?? 0));
         setError("");
       } else if (caught instanceof ClipboardRequestError) {
-        setError(clipboardErrorText(t, caught));
+        setError(clipboardErrorText(translate.current, caught));
       } else {
-        setError(t("zdx.text.clipboard.error.unknown"));
+        setError(translate.current("zdx.text.clipboard.error.unknown"));
       }
     } finally {
-      setSaving(false);
+      setConfirming(false);
     }
   }
 
   return (
     <Flex vertical gap={16}>
-      <Flex justify="space-between" align="flex-start" gap={16} wrap>
-        <div className="min-w-0 flex-[1_1_320px]">
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("zdx.text.clipboard.settingsDescription")}</Typography.Paragraph>
-          {status && <Typography.Paragraph type="secondary" style={{ marginBottom: 0, wordBreak: "break-all" }}>{t("zdx.text.clipboard.storagePath", { path: status.storagePath })}</Typography.Paragraph>}
-        </div>
-        {desktop && <Button type="primary" htmlType="submit" form="clipboard-settings" loading={saving} disabled={!draft}>{t("zdx.label.clipboard.save")}</Button>}
-      </Flex>
+      <div className="min-w-0">
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("zdx.text.clipboard.settingsDescription")}</Typography.Paragraph>
+        {status && <Typography.Paragraph type="secondary" style={{ marginBottom: 0, wordBreak: "break-all" }}>{t("zdx.text.clipboard.storagePath", { path: status.storagePath })}</Typography.Paragraph>}
+      </div>
 
       {confirmCount !== null && (
         <Alert
           type="warning"
           showIcon
           message={t("zdx.text.clipboard.confirmPrune", { count: confirmCount })}
-          action={<Button size="small" type="primary" onClick={() => void save(true)}>{t("zdx.label.clipboard.confirm")}</Button>}
+          action={<Button size="small" type="primary" loading={confirming} onClick={() => void confirmPrune()}>{t("zdx.label.clipboard.confirm")}</Button>}
         />
       )}
       {status?.platform.includes("macos") && <Alert type="info" showIcon message={t("zdx.text.clipboard.macosAccess")} />}
-      {saved && <Alert type="success" showIcon message={t("zdx.text.clipboard.saved")} />}
       {error && <Alert type="error" showIcon message={error} />}
       {!desktop && <Alert type="info" showIcon message={t("zdx.text.clipboard.error.desktop_only")} />}
       {desktop && loading && (
@@ -131,9 +160,8 @@ export default function ClipboardSettingsPage() {
         </Flex>
       )}
 
-      {desktop && draft && (
-        <Form id="clipboard-settings" onFinish={() => void save(false)}>
-          <Flex vertical gap={24}>
+      {desktop && draft && statusLoaded && (
+        <Flex vertical gap={24}>
             <SettingGroup title={t("zdx.label.clipboard.groupRecord")}>
               <SettingRow label={t("zdx.label.clipboard.recordText")}>
                 <Switch aria-label={t("zdx.label.clipboard.recordText")} checked={draft.recordText} onChange={(checked) => setDraft({ ...draft, recordText: checked })} />
@@ -166,13 +194,19 @@ export default function ClipboardSettingsPage() {
                 <InputNumber aria-label={t("zdx.label.clipboard.maxItems")} min={1} max={5000} style={{ width: 140 }} value={draft.maxItems} onChange={(value) => setDraft({ ...draft, maxItems: typeof value === "number" ? value : draft.maxItems })} />
               </SettingRow>
               <SettingRow label={t("zdx.label.clipboard.retentionDays")} description={t("zdx.text.clipboard.retentionZero")}>
-                <InputNumber aria-label={t("zdx.label.clipboard.retentionDays")} min={0} max={3650} style={{ width: 140 }} value={draft.retentionDays} onChange={(value) => setDraft({ ...draft, retentionDays: Number(value) })} />
+                <InputNumber aria-label={t("zdx.label.clipboard.retentionDays")} min={0} max={3650} style={{ width: 140 }} value={draft.retentionDays} onChange={(value) => {
+                  if (typeof value === "number") setDraft({ ...draft, retentionDays: value });
+                }} />
               </SettingRow>
               <SettingRow label={t("zdx.label.clipboard.maxText")}>
-                <InputNumber aria-label={t("zdx.label.clipboard.maxText")} min={0} style={{ width: 140 }} value={textMb} onChange={(value) => setTextMb(typeof value === "number" ? value : null)} />
+                <InputNumber aria-label={t("zdx.label.clipboard.maxText")} min={0} style={{ width: 140 }} value={textMb} onChange={(value) => {
+                  if (typeof value === "number") setTextMb(value);
+                }} />
               </SettingRow>
               <SettingRow label={t("zdx.label.clipboard.maxImage")}>
-                <InputNumber aria-label={t("zdx.label.clipboard.maxImage")} min={0} style={{ width: 140 }} value={imageMb} onChange={(value) => setImageMb(typeof value === "number" ? value : null)} />
+                <InputNumber aria-label={t("zdx.label.clipboard.maxImage")} min={0} style={{ width: 140 }} value={imageMb} onChange={(value) => {
+                  if (typeof value === "number") setImageMb(value);
+                }} />
               </SettingRow>
             </SettingGroup>
 
@@ -209,7 +243,6 @@ export default function ClipboardSettingsPage() {
               </SettingRow>
             </SettingGroup>
           </Flex>
-        </Form>
       )}
     </Flex>
   );

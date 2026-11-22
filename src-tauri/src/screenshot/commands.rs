@@ -199,6 +199,14 @@ pub fn screenshot_library_path(
 }
 
 #[tauri::command]
+pub fn screenshot_library_thumb(
+    state: State<'_, ScreenshotState>,
+    id: i64,
+) -> Result<tauri::ipc::Response, ScreenshotError> {
+    Ok(tauri::ipc::Response::new(state.library_thumb(id)?))
+}
+
+#[tauri::command]
 pub fn screenshot_scroll_stop() {
     super::scroll::request_stop();
 }
@@ -355,6 +363,36 @@ pub fn screenshot_pin_close(
 #[tauri::command]
 pub fn screenshot_open_capture(app: AppHandle) {
     capture_from_app(&app);
+}
+
+pub fn screenshot_open_record(app: AppHandle) {
+    super::session::record_from_hotkey(&app);
+}
+
+pub fn screenshot_menu_copy(app: &AppHandle, id: i64) {
+    if let Some(state) = app.try_state::<super::session::ScreenshotState>() {
+        let _ = state.library_copy(id);
+    }
+}
+
+pub fn screenshot_menu_shots(app: &AppHandle) -> Vec<(i64, String)> {
+    let Some(state) = app.try_state::<super::session::ScreenshotState>() else {
+        return Vec::new();
+    };
+    state
+        .library_list(None)
+        .into_iter()
+        .take(6)
+        .map(|item| {
+            let label = item
+                .text
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .unwrap_or(item.name.as_str());
+            (item.id, label.to_string())
+        })
+        .collect()
 }
 
 #[tauri::command]

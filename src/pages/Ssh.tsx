@@ -1,4 +1,4 @@
-import { SshRequestError, sshDeleteHost, sshDisconnect, sshHosts, sshSetEnabled, sshSetKeepalive, sshStatus } from "@/api/ssh";
+import { SshRequestError, sshAnswer, sshDeleteHost, sshDisconnect, sshHostKeyDecide, sshHosts, sshSetEnabled, sshSetKeepalive, sshStatus } from "@/api/ssh";
 import HostForm from "@/components/ssh/HostForm";
 import HostList from "@/components/ssh/HostList";
 import HostSplit from "@/components/ssh/HostSplit";
@@ -9,8 +9,8 @@ import Page from "@/components/Page";
 import type { SshHost, SshSessionEvent } from "@/types/ssh";
 import { isDesktop } from "@/utils/desktop";
 import { sshErrorText } from "@/utils/sshMessage";
-import { sshEndpoint, tabsAfterClose } from "@/utils/sshTabs";
-import { readOpenHosts, writeOpenHosts } from "@/utils/sshSessions";
+import { focusExistingSession, sshEndpoint, tabsAfterClose } from "@/utils/sshTabs";
+import { readOpenHosts, rememberHost, writeOpenHosts } from "@/utils/sshSessions";
 
 type OpenTab = {
   key: string;
@@ -44,6 +44,7 @@ export default function SshPage() {
   const activeRef = useRef(active);
   const tabMenuKey = useRef("");
   const restored = useRef(false);
+  const [readyForLaunch, setReadyForLaunch] = useState(false);
   const skipEmptySave = useRef(false);
   tabsRef.current = tabs;
   activeRef.current = active;
@@ -92,13 +93,17 @@ export default function SshPage() {
   useEffect(() => {
     if (!enabled || hosts.length === 0 || restored.current) return;
     restored.current = true;
-    if (tabsRef.current.length > 0) return;
+    if (tabsRef.current.length > 0) {
+      setReadyForLaunch(true);
+      return;
+    }
     const opened = readOpenHosts().flatMap((id) => {
       const host = hosts.find((item) => item.id === id);
       return host ? [host] : [];
     });
     if (opened.length === 0) {
       writeOpenHosts([]);
+      setReadyForLaunch(true);
       return;
     }
     const next = opened.map((host) => ({
@@ -112,6 +117,7 @@ export default function SshPage() {
     setTabs(next);
     setActive(next[next.length - 1]?.key ?? "");
     setSelectedId(next[next.length - 1]?.host.id ?? null);
+    setReadyForLaunch(true);
   }, [enabled, hosts]);
 
   useEffect(() => {
@@ -127,23 +133,35 @@ export default function SshPage() {
   const navigate = useNavigate();
   const launchedHost = useRef<number | null>(null);
 
+  function connect(host: SshHost, fresh = false) {
+    rememberHost(host.id);
+    setError("");
+    setSelectedId(host.id);
+    const existing = fresh ? null : focusExistingSession(tabsRef.current.map((tab) => ({ key: tab.key, hostId: tab.host.id, phase: tab.phase })), host.id);
+    if (existing) {
+      setActive(existing.key);
+      if (existing.reconnect) reconnectTab(existing.key);
+      return;
+    }
+    const key = `ssh-${host.id}-${tabSerial += 1}`;
+    setTabs((current) => current.some((tab) => tab.host.id === host.id) && !fresh ? current : [...current, { key, host, generation: 0, sessionId: null, phase: "connecting" }]);
+    setActive(key);
+  }
+
   useEffect(() => {
+    if (!readyForLaunch) return;
     const hostId = (location.state as { hostId?: number } | null)?.hostId;
-    if (!hostId || !enabled || hosts.length === 0 || launchedHost.current === hostId) return;
+    if (!hostId) {
+      launchedHost.current = null;
+      return;
+    }
+    if (!enabled || hosts.length === 0 || launchedHost.current === hostId) return;
     const host = hosts.find((item) => item.id === hostId);
     if (!host) return;
     launchedHost.current = hostId;
     connect(host);
     navigate("/ssh", { replace: true, state: null });
-  }, [enabled, hosts, location.state, navigate]);
-
-  function connect(host: SshHost) {
-    setError("");
-    const key = `ssh-${host.id}-${tabSerial += 1}`;
-    setTabs((current) => [...current, { key, host, generation: 0, sessionId: null, phase: "connecting" }]);
-    setActive(key);
-    setSelectedId(host.id);
-  }
+  }, [enabled, hosts, location.state, navigate, readyForLaunch]);
 
   function applyClose(shouldClose: (tab: OpenTab, index: number) => boolean, preferKey?: string) {
     const result = tabsAfterClose(tabsRef.current, activeRef.current, shouldClose, preferKey);
@@ -171,7 +189,7 @@ export default function SshPage() {
     const tab = tabsRef.current.find((item) => item.key === key);
     if (!tab) return;
     const index = tabsRef.current.findIndex((item) => item.key === key);
-    if (action === "duplicate") connect(tab.host);
+    if (action === "duplicate") connect(tab.host, true);
     if (action === "copy") void navigator.clipboard.writeText(sshEndpoint(tab.host)).catch(() => undefined);
     if (action === "reconnect") reconnectTab(key);
     if (action === "disconnect" && tab.sessionId) {
@@ -373,7 +391,12 @@ export default function SshPage() {
         onSaved={() => void loadHosts()}
       />
       <ImportConfig open={importOpen} onClose={() => setImportOpen(false)} onImported={() => void loadHosts()} />
-      <SessionPrompt decision={decision} onDone={() => setDecision(null)} />
+      <SessionPrompt
+        decision={decision}
+        onDone={() => setDecision(null)}
+        onHostKey={(sessionId, accept) => sshHostKeyDecide(sessionId, accept)}
+        onAnswer={(sessionId, promptId, secret, remember, cancel) => sshAnswer(sessionId, promptId, secret, remember, cancel)}
+      />
     </div>
   );
 }

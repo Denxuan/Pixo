@@ -1,4 +1,4 @@
-import { ScreenshotRequestError, openScreenRecordingSettings, screenshotRequestAccess, screenshotStart, screenshotStatus, toScreenshotError } from "@/api/screenshot";
+import { ScreenshotRequestError, openScreenRecordingSettings, screenshotRequestAccess, screenshotStartMode, screenshotStatus, toScreenshotError } from "@/api/screenshot";
 import Page from "@/components/Page";
 import ShotLibrary from "@/components/screenshot/ShotLibrary";
 import type { ShotStatus } from "@/types/screenshot";
@@ -41,12 +41,12 @@ export default function ScreenshotPage() {
     };
   }, [desktop, t]);
 
-  async function start() {
+  async function start(mode: "capture" | "record") {
     setBusy(true);
     setNotice("");
     setRelaunch(false);
     try {
-      await screenshotStart();
+      await screenshotStartMode(mode);
     } catch (error) {
       if (error instanceof ScreenshotRequestError) {
         setNotice(screenshotErrorText(t, error));
@@ -109,18 +109,13 @@ export default function ScreenshotPage() {
             icon={<ScissorOutlined />}
             title={t("zdx.label.screenshot.cardCapture")}
             description={t("zdx.text.screenshot.cardCapture")}
-            action={<Button type="primary" onClick={() => void start()} loading={busy} disabled={blocked}>{t("zdx.label.screenshot.start")}</Button>}
+            action={<Button type="primary" onClick={() => void start("capture")} loading={busy} disabled={blocked}>{t("zdx.label.screenshot.start")}</Button>}
           />
           <ActionCard
             icon={<VideoCameraOutlined />}
             title={t("zdx.label.screenshot.cardRecord")}
             description={t("zdx.text.screenshot.recordEntry")}
-            action={<Button onClick={() => void start()} disabled={blocked || busy}>{t("zdx.label.screenshot.record")}</Button>}
-          />
-          <ActionCard
-            icon={<FileTextOutlined />}
-            title={t("zdx.label.screenshot.cardOcr")}
-            description={status?.canOcr ? t("zdx.text.screenshot.ocrHelp") : t("zdx.text.screenshot.ocrUnsupported")}
+            action={<Button onClick={() => void start("record")} disabled={blocked || busy || !status?.canRecord}>{t("zdx.label.screenshot.record")}</Button>}
           />
         </div>
       )}

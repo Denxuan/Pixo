@@ -781,7 +781,9 @@ impl ScreenshotState {
         };
         if let Err(error) = saved {
             eprintln!("screenshot library: {}", error.code);
+            return;
         }
+        self.notify_library();
     }
 
     pub fn note_ocr(&self, text: &str) {
@@ -803,6 +805,13 @@ impl ScreenshotState {
         } else {
             Some((clipped, Instant::now()))
         };
+        if attached {
+            self.notify_library();
+        }
+    }
+
+    fn notify_library(&self) {
+        let _ = self.inner.app.emit("screenshot://library", ());
     }
 
     pub fn library_list(&self, query: Option<&str>) -> Vec<LibraryItem> {
@@ -814,7 +823,9 @@ impl ScreenshotState {
     pub fn library_delete(&self, id: i64) -> Result<(), ScreenshotError> {
         let save_dir = PathBuf::from(&self.lock_settings().save_dir);
         self.with_library(|library| library.delete(id, &save_dir))
-            .ok_or_else(|| ScreenshotError::new("storage"))?
+            .ok_or_else(|| ScreenshotError::new("storage"))??;
+        self.notify_library();
+        Ok(())
     }
 
     pub fn library_path(&self, id: i64) -> Result<String, ScreenshotError> {
@@ -822,6 +833,17 @@ impl ScreenshotState {
             .with_library(|library| library.get(id))
             .ok_or_else(|| ScreenshotError::new("storage"))??
             .path)
+    }
+
+    pub fn library_thumb(&self, id: i64) -> Result<Vec<u8>, ScreenshotError> {
+        let item = self
+            .with_library(|library| library.get(id))
+            .ok_or_else(|| ScreenshotError::new("storage"))??;
+        if item.kind != "image" {
+            return Err(ScreenshotError::new("invalid_input"));
+        }
+        let encoded = fs::read(&item.path).map_err(|_| ScreenshotError::new("not_found"))?;
+        super::bytes::preview_jpeg(&encoded, 360)
     }
 
     pub fn library_copy(&self, id: i64) -> Result<(), ScreenshotError> {

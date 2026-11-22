@@ -28,3 +28,27 @@ export function writeOpenHosts(ids: number[]) {
     // The list is only a convenience. A full store should not block the page.
   }
 }
+
+const RECENT_KEY = "pixo-ssh-recent";
+const MAX_RECENT = 8;
+
+export function pushRecent(ids: number[], id: number, limit = MAX_RECENT): number[] {
+  if (!Number.isInteger(id) || id <= 0) return ids.slice(0, limit);
+  return [id, ...ids.filter((item) => item !== id)].slice(0, limit);
+}
+
+export function readRecentHosts(): number[] {
+  try {
+    return parseOpenHosts(localStorage.getItem(RECENT_KEY)).slice(0, MAX_RECENT);
+  } catch {
+    return [];
+  }
+}
+
+export function rememberHost(id: number) {
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(pushRecent(readRecentHosts(), id)));
+  } catch {
+    // Recent hosts only change what the quick panel shows first.
+  }
+}

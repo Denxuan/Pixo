@@ -2,28 +2,38 @@ import { clampHostPane, DEFAULT_HOST_PANE, hostPaneBounds, readHostPaneWidth } f
 
 const HOST_PANE_KEY = "pixo-ssh-host-pane";
 
-function storedHostPane(): number {
+function storedHostPane(storageKey: string): number {
   try {
-    return readHostPaneWidth(localStorage.getItem(HOST_PANE_KEY));
+    return readHostPaneWidth(localStorage.getItem(storageKey));
   } catch {
     return DEFAULT_HOST_PANE;
   }
 }
 
-function rememberHostPane(width: number) {
+function rememberHostPane(storageKey: string, width: number) {
   try {
-    localStorage.setItem(HOST_PANE_KEY, String(width));
+    localStorage.setItem(storageKey, String(width));
   } catch {
     // The width still applies for this visit when storage is blocked.
   }
 }
 
-export default function HostSplit({ start, end }: { start: ReactNode; end: ReactNode }) {
+export default function HostSplit({
+  start,
+  end,
+  storageKey = HOST_PANE_KEY,
+  labelKey = "zdx.label.ssh.resizeHosts",
+}: {
+  start: ReactNode;
+  end: ReactNode;
+  storageKey?: string;
+  labelKey?: string;
+}) {
   const { t } = useTranslation();
   const { token } = antdTheme.useToken();
   const paneRef = useRef<HTMLDivElement>(null);
   const asideRef = useRef<HTMLElement>(null);
-  const [paneWidth, setPaneWidth] = useState(storedHostPane);
+  const [paneWidth, setPaneWidth] = useState(() => storedHostPane(storageKey));
   const [containerWidth, setContainerWidth] = useState(0);
   const [hot, setHot] = useState(false);
   const [resizing, setResizing] = useState(false);
@@ -64,7 +74,7 @@ export default function HostSplit({ start, end }: { start: ReactNode; end: React
     const next = clampHostPane(width, container);
     savedWidth.current = next;
     setPaneWidth(next);
-    rememberHostPane(next);
+    rememberHostPane(storageKey, next);
   }
 
   function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
@@ -123,7 +133,7 @@ export default function HostSplit({ start, end }: { start: ReactNode; end: React
         <div
           role="separator"
           aria-orientation="vertical"
-          aria-label={t("zdx.label.ssh.resizeHosts")}
+          aria-label={t(labelKey)}
           aria-valuemin={bounds.min}
           aria-valuemax={bounds.max}
           aria-valuenow={paneWidth}

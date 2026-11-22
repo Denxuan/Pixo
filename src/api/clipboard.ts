@@ -161,7 +161,7 @@ export function clipboardSetLabel(id: number, label: string) {
 }
 
 export function clipboardPlaceText(text: string) {
-  return call<void>("clipboard_place_text", { text });
+  return call<number | null>("clipboard_place_text", { text });
 }
 
 export function clipboardShowPanel() {

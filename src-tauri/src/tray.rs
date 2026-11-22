@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 
 use tauri::image::Image;
-use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tauri::menu::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Listener, Manager, Wry};
 
@@ -17,52 +17,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         .map(|state| state.status());
     let enabled = status.as_ref().is_some_and(|status| status.enabled);
     let paused = status.as_ref().is_some_and(|status| status.paused);
-    let record = MenuItem::with_id(
-        app,
-        "tray-record",
-        record_label(&labels, enabled, paused),
-        true,
-        None::<&str>,
-    )?;
-    let ignore = MenuItem::with_id(
-        app,
-        "tray-ignore",
-        &labels.ignore_next,
-        enabled,
-        None::<&str>,
-    )?;
-    let capture = MenuItem::with_id(
-        app,
-        "tray-screenshot",
-        &labels.screenshot,
-        true,
-        None::<&str>,
-    )?;
-    let history = MenuItem::with_id(app, "tray-history", &labels.history, true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "tray-settings", &labels.settings, true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "tray-quit", &labels.quit, true, None::<&str>)?;
-    let gap_a = PredefinedMenuItem::separator(app)?;
-    let gap_b = PredefinedMenuItem::separator(app)?;
-    #[cfg(target_os = "linux")]
-    let show = MenuItem::with_id(app, "tray-show", &labels.show, true, None::<&str>)?;
-    #[cfg(target_os = "linux")]
-    let gap_show = PredefinedMenuItem::separator(app)?;
-    // Linux does not deliver tray clicks, so the menu itself has to be able to open the panel.
-    #[cfg(target_os = "linux")]
-    let menu = Menu::with_items(
-        app,
-        &[
-            &show, &gap_show, &capture, &gap_a, &record, &ignore, &history, &settings, &gap_b,
-            &quit,
-        ],
-    )?;
-    #[cfg(not(target_os = "linux"))]
-    let menu = Menu::with_items(
-        app,
-        &[
-            &capture, &gap_a, &record, &ignore, &history, &settings, &gap_b, &quit,
-        ],
-    )?;
+    let menu = build_menu(app, &labels)?;
     let icon = TrayIconBuilder::with_id("clipboard-status")
         .icon(glyph_image(glyph_for(enabled, paused)))
         .icon_as_template(cfg!(target_os = "macos"))
@@ -84,20 +39,18 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         .build(app)?;
     app.manage(TrayHost {
         icon,
-        capture,
-        record,
-        ignore,
-        history,
-        settings,
-        quit,
-        #[cfg(target_os = "linux")]
-        show,
         labels: Mutex::new(labels),
     });
     let handle = app.clone();
     let _ = app.listen("clipboard://status", move |_| refresh(&handle));
     let handle = app.clone();
     let _ = app.listen("screenshot://enabled", move |_| refresh(&handle));
+    let handle = app.clone();
+    let _ = app.listen("screenshot://library", move |_| refresh(&handle));
+    let handle = app.clone();
+    let _ = app.listen("ssh://enabled", move |_| refresh(&handle));
+    let handle = app.clone();
+    let _ = app.listen("ssh://hosts", move |_| refresh(&handle));
     Ok(())
 }
 
@@ -147,6 +100,20 @@ pub struct TrayLabels {
     ignore_next_armed: String,
     #[serde(default = "default_screenshot_label")]
     screenshot: String,
+    #[serde(default = "default_record_label")]
+    record_screen: String,
+    #[serde(default = "default_recent_shots_label")]
+    recent_shots: String,
+    #[serde(default = "default_hosts_label")]
+    hosts: String,
+    #[serde(default = "default_open_shots_label")]
+    open_shots: String,
+    #[serde(default = "default_open_hosts_label")]
+    open_hosts: String,
+    #[serde(default = "default_no_shots_label")]
+    no_shots: String,
+    #[serde(default = "default_no_hosts_label")]
+    no_hosts: String,
     history: String,
     settings: String,
     quit: String,
@@ -167,6 +134,13 @@ impl Default for TrayLabels {
             ignore_next: "忽略下一次复制".into(),
             ignore_next_armed: "将忽略下一次复制".into(),
             screenshot: default_screenshot_label(),
+            record_screen: default_record_label(),
+            recent_shots: default_recent_shots_label(),
+            hosts: default_hosts_label(),
+            open_shots: default_open_shots_label(),
+            open_hosts: default_open_hosts_label(),
+            no_shots: default_no_shots_label(),
+            no_hosts: default_no_hosts_label(),
             history: "打开全部历史".into(),
             settings: "设置".into(),
             quit: "退出 Pixo".into(),
@@ -182,16 +156,36 @@ fn default_screenshot_label() -> String {
     "截图".into()
 }
 
+fn default_record_label() -> String {
+    "录屏".into()
+}
+
+fn default_recent_shots_label() -> String {
+    "最近截图".into()
+}
+
+fn default_hosts_label() -> String {
+    "主机".into()
+}
+
+fn default_open_shots_label() -> String {
+    "全部截图".into()
+}
+
+fn default_open_hosts_label() -> String {
+    "全部主机".into()
+}
+
+fn default_no_shots_label() -> String {
+    "还没有截图".into()
+}
+
+fn default_no_hosts_label() -> String {
+    "还没有主机".into()
+}
+
 struct TrayHost {
     icon: TrayIcon<Wry>,
-    capture: MenuItem<Wry>,
-    record: MenuItem<Wry>,
-    ignore: MenuItem<Wry>,
-    history: MenuItem<Wry>,
-    settings: MenuItem<Wry>,
-    quit: MenuItem<Wry>,
-    #[cfg(target_os = "linux")]
-    show: MenuItem<Wry>,
     labels: Mutex<TrayLabels>,
 }
 
@@ -253,8 +247,8 @@ fn on_primary(app: &AppHandle, rect: tauri::Rect) {
 }
 
 fn on_menu(app: &AppHandle, event: &MenuEvent) {
-    match event.id.as_ref() {
-        "tray-show" => {
+    match menu_action(event.id.as_ref()) {
+        MenuAction::Show => {
             let rect = app
                 .try_state::<TrayHost>()
                 .and_then(|host| host.icon.rect().ok())
@@ -262,21 +256,30 @@ fn on_menu(app: &AppHandle, event: &MenuEvent) {
                 .unwrap_or_default();
             on_primary(app, rect);
         }
-        "tray-record" => toggle_record(app),
-        "tray-ignore" => {
+        MenuAction::Pause => toggle_record(app),
+        MenuAction::Ignore => {
             if let Some(clipboard) = app.try_state::<ClipboardState>() {
                 clipboard.arm_ignore_next();
             }
         }
-        "tray-screenshot" => {
+        MenuAction::Capture => {
             if crate::screenshot::commands::screenshot_is_enabled(app) {
                 crate::screenshot::commands::screenshot_open_capture(app.clone());
             }
         }
-        "tray-history" => open_main(app, "/clipboard", false),
-        "tray-settings" => open_main(app, "/settings", false),
-        "tray-quit" => app.exit(0),
-        _ => {}
+        MenuAction::RecordScreen => {
+            if crate::screenshot::commands::screenshot_is_enabled(app) {
+                crate::screenshot::commands::screenshot_open_record(app.clone());
+            }
+        }
+        MenuAction::OpenShots => shortcut::present_tool(app, "/screenshot", None),
+        MenuAction::OpenHosts => shortcut::present_tool(app, "/ssh", None),
+        MenuAction::CopyShot(id) => crate::screenshot::commands::screenshot_menu_copy(app, id),
+        MenuAction::OpenHost(id) => shortcut::present_tool(app, "/ssh", Some(id)),
+        MenuAction::History => open_main(app, "/clipboard", false),
+        MenuAction::Settings => open_main(app, "/settings", false),
+        MenuAction::Quit => app.exit(0),
+        MenuAction::Other => {}
     }
 }
 
@@ -326,7 +329,6 @@ fn refresh(app: &AppHandle) {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .clone();
-    let armed = clipboard.ignore_next_armed();
     let _ = host.icon.set_icon_with_as_template(
         Some(glyph_image(glyph_for(status.enabled, status.paused))),
         cfg!(target_os = "macos"),
@@ -334,9 +336,97 @@ fn refresh(app: &AppHandle) {
     let _ = host
         .icon
         .set_tooltip(Some(tooltip_for(&labels, status.enabled, status.paused)));
-    let _ = host
-        .record
-        .set_text(record_label(&labels, status.enabled, status.paused));
+    if let Ok(menu) = build_menu(app, &labels) {
+        let _ = host.icon.set_menu(Some(menu));
+    }
+}
+
+enum MenuAction {
+    Show,
+    Pause,
+    Ignore,
+    Capture,
+    RecordScreen,
+    OpenShots,
+    OpenHosts,
+    CopyShot(i64),
+    OpenHost(i64),
+    History,
+    Settings,
+    Quit,
+    Other,
+}
+
+fn menu_action(id: &str) -> MenuAction {
+    if let Some(rest) = id.strip_prefix("tray-shot-") {
+        return rest
+            .parse()
+            .map(MenuAction::CopyShot)
+            .unwrap_or(MenuAction::Other);
+    }
+    if let Some(rest) = id.strip_prefix("tray-host-") {
+        return rest
+            .parse()
+            .map(MenuAction::OpenHost)
+            .unwrap_or(MenuAction::Other);
+    }
+    match id {
+        "tray-show" => MenuAction::Show,
+        "tray-record" => MenuAction::Pause,
+        "tray-ignore" => MenuAction::Ignore,
+        "tray-screenshot" => MenuAction::Capture,
+        "tray-record-screen" => MenuAction::RecordScreen,
+        "tray-shots-open" => MenuAction::OpenShots,
+        "tray-hosts-open" => MenuAction::OpenHosts,
+        "tray-history" => MenuAction::History,
+        "tray-settings" => MenuAction::Settings,
+        "tray-quit" => MenuAction::Quit,
+        _ => MenuAction::Other,
+    }
+}
+
+fn build_menu(app: &AppHandle, labels: &TrayLabels) -> tauri::Result<Menu<Wry>> {
+    let clipboard = app.try_state::<ClipboardState>();
+    let enabled = clipboard
+        .as_ref()
+        .is_some_and(|state| state.status().enabled);
+    let paused = clipboard
+        .as_ref()
+        .is_some_and(|state| state.status().paused);
+    let armed = clipboard
+        .as_ref()
+        .is_some_and(|state| state.ignore_next_armed());
+    let shots_on = crate::screenshot::commands::screenshot_is_enabled(app);
+    let (hosts_on, hosts) = crate::ssh::menu_hosts(app);
+    let shots = if shots_on {
+        crate::screenshot::commands::screenshot_menu_shots(app)
+    } else {
+        Vec::new()
+    };
+
+    let capture = MenuItem::with_id(
+        app,
+        "tray-screenshot",
+        text_or(&labels.screenshot, &default_screenshot_label()),
+        shots_on,
+        None::<&str>,
+    )?;
+    let record_screen = MenuItem::with_id(
+        app,
+        "tray-record-screen",
+        text_or(&labels.record_screen, &default_record_label()),
+        shots_on,
+        None::<&str>,
+    )?;
+    let shot_menu = shot_submenu(app, labels, shots_on, &shots)?;
+    let host_menu = host_submenu(app, labels, hosts_on, &hosts)?;
+    let pause = MenuItem::with_id(
+        app,
+        "tray-record",
+        record_label(labels, enabled, paused),
+        true,
+        None::<&str>,
+    )?;
     let ignore_label = if armed && !labels.ignore_next_armed.is_empty() {
         labels.ignore_next_armed.clone()
     } else if !labels.ignore_next.is_empty() {
@@ -346,23 +436,153 @@ fn refresh(app: &AppHandle) {
     } else {
         "忽略下一次复制".to_string()
     };
-    let _ = host.ignore.set_text(ignore_label);
-    let _ = host.ignore.set_enabled(status.enabled);
-    let _ = host.capture.set_text(if labels.screenshot.is_empty() {
-        default_screenshot_label()
-    } else {
-        labels.screenshot.clone()
-    });
-    let _ = host
-        .capture
-        .set_enabled(crate::screenshot::commands::screenshot_is_enabled(app));
-    let _ = host.history.set_text(&labels.history);
-    let _ = host.settings.set_text(&labels.settings);
-    let _ = host.quit.set_text(&labels.quit);
+    let ignore = MenuItem::with_id(app, "tray-ignore", ignore_label, enabled, None::<&str>)?;
+    let history = MenuItem::with_id(app, "tray-history", &labels.history, true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "tray-settings", &labels.settings, true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "tray-quit", &labels.quit, true, None::<&str>)?;
+    let gap_tools = PredefinedMenuItem::separator(app)?;
+    let gap_quit = PredefinedMenuItem::separator(app)?;
     #[cfg(target_os = "linux")]
-    {
-        let _ = host.show.set_text(&labels.show);
+    let show = MenuItem::with_id(app, "tray-show", &labels.show, true, None::<&str>)?;
+    #[cfg(target_os = "linux")]
+    let gap_show = PredefinedMenuItem::separator(app)?;
+    // Linux does not deliver tray clicks, so the menu itself opens the clipboard panel.
+    #[cfg(target_os = "linux")]
+    let entries: Vec<&dyn IsMenuItem<Wry>> = vec![
+        &show,
+        &gap_show,
+        &capture,
+        &record_screen,
+        &shot_menu,
+        &host_menu,
+        &gap_tools,
+        &pause,
+        &ignore,
+        &history,
+        &settings,
+        &gap_quit,
+        &quit,
+    ];
+    #[cfg(not(target_os = "linux"))]
+    let entries: Vec<&dyn IsMenuItem<Wry>> = vec![
+        &capture,
+        &record_screen,
+        &shot_menu,
+        &host_menu,
+        &gap_tools,
+        &pause,
+        &ignore,
+        &history,
+        &settings,
+        &gap_quit,
+        &quit,
+    ];
+    Menu::with_items(app, &entries)
+}
+
+fn shot_submenu(
+    app: &AppHandle,
+    labels: &TrayLabels,
+    enabled: bool,
+    shots: &[(i64, String)],
+) -> tauri::Result<Submenu<Wry>> {
+    let mut owned = Vec::new();
+    let shown = shots.iter().take(5);
+    for (id, label) in shown {
+        owned.push(MenuItem::with_id(
+            app,
+            format!("tray-shot-{id}"),
+            menu_text(label),
+            true,
+            None::<&str>,
+        )?);
     }
+    if owned.is_empty() {
+        owned.push(MenuItem::with_id(
+            app,
+            "tray-shots-empty",
+            text_or(&labels.no_shots, &default_no_shots_label()),
+            false,
+            None::<&str>,
+        )?);
+    }
+    owned.push(MenuItem::with_id(
+        app,
+        "tray-shots-open",
+        text_or(&labels.open_shots, &default_open_shots_label()),
+        true,
+        None::<&str>,
+    )?);
+    let refs: Vec<&dyn IsMenuItem<Wry>> = owned.iter().map(|item| item as _).collect();
+    Submenu::with_items(
+        app,
+        text_or(&labels.recent_shots, &default_recent_shots_label()),
+        enabled,
+        &refs,
+    )
+}
+
+fn host_submenu(
+    app: &AppHandle,
+    labels: &TrayLabels,
+    enabled: bool,
+    hosts: &[(i64, String)],
+) -> tauri::Result<Submenu<Wry>> {
+    let mut owned = Vec::new();
+    for (id, label) in hosts.iter().take(8) {
+        owned.push(MenuItem::with_id(
+            app,
+            format!("tray-host-{id}"),
+            menu_text(label),
+            true,
+            None::<&str>,
+        )?);
+    }
+    if owned.is_empty() {
+        owned.push(MenuItem::with_id(
+            app,
+            "tray-hosts-empty",
+            text_or(&labels.no_hosts, &default_no_hosts_label()),
+            false,
+            None::<&str>,
+        )?);
+    }
+    owned.push(MenuItem::with_id(
+        app,
+        "tray-hosts-open",
+        text_or(&labels.open_hosts, &default_open_hosts_label()),
+        true,
+        None::<&str>,
+    )?);
+    let refs: Vec<&dyn IsMenuItem<Wry>> = owned.iter().map(|item| item as _).collect();
+    Submenu::with_items(
+        app,
+        text_or(&labels.hosts, &default_hosts_label()),
+        enabled,
+        &refs,
+    )
+}
+
+fn text_or(value: &str, fallback: &str) -> String {
+    if value.trim().is_empty() {
+        fallback.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn menu_text(value: &str) -> String {
+    let trimmed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = if trimmed.is_empty() { value.trim() } else { &trimmed };
+    let mut text: String = trimmed.chars().take(48).collect();
+    if trimmed.chars().count() > 48 {
+        text.push('…');
+    }
+    #[cfg(windows)]
+    {
+        text = text.replace('&', "&&");
+    }
+    text
 }
 
 fn record_label(labels: &TrayLabels, enabled: bool, paused: bool) -> String {
@@ -584,6 +804,18 @@ mod tests {
         }
         assert_eq!(recording, 255);
         assert_eq!(disabled, 96);
+    }
+
+    #[test]
+    fn menu_ids_distinguish_recording_from_clipboard_pause() {
+        assert!(matches!(super::menu_action("tray-record"), super::MenuAction::Pause));
+        assert!(matches!(
+            super::menu_action("tray-record-screen"),
+            super::MenuAction::RecordScreen
+        ));
+        assert!(matches!(super::menu_action("tray-shot-12"), super::MenuAction::CopyShot(12)));
+        assert!(matches!(super::menu_action("tray-host-4"), super::MenuAction::OpenHost(4)));
+        assert!(matches!(super::menu_action("tray-shot-nope"), super::MenuAction::Other));
     }
 
     #[test]
