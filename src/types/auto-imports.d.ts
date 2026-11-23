@@ -31,6 +31,7 @@ declare global {
   const Drawer: typeof import('antd').Drawer
   const Dropdown: typeof import('antd').Dropdown
   const EditOutlined: typeof import('@ant-design/icons').EditOutlined
+  const EllipsisOutlined: typeof import('@ant-design/icons').EllipsisOutlined
   const Empty: typeof import('antd').Empty
   const EyeOutlined: typeof import('@ant-design/icons').EyeOutlined
   const FileAddOutlined: typeof import('@ant-design/icons').FileAddOutlined
@@ -38,6 +39,7 @@ declare global {
   const FileOutlined: typeof import('@ant-design/icons').FileOutlined
   const FileTextOutlined: typeof import('@ant-design/icons').FileTextOutlined
   const Flex: typeof import('antd').Flex
+  const FolderOpenOutlined: typeof import('@ant-design/icons').FolderOpenOutlined
   const FontColorsOutlined: typeof import('@ant-design/icons').FontColorsOutlined
   const FontSizeOutlined: typeof import('@ant-design/icons').FontSizeOutlined
   const Form: typeof import('antd').Form
@@ -51,6 +53,7 @@ declare global {
   const KeyOutlined: typeof import('@ant-design/icons').KeyOutlined
   const Layout: typeof import('antd').Layout
   const Link: typeof import('react-router').Link
+  const LinkOutlined: typeof import('@ant-design/icons').LinkOutlined
   const List: typeof import('antd').List
   const Menu: typeof import('antd').Menu
   const MenuFoldOutlined: typeof import('@ant-design/icons').MenuFoldOutlined
@@ -63,10 +66,13 @@ declare global {
   const PlayCircleOutlined: typeof import('@ant-design/icons').PlayCircleOutlined
   const PlusOutlined: typeof import('@ant-design/icons').PlusOutlined
   const Popconfirm: typeof import('antd').Popconfirm
+  const PoweroffOutlined: typeof import('@ant-design/icons').PoweroffOutlined
   const PushpinFilled: typeof import('@ant-design/icons').PushpinFilled
   const PushpinOutlined: typeof import('@ant-design/icons').PushpinOutlined
+  const Radio: typeof import('antd').Radio
   const RedoOutlined: typeof import('@ant-design/icons').RedoOutlined
   const ReloadOutlined: typeof import('@ant-design/icons').ReloadOutlined
+  const RightOutlined: typeof import('@ant-design/icons').RightOutlined
   const Route: typeof import('react-router').Route
   const Routes: typeof import('react-router').Routes
   const ScissorOutlined: typeof import('@ant-design/icons').ScissorOutlined

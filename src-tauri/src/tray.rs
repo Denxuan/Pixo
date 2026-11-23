@@ -1,5 +1,19 @@
+use std::ffi::CStr;
 use std::sync::Mutex;
 
+#[cfg(target_os = "macos")]
+use dispatch2::DispatchQueue;
+#[cfg(target_os = "macos")]
+use objc2::rc::Retained;
+#[cfg(target_os = "macos")]
+use objc2::runtime::{AnyClass, AnyObject};
+#[cfg(target_os = "macos")]
+use objc2::{MainThreadMarker, msg_send};
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{
+    NSApplication, NSMenu, NSPopUpMenuWindowLevel, NSStatusBarButton, NSStatusItem,
+    NSStatusWindowLevel, NSView, NSWindowCollectionBehavior,
+};
 use tauri::image::Image;
 use tauri::menu::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -8,8 +22,8 @@ use tauri::{AppHandle, Listener, Manager, Wry};
 use crate::clipboard::ClipboardState;
 use crate::shortcut;
 
-/// Menu-bar status item. Left click opens the clipboard panel under the icon when
-/// history is on, and the enable explanation when it is off. Right click is the menu.
+/// Menu-bar status item. Left click toggles the clipboard panel when history is on,
+/// and opens the enable explanation when it is off. Right click is the menu.
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let labels = TrayLabels::default();
     let status = app
@@ -24,19 +38,25 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         .tooltip(tooltip_for(&labels, enabled, paused))
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_tray_icon_event(|icon, event| {
-            if let TrayIconEvent::Click {
+        .on_tray_icon_event(|icon, event| match event {
+            TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 rect,
                 ..
-            } = event
-            {
-                on_primary(icon.app_handle(), rect);
-            }
+            } => on_primary(icon.app_handle(), rect),
+            #[cfg(target_os = "macos")]
+            TrayIconEvent::Click {
+                button: MouseButton::Right,
+                button_state: MouseButtonState::Down,
+                ..
+            } => show_status_menu(icon),
+            _ => {}
         })
         .on_menu_event(|app, event| on_menu(app, &event))
         .build(app)?;
+    #[cfg(target_os = "macos")]
+    prepare_status_item(&icon);
     app.manage(TrayHost {
         icon,
         labels: Mutex::new(labels),
@@ -265,7 +285,7 @@ fn on_primary(app: &AppHandle, rect: tauri::Rect) {
         }
     }
     if enabled {
-        shortcut::show_from_status(app, rect);
+        shortcut::toggle_from_status(app, rect);
     } else {
         open_main(app, "/clipboard", true);
     }
@@ -672,7 +692,11 @@ fn text_or(value: &str, fallback: &str) -> String {
 
 fn menu_text(value: &str) -> String {
     let trimmed = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    let trimmed = if trimmed.is_empty() { value.trim() } else { &trimmed };
+    let trimmed = if trimmed.is_empty() {
+        value.trim()
+    } else {
+        &trimmed
+    };
     let mut text: String = trimmed.chars().take(48).collect();
     if trimmed.chars().count() > 48 {
         text.push('…');
@@ -874,6 +898,183 @@ fn inside_rect(px: f64, py: f64, left: f64, top: f64, right: f64, bottom: f64) -
     px >= left && py >= top && px <= right && py <= bottom
 }
 
+fn is_popup_menu_window(class_name: &str) -> bool {
+    let name = class_name.rsplit('.').next().unwrap_or(class_name);
+    name.ends_with("MenuWindow") && !name.contains("Status") && !name.contains("MenuBar")
+}
+
+fn plausible_object_pointer(value: usize) -> bool {
+    value >= 0x1_0000_0000 && value.is_multiple_of(8) && value <= 0x0000_FFFF_FFFF_FFFF
+}
+
+fn ivar_byte_len(encoding: &CStr) -> usize {
+    const FALLBACK: usize = 40;
+    let Ok(text) = encoding.to_str() else {
+        return FALLBACK;
+    };
+    let Some(rest) = text.strip_prefix('[') else {
+        return FALLBACK;
+    };
+    let Some(end) = rest.find(|c: char| !c.is_ascii_digit()) else {
+        return FALLBACK;
+    };
+    let Ok(count) = rest[..end].parse::<usize>() else {
+        return FALLBACK;
+    };
+    let unit = match rest.as_bytes().get(end).copied() {
+        Some(b'C') => 1,
+        Some(b'S') => 2,
+        Some(b'I') => 4,
+        Some(b'Q') => 8,
+        _ => return FALLBACK,
+    };
+    let len = count.saturating_mul(unit);
+    if len == 0 || len > 64 { FALLBACK } else { len }
+}
+
+#[cfg(target_os = "macos")]
+fn fullscreen_menu_behavior() -> NSWindowCollectionBehavior {
+    NSWindowCollectionBehavior::CanJoinAllSpaces
+        | NSWindowCollectionBehavior::FullScreenAuxiliary
+        | NSWindowCollectionBehavior::Transient
+        | NSWindowCollectionBehavior::IgnoresCycle
+}
+
+#[cfg(target_os = "macos")]
+fn prepare_status_item(icon: &TrayIcon<Wry>) {
+    let _ = icon.with_inner_tray_icon(|inner| {
+        inner.set_show_menu_on_right_click(false);
+        if let Some(item) = inner.ns_status_item() {
+            allow_status_item_in_fullscreen(&item);
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn show_status_menu(icon: &TrayIcon<Wry>) {
+    let icon = icon.clone();
+    let _ = icon.with_inner_tray_icon(|inner| {
+        let Some(item) = inner.ns_status_item() else {
+            return;
+        };
+        allow_status_item_in_fullscreen(&item);
+        // The menu window is created inside the tracking loop, so the level change
+        // has to run there. A fullscreen app covers a menu left on the desktop space.
+        let _ = DispatchQueue::main().exec_async(raise_popup_menus);
+        if let Some(menu) = status_item_menu(&item) {
+            item.setMenu(Some(&menu));
+            #[allow(deprecated)]
+            item.popUpStatusItemMenu(&menu);
+            item.setMenu(None);
+        } else {
+            inner.show_menu();
+        }
+    });
+    clear_status_highlight(icon);
+}
+
+#[cfg(target_os = "macos")]
+fn clear_status_highlight(icon: TrayIcon<Wry>) {
+    // The built-in click handler highlights the icon after this function returns.
+    let _ = DispatchQueue::main().exec_async(move || {
+        let _ = icon.with_inner_tray_icon(|inner| {
+            let Some(mtm) = MainThreadMarker::new() else {
+                return;
+            };
+            let Some(item) = inner.ns_status_item() else {
+                return;
+            };
+            let Some(button) = item.button(mtm) else {
+                return;
+            };
+            let _: () = unsafe { msg_send![&*button, highlight: false] };
+        });
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn allow_status_item_in_fullscreen(item: &NSStatusItem) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(button) = item.button(mtm) else {
+        return;
+    };
+    let Some(window) = status_button_view(&button).window() else {
+        return;
+    };
+    window.setCollectionBehavior(fullscreen_menu_behavior());
+    window.setLevel(NSStatusWindowLevel);
+    window.setHidesOnDeactivate(false);
+}
+
+#[cfg(target_os = "macos")]
+fn status_button_view(button: &NSStatusBarButton) -> &NSView {
+    unsafe { &*std::ptr::from_ref(button).cast::<NSView>() }
+}
+
+#[cfg(target_os = "macos")]
+fn raise_popup_menus() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let windows = NSApplication::sharedApplication(mtm).windows();
+    for index in 0..windows.count() {
+        let window = windows.objectAtIndex(index);
+        let Ok(name) = window.class().name().to_str() else {
+            continue;
+        };
+        if !is_popup_menu_window(name) {
+            continue;
+        }
+        window.setCollectionBehavior(fullscreen_menu_behavior());
+        window.setLevel(NSPopUpMenuWindowLevel);
+        window.setHidesOnDeactivate(false);
+        if window.isVisible() {
+            window.orderFrontRegardless();
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn status_item_menu(item: &NSStatusItem) -> Option<Retained<NSMenu>> {
+    let mtm = MainThreadMarker::new()?;
+    let button = item.button(mtm)?;
+    let subviews = status_button_view(&button).subviews();
+    for index in 0..subviews.count() {
+        if let Some(menu) = menu_from_tray_target(&subviews.objectAtIndex(index)) {
+            return Some(menu);
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn menu_from_tray_target(view: &NSView) -> Option<Retained<NSMenu>> {
+    if view.class().name().to_bytes() != b"TaoTrayTarget" {
+        return None;
+    }
+    let ivar = view.class().instance_variable(c"TaoTrayTarget_ivars")?;
+    let menu_class = AnyClass::get(c"NSMenu")?;
+    let len = ivar_byte_len(ivar.type_encoding());
+    let start = unsafe { std::ptr::from_ref(view).cast::<u8>().offset(ivar.offset()) };
+    let mut offset = 0;
+    while offset + 8 <= len {
+        let pointer = unsafe { start.add(offset).cast::<*mut AnyObject>().read_unaligned() };
+        offset += 8;
+        if !plausible_object_pointer(pointer as usize) {
+            continue;
+        }
+        let is_menu: objc2::runtime::Bool =
+            unsafe { msg_send![pointer, isKindOfClass: menu_class] };
+        if !is_menu.as_bool() {
+            continue;
+        }
+        return unsafe { Retained::retain(pointer.cast::<NSMenu>()) };
+    }
+    None
+}
+
 fn dist_to_segment(px: f64, py: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f64 {
     let dx = x2 - x1;
     let dy = y2 - y1;
@@ -907,13 +1108,22 @@ mod tests {
 
     #[test]
     fn menu_ids_distinguish_recording_from_clipboard_pause() {
-        assert!(matches!(super::menu_action("tray-record"), super::MenuAction::Pause));
+        assert!(matches!(
+            super::menu_action("tray-record"),
+            super::MenuAction::Pause
+        ));
         assert!(matches!(
             super::menu_action("tray-record-screen"),
             super::MenuAction::RecordScreen
         ));
-        assert!(matches!(super::menu_action("tray-shot-12"), super::MenuAction::CopyShot(12)));
-        assert!(matches!(super::menu_action("tray-host-4"), super::MenuAction::OpenHost(4)));
+        assert!(matches!(
+            super::menu_action("tray-shot-12"),
+            super::MenuAction::CopyShot(12)
+        ));
+        assert!(matches!(
+            super::menu_action("tray-host-4"),
+            super::MenuAction::OpenHost(4)
+        ));
         assert!(matches!(
             super::menu_action("tray-docker-open"),
             super::MenuAction::OpenDocker
@@ -922,7 +1132,10 @@ mod tests {
             super::menu_action("tray-endpoint-3"),
             super::MenuAction::OpenEndpoint(3)
         ));
-        assert!(matches!(super::menu_action("tray-shot-nope"), super::MenuAction::Other));
+        assert!(matches!(
+            super::menu_action("tray-shot-nope"),
+            super::MenuAction::Other
+        ));
     }
 
     #[test]
@@ -963,5 +1176,36 @@ mod tests {
         }
         assert!(TrayMark::parse("board").is_some());
         assert!(TrayMark::parse("dock").is_none());
+    }
+
+    #[test]
+    fn popup_menu_windows_are_not_the_menu_bar() {
+        assert!(super::is_popup_menu_window("NSMenuWindow"));
+        assert!(super::is_popup_menu_window("_NSContextMenuWindow"));
+        assert!(!super::is_popup_menu_window("NSMenuBarWindow"));
+        assert!(!super::is_popup_menu_window("NSStatusBarWindow"));
+        assert!(!super::is_popup_menu_window("NSPanel"));
+    }
+
+    #[test]
+    fn menu_scan_skips_nulls_and_small_integers() {
+        assert!(!super::plausible_object_pointer(0));
+        assert!(!super::plausible_object_pointer(1));
+        assert!(!super::plausible_object_pointer(0x1000));
+        assert!(super::plausible_object_pointer(0x1_0000_0000));
+        assert!(!super::plausible_object_pointer(0x1_0000_0001));
+    }
+
+    #[test]
+    fn tray_target_ivar_length_comes_from_its_encoding() {
+        use std::ffi::CString;
+        let encoding = CString::new("[5Q]").unwrap();
+        assert_eq!(super::ivar_byte_len(&encoding), 40);
+        let encoding = CString::new("[40C]").unwrap();
+        assert_eq!(super::ivar_byte_len(&encoding), 40);
+        let encoding = CString::new("[100Q]").unwrap();
+        assert_eq!(super::ivar_byte_len(&encoding), 40);
+        let encoding = CString::new("not-an-array").unwrap();
+        assert_eq!(super::ivar_byte_len(&encoding), 40);
     }
 }

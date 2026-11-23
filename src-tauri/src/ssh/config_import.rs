@@ -44,7 +44,11 @@ pub fn preview(entries: &[ConfigEntry], existing: &[(String, u16, String)]) -> V
         .enumerate()
         .map(|(index, entry)| {
             let mut warnings = entry.warnings.clone();
-            if known.contains(&(entry.host.to_ascii_lowercase(), entry.port, entry.username.clone())) {
+            if known.contains(&(
+                entry.host.to_ascii_lowercase(),
+                entry.port,
+                entry.username.clone(),
+            )) {
                 warnings.push("duplicate".to_string());
             }
             let selected = entry.username.trim().is_empty() == false
@@ -55,7 +59,12 @@ pub fn preview(entries: &[ConfigEntry], existing: &[(String, u16, String)]) -> V
                 host: entry.host.clone(),
                 port: entry.port,
                 username: entry.username.clone(),
-                auth: if entry.key_path.is_some() { "key" } else { "password" }.to_string(),
+                auth: if entry.key_path.is_some() {
+                    "key"
+                } else {
+                    "password"
+                }
+                .to_string(),
                 key_path: entry.key_path.clone(),
                 jump_names: entry.jumps.clone(),
                 warnings,
@@ -71,7 +80,11 @@ pub fn expand_selection(entries: &[ConfigEntry], selected: &[u32]) -> Vec<u32> {
         .enumerate()
         .map(|(index, entry)| (entry.alias.to_ascii_lowercase(), index as u32))
         .collect::<HashMap<_, _>>();
-    let mut chosen = selected.iter().copied().filter(|index| (*index as usize) < entries.len()).collect::<HashSet<_>>();
+    let mut chosen = selected
+        .iter()
+        .copied()
+        .filter(|index| (*index as usize) < entries.len())
+        .collect::<HashSet<_>>();
     let mut pending = chosen.iter().copied().collect::<Vec<_>>();
     while let Some(index) = pending.pop() {
         for jump in &entries[index as usize].jumps {
@@ -129,7 +142,9 @@ fn read_file(
         };
         if key.eq_ignore_ascii_case("host") {
             push_entry(entries, current.take(), &mut unsupported);
-            if value.split_whitespace().any(|part| part.contains('*') || part.contains('?') || part.contains('!'))
+            if value
+                .split_whitespace()
+                .any(|part| part.contains('*') || part.contains('?') || part.contains('!'))
                 || value.split_whitespace().count() != 1
             {
                 continue;
@@ -210,12 +225,19 @@ fn resolve_jumps(entries: &mut [ConfigEntry]) {
     }
 }
 
-fn push_entry(entries: &mut Vec<ConfigEntry>, entry: Option<ConfigEntry>, unsupported: &mut Vec<String>) {
+fn push_entry(
+    entries: &mut Vec<ConfigEntry>,
+    entry: Option<ConfigEntry>,
+    unsupported: &mut Vec<String>,
+) {
     let Some(mut entry) = entry else {
         unsupported.clear();
         return;
     };
-    if entries.iter().any(|existing| existing.alias.eq_ignore_ascii_case(&entry.alias)) {
+    if entries
+        .iter()
+        .any(|existing| existing.alias.eq_ignore_ascii_case(&entry.alias))
+    {
         unsupported.clear();
         return;
     }
@@ -273,7 +295,10 @@ fn split_keyword(line: &str) -> Option<(&str, &str)> {
 }
 
 fn unquote(value: &str) -> &str {
-    value.strip_prefix('"').and_then(|rest| rest.strip_suffix('"')).unwrap_or(value)
+    value
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(value)
 }
 
 fn strip_jump(value: &str) -> &str {
@@ -281,7 +306,10 @@ fn strip_jump(value: &str) -> &str {
     if let Some(rest) = value.strip_prefix('[') {
         return rest.split(']').next().unwrap_or(value).trim();
     }
-    let host = value.rsplit_once('@').map(|(_, host)| host).unwrap_or(value);
+    let host = value
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(value);
     host.split(':').next().unwrap_or(host).trim()
 }
 
@@ -356,13 +384,37 @@ Host other
         .unwrap();
         let mut seen = HashSet::new();
         let mut entries = Vec::new();
-        read_file(&home.join(".ssh/config"), &home, "denxuan", 0, &mut seen, &mut entries).unwrap();
+        read_file(
+            &home.join(".ssh/config"),
+            &home,
+            "denxuan",
+            0,
+            &mut seen,
+            &mut entries,
+        )
+        .unwrap();
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].alias, "bastion");
-        assert!(entries[0].key_path.as_deref().unwrap().ends_with("id_ed25519"));
+        assert!(
+            entries[0]
+                .key_path
+                .as_deref()
+                .unwrap()
+                .ends_with("id_ed25519")
+        );
         assert_eq!(entries[1].jumps, vec!["bastion".to_string()]);
-        assert!(entries[1].warnings.iter().any(|warning| warning.starts_with("unsupported:")));
-        assert!(entries[2].warnings.iter().any(|warning| warning == "jump_missing"));
+        assert!(
+            entries[1]
+                .warnings
+                .iter()
+                .any(|warning| warning.starts_with("unsupported:"))
+        );
+        assert!(
+            entries[2]
+                .warnings
+                .iter()
+                .any(|warning| warning == "jump_missing")
+        );
         assert!(entries[2].jumps.is_empty());
         let selected = expand_selection(&entries, &[1]);
         assert_eq!(selected, vec![0, 1]);

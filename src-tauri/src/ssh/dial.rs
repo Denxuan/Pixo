@@ -324,9 +324,7 @@ async fn password_auth(
 ) -> Result<(), SshError> {
     match handle.authenticate_none(host.username.as_str()).await {
         Ok(result) if result.success() => return Ok(()),
-        Ok(result)
-            if wants_keyboard(&result) && !offers_method(&result, MethodKind::Password) =>
-        {
+        Ok(result) if wants_keyboard(&result) && !offers_method(&result, MethodKind::Password) => {
             if keyboard_interactive(handle, env, host, bridge, events).await? {
                 return Ok(());
             }
@@ -388,9 +386,9 @@ async fn continue_auth(
         return Ok(());
     }
     let follow = match &result {
-        AuthResult::Failure { partial_success, .. } => {
-            wants_keyboard(&result) && (*partial_success || password_fallback)
-        }
+        AuthResult::Failure {
+            partial_success, ..
+        } => wants_keyboard(&result) && (*partial_success || password_fallback),
         AuthResult::Success => false,
     };
     if follow && keyboard_interactive(handle, env, host, bridge, events).await? {
@@ -571,12 +569,21 @@ async fn agent_result(
             continue;
         }
         let accepted = match identity {
-            russh::keys::agent::AgentIdentity::Certificate { certificate, .. } => handle
-                .authenticate_certificate_with(host.username.as_str(), certificate, key_hash, &mut client)
-                .await,
-            russh::keys::agent::AgentIdentity::PublicKey { key, .. } => handle
-                .authenticate_publickey_with(host.username.as_str(), key, key_hash, &mut client)
-                .await,
+            russh::keys::agent::AgentIdentity::Certificate { certificate, .. } => {
+                handle
+                    .authenticate_certificate_with(
+                        host.username.as_str(),
+                        certificate,
+                        key_hash,
+                        &mut client,
+                    )
+                    .await
+            }
+            russh::keys::agent::AgentIdentity::PublicKey { key, .. } => {
+                handle
+                    .authenticate_publickey_with(host.username.as_str(), key, key_hash, &mut client)
+                    .await
+            }
         };
         match accepted {
             Ok(result) if result.success() => return result,
@@ -912,7 +919,10 @@ async fn prompt_reply(
 }
 
 fn emit_notice(events: &Channel<Value>, code: &str) {
-    emit(events, json!({"type": "notice", "code": code, "params": {}}));
+    emit(
+        events,
+        json!({"type": "notice", "code": code, "params": {}}),
+    );
 }
 
 fn set_failure(bridge: &Bridge, error: SshError) {
@@ -970,7 +980,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 mod tests {
     use russh::{MethodKind, MethodSet};
 
-    use super::{auth_failure, offers_method, password_like, wants_keyboard, AuthResult};
+    use super::{AuthResult, auth_failure, offers_method, password_like, wants_keyboard};
 
     #[test]
     fn keyboard_interactive_is_detected_from_the_server_list() {

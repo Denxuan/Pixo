@@ -1,4 +1,4 @@
-import { DockerRequestError, dockerPickFile, dockerSaveEndpoint, dockerSockets } from "@/api/docker";
+import { DockerRequestError, dockerSaveEndpoint, dockerSockets } from "@/api/docker";
 import type { SshHost } from "@/types/ssh";
 import type { DockerEndpoint, DockerEndpointDraft, DockerKind, DockerSocket } from "@/types/docker";
 import { dockerErrorText } from "@/utils/dockerMessage";
@@ -11,12 +11,6 @@ type FormValues = {
   socketPath?: string;
   sshHostId?: number;
   remoteSocket?: string;
-  host?: string;
-  port?: number;
-  caPath?: string;
-  certPath?: string;
-  keyPath?: string;
-  insecure?: boolean;
 };
 
 export default function EndpointForm({
@@ -44,30 +38,16 @@ export default function EndpointForm({
   useEffect(() => {
     if (!open) return;
     setError("");
+    const kind = endpoint?.kind === "ssh" ? "ssh" : "local";
     form.setFieldsValue({
       name: endpoint?.name ?? "",
-      kind: endpoint?.kind ?? "local",
+      kind,
       socketPath: endpoint?.socketPath ?? "",
       sshHostId: endpoint?.sshHostId ?? undefined,
       remoteSocket: endpoint?.remoteSocket ?? "/var/run/docker.sock",
-      host: endpoint?.host ?? "",
-      port: endpoint?.port ?? (endpoint?.kind === "tcp" ? 2375 : 2376),
-      caPath: endpoint?.caPath ?? "",
-      certPath: endpoint?.certPath ?? "",
-      keyPath: endpoint?.keyPath ?? "",
-      insecure: endpoint?.insecure ?? false,
     });
     void dockerSockets().then(setSockets).catch(() => setSockets([]));
   }, [endpoint, form, open]);
-
-  async function choose(field: "caPath" | "certPath" | "keyPath", title: string) {
-    try {
-      const path = await dockerPickFile(title);
-      if (path) form.setFieldValue(field, path);
-    } catch (caught) {
-      if (caught instanceof DockerRequestError) setError(dockerErrorText(t, caught));
-    }
-  }
 
   async function save() {
     const values = await form.validateFields();
@@ -81,16 +61,6 @@ export default function EndpointForm({
       draft.sshHostId = values.sshHostId;
       draft.remoteSocket = values.remoteSocket || "/var/run/docker.sock";
     }
-    if (values.kind === "tls" || values.kind === "tcp") {
-      draft.host = values.host;
-      draft.port = values.port;
-    }
-    if (values.kind === "tls") {
-      draft.caPath = values.caPath;
-      draft.certPath = values.certPath;
-      draft.keyPath = values.keyPath;
-    }
-    if (values.kind === "tcp") draft.insecure = Boolean(values.insecure);
     setBusy(true);
     setError("");
     try {
@@ -123,8 +93,6 @@ export default function EndpointForm({
             options={[
               { label: t("zdx.label.docker.kindLocal"), value: "local" },
               { label: t("zdx.label.docker.kindSsh"), value: "ssh", disabled: !sshEnabled && kind !== "ssh" },
-              { label: t("zdx.label.docker.kindTls"), value: "tls" },
-              { label: t("zdx.label.docker.kindTcp"), value: "tcp" },
             ]}
           />
         </Form.Item>
@@ -151,44 +119,8 @@ export default function EndpointForm({
             </Form.Item>
           </>
         )}
-        {(kind === "tls" || kind === "tcp") && (
-          <>
-            <Form.Item name="host" label={t("zdx.label.docker.host")} rules={[{ required: true }]}>
-              <Input placeholder={t("zdx.placeholder.docker.host")} />
-            </Form.Item>
-            <Form.Item name="port" label={t("zdx.label.docker.port")}>
-              <InputNumber min={1} max={65535} className="w-full" />
-            </Form.Item>
-          </>
-        )}
-        {kind === "tls" && (
-          <>
-            <FileField name="caPath" label={t("zdx.label.docker.ca")} onPick={() => void choose("caPath", t("zdx.label.docker.ca"))} />
-            <FileField name="certPath" label={t("zdx.label.docker.cert")} onPick={() => void choose("certPath", t("zdx.label.docker.cert"))} />
-            <FileField name="keyPath" label={t("zdx.label.docker.key")} onPick={() => void choose("keyPath", t("zdx.label.docker.key"))} />
-          </>
-        )}
-        {kind === "tcp" && (
-          <Form.Item name="insecure" valuePropName="checked" extra={t("zdx.text.docker.insecureHelp")} rules={[{ validator: (_, value) => value ? Promise.resolve() : Promise.reject(new Error(t("zdx.text.docker.error.insecure_required"))) }]}>
-            <Checkbox>{t("zdx.label.docker.insecure")}</Checkbox>
-          </Form.Item>
-        )}
         {error && <Alert type="error" showIcon message={error} />}
       </Form>
     </Modal>
-  );
-}
-
-function FileField({ name, label, onPick }: { name: string; label: string; onPick: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <Form.Item label={label} required>
-      <Space.Compact className="w-full">
-        <Form.Item name={name} noStyle rules={[{ required: true }]}>
-          <Input readOnly />
-        </Form.Item>
-        <Button onClick={onPick}>{t("zdx.label.docker.chooseFile")}</Button>
-      </Space.Compact>
-    </Form.Item>
   );
 }

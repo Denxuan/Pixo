@@ -3,10 +3,13 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
+use super::compose::{ComposePreview, ComposeProject, ComposeProjectRequest};
 use super::context::ContextPreview;
 use super::error::DockerError;
-use super::compose::{ComposePreview, ComposeProject};
-use super::model::{ContainerRow, DockerStatus, Endpoint, EndpointDraft, EngineSummary, ImageRow, NetworkRow, VolumeRow};
+use super::model::{
+    ContainerRow, DockerStatus, Endpoint, EndpointDraft, EngineSummary, ImageRow, NetworkRow,
+    VolumeRow,
+};
 use super::service::DockerState;
 use super::sockets::SocketCandidate;
 
@@ -16,7 +19,10 @@ pub fn docker_status(state: State<'_, DockerState>) -> Result<DockerStatus, Dock
 }
 
 #[tauri::command]
-pub fn docker_set_enabled(state: State<'_, DockerState>, enabled: bool) -> Result<DockerStatus, DockerError> {
+pub fn docker_set_enabled(
+    state: State<'_, DockerState>,
+    enabled: bool,
+) -> Result<DockerStatus, DockerError> {
     state.set_enabled(enabled)
 }
 
@@ -26,7 +32,10 @@ pub fn docker_endpoints_list(state: State<'_, DockerState>) -> Result<Vec<Endpoi
 }
 
 #[tauri::command]
-pub fn docker_endpoint_save(state: State<'_, DockerState>, endpoint: EndpointDraft) -> Result<Endpoint, DockerError> {
+pub fn docker_endpoint_save(
+    state: State<'_, DockerState>,
+    endpoint: EndpointDraft,
+) -> Result<Endpoint, DockerError> {
     state.save(endpoint)
 }
 
@@ -36,31 +45,45 @@ pub fn docker_endpoint_delete(state: State<'_, DockerState>, id: i64) -> Result<
 }
 
 #[tauri::command]
-pub fn docker_local_sockets(state: State<'_, DockerState>) -> Result<Vec<SocketCandidate>, DockerError> {
+pub fn docker_local_sockets(
+    state: State<'_, DockerState>,
+) -> Result<Vec<SocketCandidate>, DockerError> {
     state.sockets()
 }
 
 #[tauri::command]
-pub fn docker_contexts_preview(state: State<'_, DockerState>) -> Result<Vec<ContextPreview>, DockerError> {
+pub fn docker_contexts_preview(
+    state: State<'_, DockerState>,
+) -> Result<Vec<ContextPreview>, DockerError> {
     state.context_preview()
 }
 
 #[tauri::command]
-pub fn docker_contexts_import(state: State<'_, DockerState>, indexes: Vec<u32>) -> Result<Vec<Endpoint>, DockerError> {
+pub fn docker_contexts_import(
+    state: State<'_, DockerState>,
+    indexes: Vec<u32>,
+) -> Result<Vec<Endpoint>, DockerError> {
     state.context_import(&indexes)
 }
 
 #[tauri::command]
-pub async fn docker_pick_file(app: AppHandle, title: String) -> Result<Option<String>, DockerError> {
+pub async fn docker_pick_file(
+    app: AppHandle,
+    title: String,
+) -> Result<Option<String>, DockerError> {
     if title.chars().count() > 80 {
         return Err(DockerError::new("invalid_input"));
     }
-    let picked = tauri::async_runtime::spawn_blocking(move || app.dialog().file().set_title(title).blocking_pick_file())
-        .await
-        .map_err(|_| DockerError::new("storage"))?;
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog().file().set_title(title).blocking_pick_file()
+    })
+    .await
+    .map_err(|_| DockerError::new("storage"))?;
     match picked {
         Some(path) => {
-            let path = path.into_path().map_err(|_| DockerError::new("invalid_input"))?;
+            let path = path
+                .into_path()
+                .map_err(|_| DockerError::new("invalid_input"))?;
             Ok(Some(path.to_string_lossy().into_owned()))
         }
         None => Ok(None),
@@ -68,17 +91,52 @@ pub async fn docker_pick_file(app: AppHandle, title: String) -> Result<Option<St
 }
 
 #[tauri::command]
-pub fn docker_connect(state: State<'_, DockerState>, endpoint_id: i64, events: Channel<Value>) -> Result<u64, DockerError> {
+pub async fn docker_pick_folder(
+    app: AppHandle,
+    title: String,
+) -> Result<Option<String>, DockerError> {
+    if title.chars().count() > 80 {
+        return Err(DockerError::new("invalid_input"));
+    }
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog().file().set_title(title).blocking_pick_folder()
+    })
+    .await
+    .map_err(|_| DockerError::new("storage"))?;
+    match picked {
+        Some(path) => {
+            let path = path
+                .into_path()
+                .map_err(|_| DockerError::new("invalid_input"))?;
+            Ok(Some(path.to_string_lossy().into_owned()))
+        }
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+pub fn docker_connect(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    events: Channel<Value>,
+) -> Result<u64, DockerError> {
     state.connect(endpoint_id, events)
 }
 
 #[tauri::command]
-pub fn docker_disconnect(state: State<'_, DockerState>, endpoint_id: i64) -> Result<(), DockerError> {
+pub fn docker_disconnect(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+) -> Result<(), DockerError> {
     state.disconnect(endpoint_id)
 }
 
 #[tauri::command]
-pub fn docker_hostkey_decide(state: State<'_, DockerState>, link_id: u64, accept: bool) -> Result<(), DockerError> {
+pub fn docker_hostkey_decide(
+    state: State<'_, DockerState>,
+    link_id: u64,
+    accept: bool,
+) -> Result<(), DockerError> {
     state.decide_hostkey(link_id, accept)
 }
 
@@ -95,12 +153,26 @@ pub fn docker_answer(
 }
 
 #[tauri::command]
-pub async fn docker_summary(state: State<'_, DockerState>, endpoint_id: i64) -> Result<EngineSummary, DockerError> {
+pub async fn docker_summary(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+) -> Result<EngineSummary, DockerError> {
     state.summary(endpoint_id).await
 }
 
 #[tauri::command]
-pub async fn docker_containers(state: State<'_, DockerState>, endpoint_id: i64) -> Result<Vec<ContainerRow>, DockerError> {
+pub async fn docker_renew(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+) -> Result<(), DockerError> {
+    state.renew(endpoint_id).await
+}
+
+#[tauri::command]
+pub async fn docker_containers(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+) -> Result<Vec<ContainerRow>, DockerError> {
     state.containers(endpoint_id).await
 }
 
@@ -112,11 +184,17 @@ pub async fn docker_container_action(
     action: String,
     force: Option<bool>,
 ) -> Result<(), DockerError> {
-    state.container_action(endpoint_id, &id, &action, force.unwrap_or(false)).await
+    state
+        .container_action(endpoint_id, &id, &action, force.unwrap_or(false))
+        .await
 }
 
 #[tauri::command]
-pub async fn docker_container_inspect(state: State<'_, DockerState>, endpoint_id: i64, id: String) -> Result<Value, DockerError> {
+pub async fn docker_container_inspect(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    id: String,
+) -> Result<Value, DockerError> {
     state.container_inspect(endpoint_id, &id).await
 }
 
@@ -136,17 +214,28 @@ pub fn docker_task_stop(state: State<'_, DockerState>, task_id: u64) -> Result<(
 }
 
 #[tauri::command]
-pub async fn docker_images(state: State<'_, DockerState>, endpoint_id: i64) -> Result<Vec<ImageRow>, DockerError> {
+pub async fn docker_images(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+) -> Result<Vec<ImageRow>, DockerError> {
     state.images(endpoint_id).await
 }
 
 #[tauri::command]
-pub async fn docker_image_inspect(state: State<'_, DockerState>, endpoint_id: i64, name: String) -> Result<Value, DockerError> {
+pub async fn docker_image_inspect(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    name: String,
+) -> Result<Value, DockerError> {
     state.image_inspect(endpoint_id, &name).await
 }
 
 #[tauri::command]
-pub async fn docker_image_remove(state: State<'_, DockerState>, endpoint_id: i64, name: String) -> Result<(), DockerError> {
+pub async fn docker_image_remove(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    name: String,
+) -> Result<(), DockerError> {
     state.image_remove(endpoint_id, &name).await
 }
 
@@ -161,56 +250,143 @@ pub fn docker_image_pull(
 }
 
 #[tauri::command]
-pub async fn docker_networks(state: State<'_, DockerState>, endpoint_id: i64) -> Result<Vec<NetworkRow>, DockerError> {
+pub async fn docker_networks(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+) -> Result<Vec<NetworkRow>, DockerError> {
     state.networks(endpoint_id).await
 }
 
 #[tauri::command]
-pub async fn docker_network_inspect(state: State<'_, DockerState>, endpoint_id: i64, name: String) -> Result<Value, DockerError> {
+pub async fn docker_network_inspect(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    name: String,
+) -> Result<Value, DockerError> {
     state.network_inspect(endpoint_id, &name).await
 }
 
 #[tauri::command]
-pub async fn docker_network_remove(state: State<'_, DockerState>, endpoint_id: i64, name: String) -> Result<(), DockerError> {
+pub async fn docker_network_remove(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    name: String,
+) -> Result<(), DockerError> {
     state.network_remove(endpoint_id, &name).await
 }
 
 #[tauri::command]
-pub async fn docker_volumes(state: State<'_, DockerState>, endpoint_id: i64) -> Result<Vec<VolumeRow>, DockerError> {
+pub async fn docker_volumes(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+) -> Result<Vec<VolumeRow>, DockerError> {
     state.volumes(endpoint_id).await
 }
 
 #[tauri::command]
-pub async fn docker_volume_inspect(state: State<'_, DockerState>, endpoint_id: i64, name: String) -> Result<Value, DockerError> {
+pub async fn docker_volume_inspect(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    name: String,
+) -> Result<Value, DockerError> {
     state.volume_inspect(endpoint_id, &name).await
 }
 
 #[tauri::command]
-pub async fn docker_volume_remove(state: State<'_, DockerState>, endpoint_id: i64, name: String) -> Result<(), DockerError> {
+pub async fn docker_volume_remove(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    name: String,
+) -> Result<(), DockerError> {
     state.volume_remove(endpoint_id, &name).await
 }
 
 #[tauri::command]
-pub async fn docker_compose_projects(state: State<'_, DockerState>, endpoint_id: i64) -> Result<Vec<ComposeProject>, DockerError> {
+pub async fn docker_compose_projects(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+) -> Result<Vec<ComposeProject>, DockerError> {
     state.compose_projects(endpoint_id).await
 }
 
 #[tauri::command]
-pub fn docker_compose_preview(state: State<'_, DockerState>, path: String) -> Result<ComposePreview, DockerError> {
+pub fn docker_compose_preview(
+    state: State<'_, DockerState>,
+    path: String,
+) -> Result<ComposePreview, DockerError> {
     state.compose_preview(&path)
 }
 
 #[tauri::command]
-pub fn docker_compose_import(state: State<'_, DockerState>, endpoint_id: i64, path: String) -> Result<(), DockerError> {
+pub async fn docker_compose_create(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    draft: ComposeProjectRequest,
+) -> Result<(), DockerError> {
+    state.compose_create(endpoint_id, draft).await
+}
+
+#[tauri::command]
+pub fn docker_compose_import(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    path: String,
+) -> Result<(), DockerError> {
     state.compose_import_file(endpoint_id, &path)
 }
 
 #[tauri::command]
-pub async fn docker_compose_import_engine(state: State<'_, DockerState>, endpoint_id: i64, name: String) -> Result<(), DockerError> {
+pub async fn docker_compose_import_engine(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    name: String,
+) -> Result<(), DockerError> {
     state.compose_import_engine(endpoint_id, &name).await
 }
 
 #[tauri::command]
-pub fn docker_compose_forget(state: State<'_, DockerState>, endpoint_id: i64, id: i64) -> Result<(), DockerError> {
+pub fn docker_compose_forget(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    id: i64,
+) -> Result<(), DockerError> {
     state.compose_forget(endpoint_id, id)
+}
+
+#[tauri::command]
+pub async fn docker_compose_action(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    name: String,
+    action: String,
+) -> Result<(), DockerError> {
+    state.compose_action(endpoint_id, &name, &action).await
+}
+
+#[tauri::command]
+pub async fn docker_compose_remove(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    name: String,
+) -> Result<(), DockerError> {
+    state.compose_remove(endpoint_id, &name).await
+}
+
+#[tauri::command]
+pub async fn docker_compose_file(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    name: String,
+) -> Result<String, DockerError> {
+    state.compose_file(endpoint_id, &name).await
+}
+
+#[tauri::command]
+pub async fn docker_compose_logs(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    name: String,
+    events: Channel<Value>,
+) -> Result<u64, DockerError> {
+    state.compose_logs(endpoint_id, &name, events).await
 }

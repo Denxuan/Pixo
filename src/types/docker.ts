@@ -96,6 +96,15 @@ export type ComposeService = {
   ports: string[];
 };
 
+export type ComposeProjectRequest = {
+  name: string;
+  directory: string;
+  source: "file" | "yaml";
+  filePath?: string;
+  yaml?: string;
+  start?: boolean;
+};
+
 export type ComposePreview = {
   name: string;
   configPath: string;

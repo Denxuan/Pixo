@@ -9,10 +9,18 @@ pub struct SocketCandidate {
     pub hint: String,
 }
 
-pub fn socket_candidates(home: &Path, runtime: Option<&Path>, exists: impl Fn(&Path) -> bool) -> Vec<SocketCandidate> {
+pub fn socket_candidates(
+    home: &Path,
+    runtime: Option<&Path>,
+    exists: impl Fn(&Path) -> bool,
+) -> Vec<SocketCandidate> {
     let mut found = Vec::new();
     for (path, hint) in candidate_paths(home, runtime) {
-        if exists(&path) && !found.iter().any(|item: &SocketCandidate| item.path == path.to_string_lossy()) {
+        if exists(&path)
+            && !found
+                .iter()
+                .any(|item: &SocketCandidate| item.path == path.to_string_lossy())
+        {
             found.push(SocketCandidate {
                 path: path.to_string_lossy().into_owned(),
                 hint: hint.to_string(),
@@ -24,9 +32,18 @@ pub fn socket_candidates(home: &Path, runtime: Option<&Path>, exists: impl Fn(&P
 
 fn candidate_paths(home: &Path, runtime: Option<&Path>) -> Vec<(PathBuf, &'static str)> {
     let mut paths = Vec::new();
-    paths.push((home.join(".docker").join("run").join("docker.sock"), "docker-desktop"));
-    paths.push((home.join(".orbstack").join("run").join("docker.sock"), "orbstack"));
-    paths.push((home.join(".colima").join("default").join("docker.sock"), "colima"));
+    paths.push((
+        home.join(".docker").join("run").join("docker.sock"),
+        "docker-desktop",
+    ));
+    paths.push((
+        home.join(".orbstack").join("run").join("docker.sock"),
+        "orbstack",
+    ));
+    paths.push((
+        home.join(".colima").join("default").join("docker.sock"),
+        "colima",
+    ));
     paths.push((home.join(".rd").join("docker.sock"), "rancher"));
     paths.push((PathBuf::from("/var/run/docker.sock"), "engine"));
     if let Some(runtime) = runtime {

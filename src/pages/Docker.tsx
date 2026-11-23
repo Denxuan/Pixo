@@ -1,7 +1,7 @@
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-import { DockerRequestError, dockerAnswer, dockerConnect, dockerDeleteEndpoint, dockerDisconnect, dockerEndpoints, dockerHostKeyDecide, dockerSetEnabled, dockerStatus } from "@/api/docker";
+import { DockerRequestError, dockerAnswer, dockerConnect, dockerDeleteEndpoint, dockerDisconnect, dockerEndpoints, dockerHostKeyDecide, dockerRenew, dockerStatus } from "@/api/docker";
 import { SshRequestError, sshHosts, sshStatus } from "@/api/ssh";
 import EndpointForm from "@/components/docker/EndpointForm";
 import EndpointList from "@/components/docker/EndpointList";
@@ -17,9 +17,7 @@ import { dockerErrorText } from "@/utils/dockerMessage";
 
 export default function DockerPage() {
   const { t } = useTranslation();
-  const { token } = antdTheme.useToken();
   const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [busy, setBusy] = useState(false);
   const [endpoints, setEndpoints] = useState<DockerEndpoint[]>([]);
   const [hosts, setHosts] = useState<SshHost[]>([]);
   const [sshEnabled, setSshEnabled] = useState(false);
@@ -33,9 +31,13 @@ export default function DockerPage() {
   const [importOpen, setImportOpen] = useState(false);
   const ticket = useRef(0);
   const launchedEndpoint = useRef<number | null>(null);
+  const phaseRef = useRef("");
+  const reviving = useRef(false);
+  const connectRef = useRef<(endpoint: DockerEndpoint) => Promise<void>>(async () => undefined);
   const location = useLocation();
   const navigate = useNavigate();
   const selected = endpoints.find((item) => item.id === selectedId) ?? null;
+  phaseRef.current = phase;
 
   const reload = useCallback(async () => {
     const [status, listed, ssh] = await Promise.all([
@@ -84,28 +86,6 @@ export default function DockerPage() {
       stop?.();
     };
   }, []);
-
-  function changeEnabled(next: boolean) {
-    Modal.confirm({
-      title: t(next ? "zdx.text.docker.enableTitle" : "zdx.text.docker.disableTitle"),
-      content: t(next ? "zdx.text.docker.enableBody" : "zdx.text.docker.disableBody"),
-      okText: t(next ? "zdx.label.docker.enable" : "zdx.label.docker.confirm"),
-      cancelText: t("zdx.label.docker.cancel"),
-      onOk: async () => {
-        setBusy(true);
-        setError("");
-        try {
-          const status = await dockerSetEnabled(next);
-          setEnabled(status.enabled);
-          if (status.enabled) await reload();
-        } catch (caught) {
-          if (caught instanceof DockerRequestError) setError(dockerErrorText(t, caught));
-        } finally {
-          setBusy(false);
-        }
-      },
-    });
-  }
 
   const selectedRef = useRef<number | null>(null);
   selectedRef.current = selectedId;
@@ -183,6 +163,37 @@ export default function DockerPage() {
     }
   }
 
+  connectRef.current = connect;
+
+  function revive(endpoint: DockerEndpoint) {
+    if (reviving.current || phaseRef.current === "connecting") return;
+    reviving.current = true;
+    void connectRef.current(endpoint);
+  }
+
+  useEffect(() => {
+    if (phase !== "connecting") reviving.current = false;
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase !== "ready" || selectedId === null) return;
+    const endpoint = endpoints.find((item) => item.id === selectedId);
+    if (!endpoint) return;
+    let stopped = false;
+    const timer = window.setInterval(() => {
+      void dockerRenew(endpoint.id).catch((caught: unknown) => {
+        if (stopped) return;
+        if (caught instanceof DockerRequestError && (caught.code === "disconnected" || caught.code === "unreachable" || caught.code === "timeout")) {
+          revive(endpoint);
+        }
+      });
+    }, 20_000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [phase, selectedId, endpoints]);
+
   function remove(endpoint: DockerEndpoint) {
     Modal.confirm({
       title: t("zdx.text.docker.deleteConfirm", { name: endpoint.name }),
@@ -213,7 +224,6 @@ export default function DockerPage() {
       <Page
         title={t("zdx.label.docker.title")}
         description={t("zdx.text.docker.description")}
-        extra={<FeatureSwitch enabled={false} busy={busy} onChange={changeEnabled} />}
       >
         {error && <Alert className="mb-4" type="error" showIcon message={error} />}
         <Empty description={t("zdx.text.docker.disabled")} />
@@ -223,10 +233,6 @@ export default function DockerPage() {
 
   return (
     <div className="flex h-full min-h-0 w-full flex-1 flex-col">
-      <div className="flex shrink-0 items-center justify-between px-4 py-3" style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
-        <span className="font-medium" style={{ color: token.colorText }}>{t("zdx.label.docker.title")}</span>
-        <FeatureSwitch enabled busy={busy} onChange={changeEnabled} />
-      </div>
       <div className="flex min-h-0 flex-1">
       <HostSplit
         storageKey="pixo-docker-endpoint-pane"
@@ -260,7 +266,7 @@ export default function DockerPage() {
             </Empty>
           </div>
         )}
-        {selected && phase === "ready" && summary && <ResourcePanel endpointId={selected.id} summary={summary} />}
+        {selected && phase === "ready" && summary && <ResourcePanel endpointId={selected.id} summary={summary} host={containerHost(selected, hosts)} onLost={() => revive(selected)} />}
       </section>
         )}
       />
@@ -298,20 +304,8 @@ export default function DockerPage() {
   );
 }
 
-function FeatureSwitch({
-  enabled,
-  busy,
-  onChange,
-}: {
-  enabled: boolean;
-  busy: boolean;
-  onChange: (enabled: boolean) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <span className="flex items-center gap-2">
-      <Typography.Text>{t("zdx.label.docker.feature")}</Typography.Text>
-      <Switch aria-label={t("zdx.label.docker.feature")} checked={enabled} disabled={busy} onChange={onChange} />
-    </span>
-  );
+function containerHost(endpoint: DockerEndpoint, hosts: SshHost[]): string {
+  if (endpoint.kind === "ssh") return hosts.find((item) => item.id === endpoint.sshHostId)?.host ?? "";
+  if (endpoint.kind === "tcp" || endpoint.kind === "tls") return endpoint.host ?? "";
+  return "127.0.0.1";
 }

@@ -82,7 +82,8 @@ impl Store {
             }
         }
         conn.execute_batch(SNIPPETS).map_err(storage)?;
-        conn.pragma_update(None, "user_version", 5).map_err(storage)?;
+        conn.pragma_update(None, "user_version", 5)
+            .map_err(storage)?;
         Ok(Self { conn })
     }
 
@@ -130,7 +131,9 @@ impl Store {
     }
 
     pub fn save(&self, host: &NormalizedHost, now: i64) -> Result<Host, SshError> {
-        self.conn.execute_batch("BEGIN IMMEDIATE").map_err(storage)?;
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(storage)?;
         let saved = self.save_in_transaction(host, now);
         if saved.is_ok() {
             self.conn.execute_batch("COMMIT").map_err(storage)?;
@@ -217,7 +220,9 @@ impl Store {
                 serde_json::json!({ "hosts": names.join("、") }),
             ));
         }
-        self.conn.execute_batch("BEGIN IMMEDIATE").map_err(storage)?;
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .map_err(storage)?;
         let deleted = (|| {
             self.conn
                 .execute(
@@ -379,7 +384,10 @@ impl Store {
             )
             .optional()
             .map_err(storage)?;
-        let seconds = value.as_deref().and_then(|text| text.parse::<u32>().ok()).unwrap_or(30);
+        let seconds = value
+            .as_deref()
+            .and_then(|text| text.parse::<u32>().ok())
+            .unwrap_or(30);
         Ok(if seconds > 600 { 30 } else { seconds })
     }
 
@@ -414,7 +422,10 @@ impl Store {
         rows.collect::<Result<Vec<_>, _>>().map_err(storage)
     }
 
-    pub fn save_snippet(&self, draft: &super::model::SnippetDraft) -> Result<super::model::Snippet, SshError> {
+    pub fn save_snippet(
+        &self,
+        draft: &super::model::SnippetDraft,
+    ) -> Result<super::model::Snippet, SshError> {
         let title = draft.title.trim();
         let body = draft.body.trim();
         if title.is_empty()
@@ -673,7 +684,10 @@ mod tests {
         assert_eq!(store.save(&via, 4).unwrap().jumps, vec![jump.id]);
         via.jumps = vec![host.id];
         assert_eq!(store.save(&via, 5).unwrap_err().code, "jump_cycle");
-        assert_eq!(store.delete(jump.id, false).unwrap_err().code, "jump_in_use");
+        assert_eq!(
+            store.delete(jump.id, false).unwrap_err().code,
+            "jump_in_use"
+        );
         store.delete(jump.id, true).unwrap();
         assert!(store.get(jump.id).is_err());
         let _ = std::fs::remove_file(path);

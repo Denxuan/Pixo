@@ -100,7 +100,11 @@ impl Library {
         Ok(changed > 0)
     }
 
-    pub fn list(&self, query: Option<&str>, limit: u32) -> Result<Vec<LibraryItem>, ScreenshotError> {
+    pub fn list(
+        &self,
+        query: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<LibraryItem>, ScreenshotError> {
         let limit = limit.clamp(1, 200);
         let pattern = query
             .map(str::trim)
@@ -129,7 +133,9 @@ impl Library {
             }
         }
         for id in missing {
-            let _ = self.conn.execute("DELETE FROM shot_files WHERE id = ?1", params![id]);
+            let _ = self
+                .conn
+                .execute("DELETE FROM shot_files WHERE id = ?1", params![id]);
         }
         Ok(items)
     }

@@ -11,7 +11,9 @@ use tokio::sync::{oneshot, watch};
 
 use super::cwd::CwdState;
 use super::error::SshError;
-use super::remote::{join_remote, normalize_absolute, parent_remote, renamed_file, valid_component};
+use super::remote::{
+    join_remote, normalize_absolute, parent_remote, renamed_file, valid_component,
+};
 
 const CHUNK: usize = 256 * 1024;
 const MAX_ROOTS: usize = 500;
@@ -746,7 +748,10 @@ struct RemoteFile {
 
 pub async fn list_dir(sftp: &SftpSession, path: &str) -> Result<RemoteListing, SshError> {
     let mut entries = Vec::new();
-    let listed = sftp.read_dir(path).await.map_err(|error| map_sftp(&error))?;
+    let listed = sftp
+        .read_dir(path)
+        .await
+        .map_err(|error| map_sftp(&error))?;
     for entry in listed {
         let name = entry.file_name();
         if !super::remote::valid_component(&name) {
@@ -770,7 +775,11 @@ pub async fn list_dir(sftp: &SftpSession, path: &str) -> Result<RemoteListing, S
             .kind
             .eq("dir")
             .cmp(&left.kind.eq("dir"))
-            .then_with(|| left.name.to_ascii_lowercase().cmp(&right.name.to_ascii_lowercase()))
+            .then_with(|| {
+                left.name
+                    .to_ascii_lowercase()
+                    .cmp(&right.name.to_ascii_lowercase())
+            })
     });
     Ok(RemoteListing {
         path: path.to_string(),
@@ -781,7 +790,9 @@ pub async fn list_dir(sftp: &SftpSession, path: &str) -> Result<RemoteListing, S
 
 pub async fn make_dir(sftp: &SftpSession, path: &str) -> Result<(), SshError> {
     let path = checked_remote(path)?;
-    sftp.create_dir(path).await.map_err(|error| map_sftp(&error))
+    sftp.create_dir(path)
+        .await
+        .map_err(|error| map_sftp(&error))
 }
 
 pub async fn rename_path(sftp: &SftpSession, from: &str, to: &str) -> Result<(), SshError> {
@@ -790,7 +801,9 @@ pub async fn rename_path(sftp: &SftpSession, from: &str, to: &str) -> Result<(),
     if from == to {
         return Err(SshError::new("invalid_input"));
     }
-    sftp.rename(from, to).await.map_err(|error| map_sftp(&error))
+    sftp.rename(from, to)
+        .await
+        .map_err(|error| map_sftp(&error))
 }
 
 pub async fn remove_path(sftp: &SftpSession, path: &str) -> Result<(), SshError> {
@@ -802,7 +815,9 @@ pub async fn remove_path(sftp: &SftpSession, path: &str) -> Result<(), SshError>
             return Err(SshError::new("transfer_failed"));
         }
         if expanded {
-            sftp.remove_dir(current).await.map_err(|error| map_sftp(&error))?;
+            sftp.remove_dir(current)
+                .await
+                .map_err(|error| map_sftp(&error))?;
             removed += 1;
             continue;
         }
@@ -811,22 +826,30 @@ pub async fn remove_path(sftp: &SftpSession, path: &str) -> Result<(), SshError>
             .await
             .map_err(|error| map_sftp(&error))?;
         if meta.file_type() != FileType::Dir {
-            sftp.remove_file(current).await.map_err(|error| map_sftp(&error))?;
+            sftp.remove_file(current)
+                .await
+                .map_err(|error| map_sftp(&error))?;
             removed += 1;
             continue;
         }
         pending.push((current.clone(), true));
-        let listed = sftp.read_dir(&current).await.map_err(|error| map_sftp(&error))?;
+        let listed = sftp
+            .read_dir(&current)
+            .await
+            .map_err(|error| map_sftp(&error))?;
         for entry in listed {
             let name = entry.file_name();
             if !valid_component(&name) {
                 continue;
             }
-            let child = join_remote(&current, &name).ok_or_else(|| SshError::new("invalid_input"))?;
+            let child =
+                join_remote(&current, &name).ok_or_else(|| SshError::new("invalid_input"))?;
             if entry.file_type() == FileType::Dir {
                 pending.push((child, false));
             } else {
-                sftp.remove_file(child).await.map_err(|error| map_sftp(&error))?;
+                sftp.remove_file(child)
+                    .await
+                    .map_err(|error| map_sftp(&error))?;
                 removed += 1;
             }
         }
@@ -856,7 +879,16 @@ pub async fn receive_all(
     let mut directories = Vec::new();
     let mut skipped = 0u64;
     for path in paths {
-        collect_remote(sftp, path, "", &mut files, &mut directories, &mut skipped, 0).await?;
+        collect_remote(
+            sftp,
+            path,
+            "",
+            &mut files,
+            &mut directories,
+            &mut skipped,
+            0,
+        )
+        .await?;
     }
     for directory in &directories {
         let path = local_within(root, directory).ok_or_else(|| SshError::new("invalid_input"))?;
@@ -865,7 +897,9 @@ pub async fn receive_all(
             return Err(SshError::new("transfer_failed"));
         }
     }
-    let total_bytes = files.iter().fold(0u64, |sum, file| sum.saturating_add(file.bytes));
+    let total_bytes = files
+        .iter()
+        .fold(0u64, |sum, file| sum.saturating_add(file.bytes));
     let _ = progress.send(json!({
         "type": "started",
         "taskId": task_id,
@@ -882,7 +916,19 @@ pub async fn receive_all(
             return Err(SshError::new("cancelled"));
         }
         let name = file.relative.rsplit('/').next().unwrap_or(&file.relative);
-        match save_remote_file(sftp, root, file, task_id, progress, cancel, gate, &mut sent, total_bytes).await {
+        match save_remote_file(
+            sftp,
+            root,
+            file,
+            task_id,
+            progress,
+            cancel,
+            gate,
+            &mut sent,
+            total_bytes,
+        )
+        .await
+        {
             Ok(Item::Skipped) => skipped += 1,
             Ok(_) => downloaded += 1,
             Err(error) if error.code == "cancelled" => return Err(error),
@@ -944,7 +990,10 @@ async fn collect_remote(
             }),
             FileType::Dir => {
                 directories.push(relative.clone());
-                let listed = sftp.read_dir(&remote).await.map_err(|error| map_sftp(&error))?;
+                let listed = sftp
+                    .read_dir(&remote)
+                    .await
+                    .map_err(|error| map_sftp(&error))?;
                 for entry in listed {
                     let child = entry.file_name();
                     if !super::remote::valid_component(&child) {
@@ -969,8 +1018,14 @@ async fn save_remote_file(
     sent: &mut u64,
     total_bytes: u64,
 ) -> Result<Item, SshError> {
-    let mut destination = local_within(root, &file.relative).ok_or_else(|| SshError::new("invalid_input"))?;
-    let name = file.relative.rsplit('/').next().unwrap_or(&file.relative).to_string();
+    let mut destination =
+        local_within(root, &file.relative).ok_or_else(|| SshError::new("invalid_input"))?;
+    let name = file
+        .relative
+        .rsplit('/')
+        .next()
+        .unwrap_or(&file.relative)
+        .to_string();
     if local_exists(&destination) {
         match gate.choose_for(progress, task_id, &name, cancel).await? {
             Policy::Skip => {
@@ -980,10 +1035,12 @@ async fn save_remote_file(
                 return Ok(Item::Skipped);
             }
             Policy::Rename => {
-                destination = local_renamed(&destination).ok_or_else(|| SshError::new("transfer_failed"))?;
+                destination =
+                    local_renamed(&destination).ok_or_else(|| SshError::new("transfer_failed"))?;
             }
             Policy::Overwrite => {
-                let meta = std::fs::symlink_metadata(&destination).map_err(|error| map_local_io(&error))?;
+                let meta = std::fs::symlink_metadata(&destination)
+                    .map_err(|error| map_local_io(&error))?;
                 if meta.is_dir() {
                     return Err(SshError::new("transfer_failed"));
                 }
@@ -999,7 +1056,18 @@ async fn save_remote_file(
     let mut temp_name = destination.as_os_str().to_os_string();
     temp_name.push(".pixo-part");
     let temp = PathBuf::from(temp_name);
-    let result = write_local_part(sftp, file, &temp, &name, task_id, progress, cancel, sent, total_bytes).await;
+    let result = write_local_part(
+        sftp,
+        file,
+        &temp,
+        &name,
+        task_id,
+        progress,
+        cancel,
+        sent,
+        total_bytes,
+    )
+    .await;
     if result.is_err() {
         let _ = std::fs::remove_file(&temp);
         return result.map(|_| Item::Uploaded);
@@ -1031,8 +1099,13 @@ async fn write_local_part(
     sent: &mut u64,
     total_bytes: u64,
 ) -> Result<(), SshError> {
-    let mut remote = sftp.open(&file.remote).await.map_err(|error| map_sftp(&error))?;
-    let mut local = tokio::fs::File::create(temp).await.map_err(|error| map_local_io(&error))?;
+    let mut remote = sftp
+        .open(&file.remote)
+        .await
+        .map_err(|error| map_sftp(&error))?;
+    let mut local = tokio::fs::File::create(temp)
+        .await
+        .map_err(|error| map_local_io(&error))?;
     let mut buffer = vec![0u8; CHUNK];
     let mut reported = Instant::now() - Duration::from_secs(1);
     emit_progress(progress, task_id, name, *sent, total_bytes);
@@ -1040,7 +1113,10 @@ async fn write_local_part(
         if *cancel.borrow() {
             return Err(SshError::new("cancelled"));
         }
-        let read = remote.read(&mut buffer).await.map_err(|error| map_remote_io(&error))?;
+        let read = remote
+            .read(&mut buffer)
+            .await
+            .map_err(|error| map_remote_io(&error))?;
         if read == 0 {
             break;
         }
@@ -1098,7 +1174,9 @@ fn stays_under(root: &Path, path: &Path) -> Result<bool, SshError> {
     {
         return Ok(false);
     }
-    let relative = path.strip_prefix(root).map_err(|_| SshError::new("transfer_failed"))?;
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| SshError::new("transfer_failed"))?;
     for part in relative.components() {
         let std::path::Component::Normal(part) = part else {
             return Ok(false);

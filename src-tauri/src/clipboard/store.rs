@@ -1246,7 +1246,9 @@ mod tests {
     #[test]
     fn a_label_is_searchable_and_can_be_cleared() {
         let (mut store, directory) = test_store();
-        let added = store.upsert(text_request("named", "build command", 1)).unwrap();
+        let added = store
+            .upsert(text_request("named", "build command", 1))
+            .unwrap();
         let id = match added {
             UpsertResult::Added(item) => item.id,
             UpsertResult::Updated { summary } => summary.id,

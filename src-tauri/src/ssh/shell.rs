@@ -5,7 +5,10 @@ pub fn cwd_hook(nonce: &str) -> Result<String, SshError> {
         return Err(SshError::new("invalid_input"));
     }
     let command = r#"printf '\033]7;file://localhost%s\007' "$PWD"; [ -n "$BASH_VERSION" ] && PROMPT_COMMAND=${PROMPT_COMMAND:+$PROMPT_COMMAND; }'printf "\033]7;file://localhost%s\007" "$PWD"'; [ -n "$ZSH_VERSION" ] && eval 'precmd_pixo() { printf "\033]7;file://localhost%s\007" "$PWD"; }; precmd_functions+=(precmd_pixo)'"#;
-    Ok(format!("{command}; {color}; stty echo # PIXO{nonce}\n", color = color_setup()))
+    Ok(format!(
+        "{command}; {color}; stty echo # PIXO{nonce}\n",
+        color = color_setup()
+    ))
 }
 
 fn color_setup() -> &'static str {

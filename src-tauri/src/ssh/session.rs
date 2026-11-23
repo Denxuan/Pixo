@@ -18,10 +18,12 @@ use super::cwd::CwdState;
 use super::dial::{self, Bridge, ClientHandler};
 use super::error::{SshError, log_ssh};
 use super::flow::wait_for_output_room;
+use super::forward::parse_forward;
 use super::grant;
 use super::known_hosts::{KnownStore, user_known_hosts_path};
-use super::forward::parse_forward;
-use super::model::{AuthKind, ForwardView, Host, HostDraft, Snippet, SnippetDraft, SshStatus, normalize};
+use super::model::{
+    AuthKind, ForwardView, Host, HostDraft, Snippet, SnippetDraft, SshStatus, normalize,
+};
 use super::remote::normalize_absolute;
 use super::secret;
 use super::shell::{cwd_hook, shell_single_quote};
@@ -550,7 +552,16 @@ impl SshState {
         let transfers = Arc::clone(&control.transfers);
         let bridge = Arc::clone(&control.bridge);
         tauri::async_runtime::spawn(async move {
-            let outcome = run_upload(handle, cwd, paths, task_id, progress.clone(), cancel_rx, gate).await;
+            let outcome = run_upload(
+                handle,
+                cwd,
+                paths,
+                task_id,
+                progress.clone(),
+                cancel_rx,
+                gate,
+            )
+            .await;
             lock(&transfers).remove(&task_id);
             if let Err(error) = outcome {
                 report_transfer_failure(&progress, task_id, error, *bridge.cancel.borrow());
@@ -566,9 +577,7 @@ impl SshState {
     ) -> Result<transfer::RemoteListing, SshError> {
         let control = control(&self.inner, session_id)?;
         let path = if path.trim().is_empty() {
-            lock(&control.cwd)
-                .path()
-                .unwrap_or_else(|| "/".to_string())
+            lock(&control.cwd).path().unwrap_or_else(|| "/".to_string())
         } else {
             normalize_absolute(&path).ok_or_else(|| SshError::new("invalid_input"))?
         };
@@ -586,7 +595,12 @@ impl SshState {
         result
     }
 
-    pub async fn rename_path(&self, session_id: u64, from: String, to: String) -> Result<(), SshError> {
+    pub async fn rename_path(
+        &self,
+        session_id: u64,
+        from: String,
+        to: String,
+    ) -> Result<(), SshError> {
         let control = control(&self.inner, session_id)?;
         let sftp = open_sftp(&control.handle).await?;
         let result = transfer::rename_path(&sftp, &from, &to).await;
@@ -668,7 +682,16 @@ impl SshState {
         let transfers = Arc::clone(&control.transfers);
         let bridge = Arc::clone(&control.bridge);
         tauri::async_runtime::spawn(async move {
-            let outcome = run_download(handle, root, paths, task_id, progress.clone(), cancel_rx, gate).await;
+            let outcome = run_download(
+                handle,
+                root,
+                paths,
+                task_id,
+                progress.clone(),
+                cancel_rx,
+                gate,
+            )
+            .await;
             lock(&transfers).remove(&task_id);
             if let Err(error) = outcome {
                 report_transfer_failure(&progress, task_id, error, *bridge.cancel.borrow());
@@ -689,7 +712,9 @@ impl SshState {
             .ok_or_else(|| SshError::new("not_found"))?;
         let new_id = match plan {
             TransferPlan::Upload { paths } => self.launch_upload(session_id, paths, progress)?,
-            TransferPlan::Download { root, remote } => self.launch_download(session_id, root, remote, progress)?,
+            TransferPlan::Download { root, remote } => {
+                self.launch_download(session_id, root, remote, progress)?
+            }
         };
         self.forget_transfer(task_id);
         Ok(new_id)
@@ -704,7 +729,11 @@ impl SshState {
         let now = Instant::now();
         map.retain(|_, replay| now.saturating_duration_since(replay.at) < REPLAY_TTL);
         if !map.contains_key(&task_id) && map.len() >= REPLAY_LIMIT {
-            if let Some(oldest) = map.iter().min_by_key(|(_, replay)| replay.at).map(|(id, _)| *id) {
+            if let Some(oldest) = map
+                .iter()
+                .min_by_key(|(_, replay)| replay.at)
+                .map(|(id, _)| *id)
+            {
                 map.remove(&oldest);
             }
         }
@@ -840,7 +869,10 @@ async fn open_shell(
         known: Arc::clone(&inner.known),
     };
     let dialed = dial::open(&env, host, &jump_hosts, bridge, events).await?;
-    let dial::Dialed { target: handle, jumps } = dialed;
+    let dial::Dialed {
+        target: handle,
+        jumps,
+    } = dialed;
     {
         let mut slot = handle_slot.lock().await;
         *slot = Some(handle);
@@ -1013,7 +1045,16 @@ async fn run_download(
     gate: Arc<DecisionGate>,
 ) -> Result<(), SshError> {
     let sftp = open_sftp(&handle).await?;
-    let result = transfer::receive_all(&sftp, &root, &paths, task_id, &progress, &mut cancel, gate.as_ref()).await;
+    let result = transfer::receive_all(
+        &sftp,
+        &root,
+        &paths,
+        task_id,
+        &progress,
+        &mut cancel,
+        gate.as_ref(),
+    )
+    .await;
     let _ = sftp.close().await;
     result
 }
@@ -1140,7 +1181,12 @@ fn transfer_failure_code(code: &'static str, session_cancelled: bool) -> &'stati
     }
 }
 
-fn report_transfer_failure(progress: &Channel<Value>, task_id: u64, error: SshError, session_cancelled: bool) {
+fn report_transfer_failure(
+    progress: &Channel<Value>,
+    task_id: u64,
+    error: SshError,
+    session_cancelled: bool,
+) {
     let code = transfer_failure_code(error.code, session_cancelled);
     log_ssh("transfer", 0, code);
     let _ = progress.send(json!({

@@ -60,7 +60,8 @@ impl Store {
                  );",
             )
             .map_err(storage)?;
-            conn.pragma_update(None, "user_version", 2).map_err(storage)?;
+            conn.pragma_update(None, "user_version", 2)
+                .map_err(storage)?;
         }
         Ok(Self { conn })
     }
@@ -106,7 +107,12 @@ impl Store {
             .ok_or_else(|| DockerError::new("not_found"))
     }
 
-    pub fn save(&self, endpoint: &NormalizedEndpoint, source: &str, now: i64) -> Result<Endpoint, DockerError> {
+    pub fn save(
+        &self,
+        endpoint: &NormalizedEndpoint,
+        source: &str,
+        now: i64,
+    ) -> Result<Endpoint, DockerError> {
         if source != "manual" && source != "context" {
             return Err(DockerError::new("invalid_input"));
         }
@@ -180,7 +186,10 @@ impl Store {
             return Err(DockerError::new("not_found"));
         }
         self.conn
-            .execute("DELETE FROM docker_compose_projects WHERE endpoint_id = ?1", params![id])
+            .execute(
+                "DELETE FROM docker_compose_projects WHERE endpoint_id = ?1",
+                params![id],
+            )
             .map_err(storage)?;
         Ok(())
     }
@@ -219,7 +228,8 @@ impl Store {
         services: &[ComposeService],
         now: i64,
     ) -> Result<SavedCompose, DockerError> {
-        let services_json = serde_json::to_string(services).map_err(|_| DockerError::new("invalid_input"))?;
+        let services_json =
+            serde_json::to_string(services).map_err(|_| DockerError::new("invalid_input"))?;
         self.conn
             .execute(
                 "INSERT INTO docker_compose_projects (endpoint_id, name, config_path, working_dir, services, created_at)
@@ -266,7 +276,11 @@ impl Store {
     fn bool_setting(&self, key: &str, default: bool) -> Result<bool, DockerError> {
         let value = self
             .conn
-            .query_row("SELECT value FROM docker_settings WHERE key = ?1", params![key], |row| row.get::<_, String>(0))
+            .query_row(
+                "SELECT value FROM docker_settings WHERE key = ?1",
+                params![key],
+                |row| row.get::<_, String>(0),
+            )
             .optional()
             .map_err(storage)?;
         Ok(match value.as_deref() {
@@ -279,7 +293,9 @@ impl Store {
 
 fn row_to_endpoint(row: &rusqlite::Row<'_>) -> rusqlite::Result<Endpoint> {
     let kind = row.get::<_, String>(2)?;
-    let kind = EndpointKind::parse(&kind).ok_or_else(|| rusqlite::Error::InvalidColumnType(2, "kind".into(), rusqlite::types::Type::Text))?;
+    let kind = EndpointKind::parse(&kind).ok_or_else(|| {
+        rusqlite::Error::InvalidColumnType(2, "kind".into(), rusqlite::types::Type::Text)
+    })?;
     let port = row.get::<_, Option<i64>>(7)?;
     Ok(Endpoint {
         id: row.get(0)?,

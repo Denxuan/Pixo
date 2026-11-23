@@ -50,7 +50,10 @@ pub fn ssh_config_preview(
 }
 
 #[tauri::command]
-pub fn ssh_config_import(state: State<'_, SshState>, indexes: Vec<u32>) -> Result<Vec<Host>, SshError> {
+pub fn ssh_config_import(
+    state: State<'_, SshState>,
+    indexes: Vec<u32>,
+) -> Result<Vec<Host>, SshError> {
     if indexes.len() > 500 {
         return Err(SshError::new("invalid_input"));
     }
@@ -204,7 +207,12 @@ pub fn ssh_transfer_start(
         return Err(SshError::new("invalid_input"));
     }
     if direction.as_deref() == Some("download") {
-        return state.download(session_id, token, remote_paths.unwrap_or_default(), progress);
+        return state.download(
+            session_id,
+            token,
+            remote_paths.unwrap_or_default(),
+            progress,
+        );
     }
     state.upload(session_id, token, progress)
 }
@@ -222,7 +230,11 @@ pub async fn ssh_list_dir(
 }
 
 #[tauri::command]
-pub async fn ssh_make_dir(state: State<'_, SshState>, session_id: u64, path: String) -> Result<(), SshError> {
+pub async fn ssh_make_dir(
+    state: State<'_, SshState>,
+    session_id: u64,
+    path: String,
+) -> Result<(), SshError> {
     if path.len() > 4096 {
         return Err(SshError::new("invalid_input"));
     }
@@ -255,7 +267,10 @@ pub async fn ssh_remove(
 }
 
 #[tauri::command]
-pub async fn ssh_pick_download_dir(app: AppHandle, title: String) -> Result<Option<UploadPick>, SshError> {
+pub async fn ssh_pick_download_dir(
+    app: AppHandle,
+    title: String,
+) -> Result<Option<UploadPick>, SshError> {
     if title.chars().count() > 80 {
         return Err(SshError::new("invalid_input"));
     }
@@ -267,7 +282,9 @@ pub async fn ssh_pick_download_dir(app: AppHandle, title: String) -> Result<Opti
     let Some(path) = picked else {
         return Ok(None);
     };
-    let path = path.into_path().map_err(|_| SshError::new("invalid_input"))?;
+    let path = path
+        .into_path()
+        .map_err(|_| SshError::new("invalid_input"))?;
     grant::issue(std::slice::from_ref(&path)).map(Some)
 }
 

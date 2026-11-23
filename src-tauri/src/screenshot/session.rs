@@ -13,8 +13,8 @@ use super::bytes::{decode_base64, decode_rgba_png, encode_jpeg};
 use super::capture::{self, CapturedMonitor};
 use super::clock::unique_file;
 use super::error::ScreenshotError;
-use super::library::{Library, LibraryItem};
 use super::frame;
+use super::library::{Library, LibraryItem};
 use super::model::{Editor, EditorDocument, Rect, ShotSettings};
 use super::snap::{Bounds, snap_windows};
 use super::windows;
@@ -870,8 +870,8 @@ impl ScreenshotState {
                 .map_err(clipboard_error)?;
             return Ok(());
         }
-        let image = image::load_from_memory(&encoded)
-            .map_err(|_| ScreenshotError::new("invalid_input"))?;
+        let image =
+            image::load_from_memory(&encoded).map_err(|_| ScreenshotError::new("invalid_input"))?;
         let rgba = image.to_rgba8();
         clipboard
             .record_produced_image(rgba.width(), rgba.height(), rgba.as_raw())

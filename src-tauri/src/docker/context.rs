@@ -28,7 +28,9 @@ pub struct ImportableContext {
     pub current: bool,
 }
 
-pub fn load_previews(ssh_hosts: &[(i64, String, String, u16)]) -> Result<Vec<ContextPreview>, DockerError> {
+pub fn load_previews(
+    ssh_hosts: &[(i64, String, String, u16)],
+) -> Result<Vec<ContextPreview>, DockerError> {
     Ok(load_contexts(ssh_hosts)?
         .into_iter()
         .enumerate()
@@ -47,7 +49,10 @@ pub fn load_previews(ssh_hosts: &[(i64, String, String, u16)]) -> Result<Vec<Con
         .collect())
 }
 
-pub fn selected_contexts(indexes: &[u32], ssh_hosts: &[(i64, String, String, u16)]) -> Result<Vec<NormalizedEndpoint>, DockerError> {
+pub fn selected_contexts(
+    indexes: &[u32],
+    ssh_hosts: &[(i64, String, String, u16)],
+) -> Result<Vec<NormalizedEndpoint>, DockerError> {
     if indexes.len() > 200 {
         return Err(DockerError::new("invalid_input"));
     }
@@ -68,7 +73,9 @@ pub fn selected_contexts(indexes: &[u32], ssh_hosts: &[(i64, String, String, u16
     Ok(chosen)
 }
 
-fn load_contexts(ssh_hosts: &[(i64, String, String, u16)]) -> Result<Vec<ImportableContext>, DockerError> {
+fn load_contexts(
+    ssh_hosts: &[(i64, String, String, u16)],
+) -> Result<Vec<ImportableContext>, DockerError> {
     let Some(root) = docker_config_dir() else {
         return Ok(Vec::new());
     };
@@ -115,8 +122,16 @@ fn load_contexts(ssh_hosts: &[(i64, String, String, u16)]) -> Result<Vec<Importa
     Ok(items)
 }
 
-pub fn parse_meta(value: &Value, tls_dir: &Path, ssh_hosts: &[(i64, String, String, u16)]) -> Option<ImportableContext> {
-    let name = value.get("Name").and_then(Value::as_str).unwrap_or("").trim();
+pub fn parse_meta(
+    value: &Value,
+    tls_dir: &Path,
+    ssh_hosts: &[(i64, String, String, u16)],
+) -> Option<ImportableContext> {
+    let name = value
+        .get("Name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
     if name.is_empty() || name.chars().count() > 128 {
         return None;
     }
@@ -153,7 +168,10 @@ pub fn parse_meta(value: &Value, tls_dir: &Path, ssh_hosts: &[(i64, String, Stri
         }
     } else if let Some(path) = host.strip_prefix("npipe://") {
         draft.kind = EndpointKind::Local;
-        let pipe = path.rsplit(['/', '\\']).find(|part| !part.is_empty()).unwrap_or("docker_engine");
+        let pipe = path
+            .rsplit(['/', '\\'])
+            .find(|part| !part.is_empty())
+            .unwrap_or("docker_engine");
         draft.socket_path = Some(format!(r"\\.\pipe\{pipe}"));
         if cfg!(unix) {
             warning = Some("unsupported".to_string());
@@ -167,9 +185,13 @@ pub fn parse_meta(value: &Value, tls_dir: &Path, ssh_hosts: &[(i64, String, Stri
         if user.is_empty() {
             warning = Some("ssh_unmatched".to_string());
             importable = false;
-        } else if let Some((id, _, _, _)) = ssh_hosts.iter().find(|(_, known_user, known_host, known_port)| {
-            known_user == &user && known_host == &address && *known_port == port
-        }) {
+        } else if let Some((id, _, _, _)) =
+            ssh_hosts
+                .iter()
+                .find(|(_, known_user, known_host, known_port)| {
+                    known_user == &user && known_host == &address && *known_port == port
+                })
+        {
             draft.ssh_host_id = Some(*id);
             draft.remote_socket = Some("/var/run/docker.sock".into());
         } else {
@@ -232,7 +254,10 @@ fn detail_of(draft: &EndpointDraft) -> String {
         EndpointKind::Ssh => format!(
             "{}{}",
             draft.host.clone().unwrap_or_default(),
-            draft.port.map(|port| format!(":{port}")).unwrap_or_default()
+            draft
+                .port
+                .map(|port| format!(":{port}"))
+                .unwrap_or_default()
         ),
         EndpointKind::Tls | EndpointKind::Tcp => format!(
             "{}:{}",
@@ -269,7 +294,9 @@ fn parse_ssh_authority(value: &str) -> Option<(String, String, u16)> {
         return None;
     }
     let (user, hostport) = match value.rsplit_once('@') {
-        Some((user, hostport)) if !user.is_empty() && !user.contains('@') => (user.to_string(), hostport),
+        Some((user, hostport)) if !user.is_empty() && !user.contains('@') => {
+            (user.to_string(), hostport)
+        }
         _ => (String::new(), value),
     };
     let (host, port) = split_host_port(hostport, 22)?;
@@ -286,7 +313,11 @@ fn split_host_port(value: &str, default_port: u16) -> Option<(String, u16)> {
         if host.is_empty() {
             return None;
         }
-        let port = if port.is_empty() { default_port } else { port.parse().ok()? };
+        let port = if port.is_empty() {
+            default_port
+        } else {
+            port.parse().ok()?
+        };
         return Some((host.to_string(), port));
     }
     if let Some((host, port)) = value.rsplit_once(':') {
@@ -325,7 +356,10 @@ mod tests {
             "Endpoints": { "docker": { "Host": "unix:///Users/dev/.docker/run/docker.sock" } }
         });
         let parsed = parse_meta(&unix, Path::new("/missing"), &[]).unwrap();
-        assert_eq!(parsed.draft.socket_path.as_deref(), Some("/Users/dev/.docker/run/docker.sock"));
+        assert_eq!(
+            parsed.draft.socket_path.as_deref(),
+            Some("/Users/dev/.docker/run/docker.sock")
+        );
         assert!(parsed.importable);
 
         let tcp = serde_json::json!({

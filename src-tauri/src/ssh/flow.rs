@@ -23,19 +23,23 @@ impl OutputWindow {
         if bytes == 0 {
             return;
         }
-        let _ = self.unacked.try_update(Ordering::Release, Ordering::Relaxed, |current| {
-            Some(current.saturating_add(bytes))
-        });
+        let _ = self
+            .unacked
+            .try_update(Ordering::Release, Ordering::Relaxed, |current| {
+                Some(current.saturating_add(bytes))
+            });
     }
 
     pub(crate) fn release(&self, bytes: u64) {
         if bytes == 0 {
             return;
         }
-        let updated = self.unacked.try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-            let next = current.saturating_sub(bytes);
-            (next != current).then_some(next)
-        });
+        let updated = self
+            .unacked
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                let next = current.saturating_sub(bytes);
+                (next != current).then_some(next)
+            });
         if updated.is_ok() {
             self.notify.notify_waiters();
         }
@@ -46,7 +50,10 @@ impl OutputWindow {
     }
 }
 
-pub(crate) async fn wait_for_output_room(window: &OutputWindow, cancel: &mut watch::Receiver<bool>) -> bool {
+pub(crate) async fn wait_for_output_room(
+    window: &OutputWindow,
+    cancel: &mut watch::Receiver<bool>,
+) -> bool {
     loop {
         if *cancel.borrow() {
             return false;

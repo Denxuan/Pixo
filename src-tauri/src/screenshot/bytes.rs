@@ -95,7 +95,8 @@ pub fn preview_jpeg(encoded: &[u8], max_edge: u32) -> Result<Vec<u8>, Screenshot
     if encoded.len() > 40 * 1024 * 1024 {
         return Err(ScreenshotError::new("too_large"));
     }
-    let image = image::load_from_memory(encoded).map_err(|_| ScreenshotError::new("invalid_input"))?;
+    let image =
+        image::load_from_memory(encoded).map_err(|_| ScreenshotError::new("invalid_input"))?;
     let edge = max_edge.clamp(32, 480);
     let thumb = image.thumbnail(edge, edge);
     let rgba = thumb.to_rgba8();

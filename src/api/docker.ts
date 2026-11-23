@@ -14,8 +14,8 @@ import type {
   ImageRow,
   NetworkRow,
   ComposePreview,
+  ComposeProjectRequest,
   ComposeProject,
-  VolumeRow,
 } from "@/types/docker";
 import { isDesktop } from "@/utils/desktop";
 
@@ -71,6 +71,7 @@ export const dockerContextPreview = () => call<DockerContextPreview[]>("docker_c
 export const dockerContextImport = (indexes: number[]) => call<DockerEndpoint[]>("docker_contexts_import", { indexes });
 export const dockerPickFile = (title: string) => call<string | null>("docker_pick_file", { title });
 export const dockerDisconnect = (endpointId: number) => call<void>("docker_disconnect", { endpointId });
+export const dockerRenew = (endpointId: number) => call<void>("docker_renew", { endpointId });
 export const dockerHostKeyDecide = (linkId: number, accept: boolean) => call<void>("docker_hostkey_decide", { linkId, accept });
 export const dockerAnswer = (linkId: number, promptId: number, secret: string, remember: boolean, cancel: boolean) =>
   call<void>("docker_answer", { linkId, promptId, secret, remember, cancel });
@@ -85,14 +86,17 @@ export const dockerImageRemove = (endpointId: number, name: string) => call<void
 export const dockerNetworks = (endpointId: number) => call<NetworkRow[]>("docker_networks", { endpointId });
 export const dockerNetworkInspect = (endpointId: number, name: string) => call<unknown>("docker_network_inspect", { endpointId, name });
 export const dockerNetworkRemove = (endpointId: number, name: string) => call<void>("docker_network_remove", { endpointId, name });
-export const dockerVolumes = (endpointId: number) => call<VolumeRow[]>("docker_volumes", { endpointId });
-export const dockerVolumeInspect = (endpointId: number, name: string) => call<unknown>("docker_volume_inspect", { endpointId, name });
-export const dockerVolumeRemove = (endpointId: number, name: string) => call<void>("docker_volume_remove", { endpointId, name });
 export const dockerComposeProjects = (endpointId: number) => call<ComposeProject[]>("docker_compose_projects", { endpointId });
 export const dockerComposePreview = (path: string) => call<ComposePreview>("docker_compose_preview", { path });
+export const dockerPickFolder = (title: string) => call<string | null>("docker_pick_folder", { title });
+export const dockerComposeCreate = (endpointId: number, draft: ComposeProjectRequest) => call<void>("docker_compose_create", { endpointId, draft });
 export const dockerComposeImport = (endpointId: number, path: string) => call<void>("docker_compose_import", { endpointId, path });
 export const dockerComposeImportEngine = (endpointId: number, name: string) => call<void>("docker_compose_import_engine", { endpointId, name });
 export const dockerComposeForget = (endpointId: number, id: number) => call<void>("docker_compose_forget", { endpointId, id });
+export const dockerComposeAction = (endpointId: number, name: string, action: "build" | "up" | "down") =>
+  call<void>("docker_compose_action", { endpointId, name, action });
+export const dockerComposeRemove = (endpointId: number, name: string) => call<void>("docker_compose_remove", { endpointId, name });
+export const dockerComposeFile = (endpointId: number, name: string) => call<string>("docker_compose_file", { endpointId, name });
 export const dockerTaskStop = (taskId: number) => call<void>("docker_task_stop", { taskId });
 
 export function dockerConnect(endpointId: number, events: Channel<DockerConnectEvent>) {
@@ -101,6 +105,10 @@ export function dockerConnect(endpointId: number, events: Channel<DockerConnectE
 
 export function dockerContainerLogs(endpointId: number, id: string, events: Channel<DockerLogEvent>) {
   return call<number>("docker_container_logs", { endpointId, id, events });
+}
+
+export function dockerComposeLogs(endpointId: number, name: string, events: Channel<DockerLogEvent>) {
+  return call<number>("docker_compose_logs", { endpointId, name, events });
 }
 
 export function dockerImagePull(endpointId: number, reference: string, events: Channel<DockerPullEvent>) {

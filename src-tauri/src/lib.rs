@@ -199,6 +199,7 @@ pub fn run() {
             docker::commands::docker_hostkey_decide,
             docker::commands::docker_answer,
             docker::commands::docker_summary,
+            docker::commands::docker_renew,
             docker::commands::docker_containers,
             docker::commands::docker_container_action,
             docker::commands::docker_container_inspect,
@@ -216,9 +217,15 @@ pub fn run() {
             docker::commands::docker_volume_remove,
             docker::commands::docker_compose_projects,
             docker::commands::docker_compose_preview,
+            docker::commands::docker_pick_folder,
+            docker::commands::docker_compose_create,
             docker::commands::docker_compose_import,
             docker::commands::docker_compose_import_engine,
             docker::commands::docker_compose_forget,
+            docker::commands::docker_compose_action,
+            docker::commands::docker_compose_remove,
+            docker::commands::docker_compose_file,
+            docker::commands::docker_compose_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

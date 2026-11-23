@@ -49,11 +49,12 @@ pub fn toggle_panel(app: &AppHandle) {
         .run_on_main_thread(move || present(&app, true, Placement::Input));
 }
 
-pub fn show_from_status(app: &AppHandle, rect: tauri::Rect) {
+/// Opens the panel under the status item, or closes it when that panel is already showing.
+pub fn toggle_from_status(app: &AppHandle, rect: tauri::Rect) {
     let app = app.clone();
     let _ = app
         .clone()
-        .run_on_main_thread(move || present(&app, false, Placement::Status(rect)));
+        .run_on_main_thread(move || present(&app, true, Placement::Status(rect)));
 }
 
 pub fn present_tool(app: &AppHandle, path: &str, host_id: Option<i64>) {
@@ -448,6 +449,7 @@ static KEY_TAP: Mutex<Option<KeyTap>> = Mutex::new(None);
 
 #[cfg(target_os = "macos")]
 fn start_key_capture(app: &AppHandle) {
+    remember_panel_hotkey(app);
     let mut tap = match KEY_TAP.lock() {
         Ok(tap) => tap,
         Err(poisoned) => poisoned.into_inner(),
@@ -527,7 +529,21 @@ unsafe extern "C" fn key_tap_callback(
     let flags = unsafe { CGEventGetFlags(event) };
     let command = flags & 0x0010_0000 != 0;
     let shift = flags & 0x0002_0000 != 0;
-    // Leave the panel toggle and system screenshot shortcuts for macOS.
+    let option = flags & 0x0008_0000 != 0;
+    let control = flags & 0x0004_0000 != 0;
+    // The panel owns its shortcut while it is open. Carbon does not receive the
+    // chord once another app is key, so the tap closes the panel itself.
+    if matches_panel_hotkey(keycode, command, shift, option, control)
+        && matches!(event_type, 10 | 11)
+    {
+        if event_type == 10
+            && let Some(app) = key_tap_app()
+        {
+            let _ = DispatchQueue::main().exec_async(move || dismiss(&app));
+        }
+        return std::ptr::null_mut();
+    }
+    // Leave system screenshot shortcuts for macOS.
     if releases_to_system(event_type, keycode, command, shift) {
         return event;
     }
@@ -579,6 +595,10 @@ fn deliver_key(event: CopiedEvent) {
             return None;
         }
         keep_on_top(&ns_window);
+        if !ns_window.isKeyWindow() {
+            ns_window.makeKeyWindow();
+            focus_webview(&ns_window);
+        }
         let _: () = unsafe { msg_send![&*ns_window, sendEvent: &*ns_event] };
         Some(())
     });
@@ -618,13 +638,189 @@ unsafe extern "C" {
     fn CFRelease(value: *const c_void);
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PanelHotkey {
+    keycode: i64,
+    command: bool,
+    shift: bool,
+    option: bool,
+    control: bool,
+}
+
+#[cfg(target_os = "macos")]
+static PANEL_HOTKEY: Mutex<Option<PanelHotkey>> = Mutex::new(None);
+
+#[cfg(target_os = "macos")]
+fn remember_panel_hotkey(app: &AppHandle) {
+    let shortcut = app
+        .try_state::<crate::clipboard::ClipboardState>()
+        .map(|state| state.shortcut_bindings()[0].clone())
+        .unwrap_or_else(|| "CommandOrControl+Shift+V".to_string());
+    let hotkey =
+        parse_panel_hotkey(&shortcut).or_else(|| parse_panel_hotkey("CommandOrControl+Shift+V"));
+    let mut guard = match PANEL_HOTKEY.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    *guard = hotkey;
+}
+
+#[cfg(target_os = "macos")]
+fn matches_panel_hotkey(
+    keycode: i64,
+    command: bool,
+    shift: bool,
+    option: bool,
+    control: bool,
+) -> bool {
+    let guard = match PANEL_HOTKEY.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard
+        .as_ref()
+        .is_some_and(|hotkey| hotkey_matches(*hotkey, keycode, command, shift, option, control))
+}
+
+fn hotkey_matches(
+    hotkey: PanelHotkey,
+    keycode: i64,
+    command: bool,
+    shift: bool,
+    option: bool,
+    control: bool,
+) -> bool {
+    hotkey.keycode == keycode
+        && hotkey.command == command
+        && hotkey.shift == shift
+        && hotkey.option == option
+        && hotkey.control == control
+}
+
+fn parse_panel_hotkey(shortcut: &str) -> Option<PanelHotkey> {
+    let mut command = false;
+    let mut shift = false;
+    let mut option = false;
+    let mut control = false;
+    let mut keycode = None;
+    for part in shortcut
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        match part.to_ascii_lowercase().as_str() {
+            "commandorcontrol" | "commandorctrl" | "cmdorctrl" | "cmdorcontrol" | "command"
+            | "cmd" => {
+                command = true;
+            }
+            "control" | "ctrl" => control = true,
+            "alt" | "option" => option = true,
+            "shift" => shift = true,
+            key => keycode = mac_keycode(key),
+        }
+    }
+    Some(PanelHotkey {
+        keycode: keycode?,
+        command,
+        shift,
+        option,
+        control,
+    })
+}
+
+fn mac_keycode(key: &str) -> Option<i64> {
+    const LETTERS: &[(char, i64)] = &[
+        ('a', 0),
+        ('s', 1),
+        ('d', 2),
+        ('f', 3),
+        ('h', 4),
+        ('g', 5),
+        ('z', 6),
+        ('x', 7),
+        ('c', 8),
+        ('v', 9),
+        ('b', 11),
+        ('q', 12),
+        ('w', 13),
+        ('e', 14),
+        ('r', 15),
+        ('y', 16),
+        ('t', 17),
+        ('o', 31),
+        ('u', 32),
+        ('i', 34),
+        ('p', 35),
+        ('l', 37),
+        ('j', 38),
+        ('k', 40),
+        ('n', 45),
+        ('m', 46),
+    ];
+    const DIGITS: &[(char, i64)] = &[
+        ('1', 18),
+        ('2', 19),
+        ('3', 20),
+        ('4', 21),
+        ('5', 23),
+        ('6', 22),
+        ('7', 26),
+        ('8', 28),
+        ('9', 25),
+        ('0', 29),
+    ];
+    let key = key.to_ascii_lowercase();
+    if key.len() == 1 {
+        let key = key.chars().next()?;
+        return LETTERS
+            .iter()
+            .chain(DIGITS.iter())
+            .find(|(symbol, _)| *symbol == key)
+            .map(|(_, code)| *code);
+    }
+    Some(match key.as_str() {
+        "minus" => 27,
+        "equal" => 24,
+        "bracketleft" => 33,
+        "bracketright" => 30,
+        "backslash" => 42,
+        "semicolon" => 41,
+        "quote" => 39,
+        "comma" => 43,
+        "period" => 47,
+        "slash" => 44,
+        "space" => 49,
+        "tab" => 48,
+        "enter" | "return" => 36,
+        "backspace" | "delete" => 51,
+        "escape" | "esc" => 53,
+        "left" | "arrowleft" => 123,
+        "right" | "arrowright" => 124,
+        "down" | "arrowdown" => 125,
+        "up" | "arrowup" => 126,
+        "f1" => 122,
+        "f2" => 120,
+        "f3" => 99,
+        "f4" => 118,
+        "f5" => 96,
+        "f6" => 97,
+        "f7" => 98,
+        "f8" => 100,
+        "f9" => 101,
+        "f10" => 109,
+        "f11" => 103,
+        "f12" => 111,
+        _ => return None,
+    })
+}
+
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn releases_to_system(event_type: u32, keycode: i64, command: bool, shift: bool) -> bool {
     if !command || !shift {
         return false;
     }
-    // Command-Shift-V toggles the panel. The modifier event has to pass through too.
-    if event_type == 12 || keycode == 9 {
+    // Modifier changes stay with the system so the other app does not see a stuck Shift.
+    if event_type == 12 {
         return true;
     }
     // Command-Shift-3, 4, and 5 start a screenshot. Control may also be held.
@@ -845,11 +1041,21 @@ mod tests {
         assert!(super::releases_to_system(10, 20, true, true));
         assert!(super::releases_to_system(10, 21, true, true));
         assert!(super::releases_to_system(11, 23, true, true));
-        assert!(super::releases_to_system(10, 9, true, true));
         assert!(super::releases_to_system(12, 0, true, true));
+        assert!(!super::releases_to_system(10, 9, true, true));
         assert!(!super::releases_to_system(10, 20, true, false));
         assert!(!super::releases_to_system(10, 0, true, true));
         assert!(!super::releases_to_system(10, 53, false, false));
+    }
+
+    #[test]
+    fn open_panel_shortcut_closes_it_from_the_keyboard_tap() {
+        let hotkey = super::parse_panel_hotkey("CommandOrControl+Shift+V").unwrap();
+        assert!(super::hotkey_matches(hotkey, 9, true, true, false, false));
+        assert!(!super::hotkey_matches(hotkey, 9, true, true, true, false));
+        assert!(!super::hotkey_matches(hotkey, 0, true, true, false, false));
+        let custom = super::parse_panel_hotkey("Alt+Shift+P").unwrap();
+        assert!(super::hotkey_matches(custom, 35, false, true, true, false));
     }
 
     #[test]

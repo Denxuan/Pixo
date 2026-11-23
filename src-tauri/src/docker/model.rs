@@ -155,13 +155,27 @@ pub fn normalize(draft: EndpointDraft) -> Result<NormalizedEndpoint, DockerError
                 None => None,
             };
             let name = name.unwrap_or_else(|| "Local".to_string());
-            Ok(blank(draft.id, name, EndpointKind::Local, socket_path, None, None, None, None, None, None, None, false))
+            Ok(blank(
+                draft.id,
+                name,
+                EndpointKind::Local,
+                socket_path,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+            ))
         }
         EndpointKind::Ssh => {
             let Some(host_id) = draft.ssh_host_id.filter(|id| *id > 0) else {
                 return Err(DockerError::new("invalid_input"));
             };
-            let remote = optional_text(draft.remote_socket).unwrap_or_else(|| "/var/run/docker.sock".to_string());
+            let remote = optional_text(draft.remote_socket)
+                .unwrap_or_else(|| "/var/run/docker.sock".to_string());
             if !valid_remote_socket(&remote) {
                 return Err(DockerError::new("invalid_input"));
             }
@@ -242,9 +256,9 @@ pub fn valid_image_ref(value: &str) -> bool {
         && !value.ends_with('/')
         && !value.starts_with(':')
         && !value.starts_with('@')
-        && value
-            .chars()
-            .all(|char| char.is_ascii_alphanumeric() || matches!(char, '.' | '_' | '-' | '/' | ':' | '@'))
+        && value.chars().all(|char| {
+            char.is_ascii_alphanumeric() || matches!(char, '.' | '_' | '-' | '/' | ':' | '@')
+        })
 }
 
 pub fn valid_resource_name(value: &str) -> bool {
@@ -318,7 +332,9 @@ fn required_host(value: Option<String>) -> Result<String, DockerError> {
     {
         return Err(DockerError::new("invalid_input"));
     }
-    Ok(host.trim_matches(|char| char == '[' || char == ']').to_string())
+    Ok(host
+        .trim_matches(|char| char == '[' || char == ']')
+        .to_string())
 }
 
 fn required_path(value: Option<String>) -> Result<String, DockerError> {
@@ -332,7 +348,12 @@ fn required_path(value: Option<String>) -> Result<String, DockerError> {
 }
 
 pub fn valid_socket_path(path: &str, windows: bool) -> bool {
-    if path.is_empty() || path.len() > 1024 || path.chars().any(|char| char == '\0' || char == '\n' || char == '\r') {
+    if path.is_empty()
+        || path.len() > 1024
+        || path
+            .chars()
+            .any(|char| char == '\0' || char == '\n' || char == '\r')
+    {
         return false;
     }
     if windows {
@@ -393,7 +414,10 @@ mod tests {
         input.ssh_host_id = Some(4);
         input.name = "edge".into();
         let endpoint = normalize(input).unwrap();
-        assert_eq!(endpoint.remote_socket.as_deref(), Some("/var/run/docker.sock"));
+        assert_eq!(
+            endpoint.remote_socket.as_deref(),
+            Some("/var/run/docker.sock")
+        );
         assert_eq!(endpoint.ssh_host_id, Some(4));
     }
 

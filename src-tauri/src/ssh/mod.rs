@@ -21,9 +21,9 @@ mod store;
 mod transfer;
 
 pub use drops::install as install_drop;
-pub use session::initialize;
 pub(crate) use error::SshError;
 pub(crate) use session::SshState;
+pub use session::initialize;
 
 pub(crate) fn menu_hosts(app: &tauri::AppHandle) -> (bool, Vec<(i64, String)>) {
     let Some(state) = app.try_state::<session::SshState>() else {
@@ -37,7 +37,12 @@ pub(crate) fn menu_hosts(app: &tauri::AppHandle) -> (bool, Vec<(i64, String)>) {
     let items = hosts
         .into_iter()
         .take(9)
-        .map(|host| (host.id, menu_host_label(&host.name, &host.username, &host.host, host.port)))
+        .map(|host| {
+            (
+                host.id,
+                menu_host_label(&host.name, &host.username, &host.host, host.port),
+            )
+        })
         .collect();
     (true, items)
 }
@@ -82,10 +87,19 @@ mod tests {
 
     #[test]
     fn menu_host_label_keeps_the_address_beside_the_name() {
-        assert_eq!(menu_host_label("build", "dev", "10.0.0.8", 22), "build 10.0.0.8");
-        assert_eq!(menu_host_label("build", "dev", "10.0.0.8", 2222), "build 10.0.0.8:2222");
+        assert_eq!(
+            menu_host_label("build", "dev", "10.0.0.8", 22),
+            "build 10.0.0.8"
+        );
+        assert_eq!(
+            menu_host_label("build", "dev", "10.0.0.8", 2222),
+            "build 10.0.0.8:2222"
+        );
         assert_eq!(menu_host_label("", "dev", "10.0.0.8", 22), "dev@10.0.0.8");
-        assert_eq!(menu_host_label("10.0.0.8", "dev", "10.0.0.8", 22), "dev@10.0.0.8");
+        assert_eq!(
+            menu_host_label("10.0.0.8", "dev", "10.0.0.8", 22),
+            "dev@10.0.0.8"
+        );
         assert_eq!(
             menu_host_label("edge", "root", "2001:db8::1", 2222),
             "edge [2001:db8::1]:2222"
