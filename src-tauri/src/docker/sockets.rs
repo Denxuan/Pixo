@@ -74,7 +74,7 @@ fn named_pipe_exists(path: &Path) -> bool {
     use windows::core::PCWSTR;
     let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
     wide.push(0);
-    unsafe { WaitNamedPipeW(PCWSTR(wide.as_ptr()), 1).is_ok() }
+    unsafe { WaitNamedPipeW(PCWSTR(wide.as_ptr()), 1).as_bool() }
 }
 
 pub fn home_dir() -> Option<PathBuf> {
