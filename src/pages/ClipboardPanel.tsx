@@ -1,12 +1,11 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-import { ClipboardRequestError, clipboardGet, clipboardPlaceText, clipboardSetLabel, dismissClipboardPanel } from "@/api/clipboard";
+import { ClipboardRequestError, clipboardSetLabel, dismissClipboardPanel } from "@/api/clipboard";
 import HistoryList from "@/components/clipboard/HistoryList";
 import Kbd from "@/components/Kbd";
 import { useClipboardHistory } from "@/hooks/useClipboard";
 import { CLIP_FILTERS, isClipFilter } from "@/types/clipboard";
 import { clipboardErrorText } from "@/utils/clipboardMessage";
-import { formatJson } from "@/utils/json";
 import { DEFAULT_DELETE_SHORTCUT, DEFAULT_PIN_SHORTCUT, eventMatchesShortcut, formatShortcut, isApplePlatform } from "@/utils/shortcut";
 
 function focusSearch() {
@@ -251,27 +250,6 @@ export default function ClipboardPanel() {
     }
   }
 
-  async function transform(kind: "format" | "compact" | "trim") {
-    if (active?.kind !== "text") return;
-    try {
-      const detail = await clipboardGet(active.id);
-      const text = detail.text ?? "";
-      const next = kind === "trim" ? text.trim() : formatJson(text, kind === "compact");
-      if (!next) return;
-      const placed = await clipboardPlaceText(next);
-      if (placed == null) {
-        setMessageTone("success");
-        setMessage(t("zdx.text.clipboard.transformed"));
-        return;
-      }
-      await history.reload();
-      await useItem(placed, "paste", true);
-    } catch (error) {
-      setMessageTone("warning");
-      setMessage(error instanceof ClipboardRequestError ? clipboardErrorText(t, error) : t("zdx.text.clipboard.jsonInvalid"));
-    }
-  }
-
   async function pinActive(pinned: boolean) {
     if (!active) return;
     if (pinned) focusTitle.current = true;
@@ -414,33 +392,24 @@ export default function ClipboardPanel() {
         )}
       </div>
       {message && <Alert type={messageTone} showIcon message={message} style={{ margin: "0 8px 8px" }} />}
-      {(active?.pinned || active?.kind === "text") && (
+      {active?.pinned && (
         <div className="flex shrink-0 flex-col gap-2 px-3 pb-2">
-          {active.pinned && (
-            <Input
-              id="clipboard-pin-title"
-              size="small"
-              aria-label={t("zdx.label.clipboard.pinTitle")}
-              placeholder={t("zdx.placeholder.clipboard.pinTitle")}
-              value={labelDraft}
-              ref={(node) => {
-                titleFocus.current = () => node?.focus();
-              }}
-              onFocus={() => { labelFocused.current = true; }}
-              onBlur={() => {
-                labelFocused.current = false;
-                void saveLabel();
-              }}
-              onPressEnter={() => void saveLabel()}
-            />
-          )}
-          {active.kind === "text" && (
-            <div className="flex flex-wrap gap-2">
-              <Button size="small" onClick={() => void transform("format")}>{t("zdx.label.clipboard.formatJson")}</Button>
-              <Button size="small" onClick={() => void transform("compact")}>{t("zdx.label.clipboard.compactJson")}</Button>
-              <Button size="small" onClick={() => void transform("trim")}>{t("zdx.label.clipboard.trimText")}</Button>
-            </div>
-          )}
+          <Input
+            id="clipboard-pin-title"
+            size="small"
+            aria-label={t("zdx.label.clipboard.pinTitle")}
+            placeholder={t("zdx.placeholder.clipboard.pinTitle")}
+            value={labelDraft}
+            ref={(node) => {
+              titleFocus.current = () => node?.focus();
+            }}
+            onFocus={() => { labelFocused.current = true; }}
+            onBlur={() => {
+              labelFocused.current = false;
+              void saveLabel();
+            }}
+            onPressEnter={() => void saveLabel()}
+          />
         </div>
       )}
       <div data-tauri-drag-region className="flex h-10 shrink-0 items-center gap-2 pl-3 pr-1.5" style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, background: token.colorFillQuaternary }}>

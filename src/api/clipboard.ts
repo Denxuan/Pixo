@@ -160,10 +160,6 @@ export function clipboardSetLabel(id: number, label: string) {
   return call<void>("clipboard_set_label", { id, label });
 }
 
-export function clipboardPlaceText(text: string) {
-  return call<number | null>("clipboard_place_text", { text });
-}
-
 export function clipboardShowPanel() {
   return call<void>("clipboard_show_panel");
 }

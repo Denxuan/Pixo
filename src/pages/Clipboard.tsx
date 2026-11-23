@@ -1,11 +1,10 @@
-import { ClipboardRequestError, clipboardGet, clipboardPlaceText, clipboardSetLabel } from "@/api/clipboard";
+import { ClipboardRequestError, clipboardSetLabel } from "@/api/clipboard";
 import HistoryList from "@/components/clipboard/HistoryList";
 import Page from "@/components/Page";
 import { useClipboardHistory } from "@/hooks/useClipboard";
 import { CLIP_FILTERS, isClipFilter, toSettingsUpdate } from "@/types/clipboard";
 import { clipboardErrorText, clipboardReasonText, clipboardStatusText } from "@/utils/clipboardMessage";
 import { isDesktop } from "@/utils/desktop";
-import { formatJson } from "@/utils/json";
 import { DEFAULT_DELETE_SHORTCUT, DEFAULT_PIN_SHORTCUT, eventMatchesShortcut } from "@/utils/shortcut";
 
 export default function ClipboardPage() {
@@ -54,23 +53,6 @@ export default function ClipboardPage() {
         setNoticeTone("warning");
         setNotice(clipboardErrorText(t, error));
       }
-    }
-  }
-
-  async function transform(kind: "format" | "compact" | "trim") {
-    if (!active) return;
-    try {
-      const detail = await clipboardGet(active.id);
-      const text = detail.text ?? "";
-      const next = kind === "trim" ? text.trim() : formatJson(text, kind === "compact");
-      if (!next) return;
-      await clipboardPlaceText(next);
-      setNoticeTone("success");
-      setNotice(t("zdx.text.clipboard.transformed"));
-      await history.reload();
-    } catch (error) {
-      setNoticeTone("warning");
-      setNotice(error instanceof ClipboardRequestError ? clipboardErrorText(t, error) : t("zdx.text.clipboard.jsonInvalid"));
     }
   }
 
@@ -196,9 +178,6 @@ export default function ClipboardPage() {
             )}
             {active?.kind === "text" && (
               <Flex gap={8} wrap>
-                <Button onClick={() => void transform("format")}>{t("zdx.label.clipboard.formatJson")}</Button>
-                <Button onClick={() => void transform("compact")}>{t("zdx.label.clipboard.compactJson")}</Button>
-                <Button onClick={() => void transform("trim")}>{t("zdx.label.clipboard.trimText")}</Button>
                 <Button onClick={() => void history.copyItem(active.id, { plain: true }).then(() => { setNoticeTone("success"); setNotice(t("zdx.text.clipboard.copied")); }).catch((error) => {
                   if (error instanceof ClipboardRequestError) { setNoticeTone("warning"); setNotice(clipboardErrorText(t, error)); }
                 })}>{t("zdx.label.clipboard.pastePlain")}</Button>

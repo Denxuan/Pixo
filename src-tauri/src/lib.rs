@@ -90,7 +90,6 @@ pub fn run() {
             clipboard::commands::clipboard_get_settings,
             clipboard::commands::clipboard_update_settings,
             clipboard::commands::clipboard_set_label,
-            clipboard::commands::clipboard_place_text,
             clipboard::commands::clipboard_show_panel,
             shortcut::clipboard_dismiss_panel,
             shortcut::launcher_open,
