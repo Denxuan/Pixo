@@ -81,9 +81,9 @@ pub fn present_tool(app: &AppHandle, path: &str, host_id: Option<i64>) {
 pub fn launcher_open(app: AppHandle, path: String, host_id: Option<i64>) {
     let allowed = matches!(
         path.as_str(),
-        "/clipboard" | "/screenshot" | "/ssh"
+        "/clipboard" | "/screenshot" | "/ssh" | "/docker"
     );
-    if !allowed || (host_id.is_some() && path != "/ssh") {
+    if !allowed || (host_id.is_some() && path != "/ssh" && path != "/docker") {
         return;
     }
     present_tool(&app, &path, host_id);

@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 
 import { clipboardStatus, takeClipboardMainRequest } from "@/api/clipboard";
+import { dockerStatus } from "@/api/docker";
 import { screenshotGetSettings } from "@/api/screenshot";
 import { sshStatus } from "@/api/ssh";
 import FirstRun from "@/components/FirstRun";
@@ -43,6 +44,7 @@ export default function AppShell() {
   const [clipboardOn, setClipboardOn] = useState<boolean | null>(null);
   const [screenshotOn, setScreenshotOn] = useState<boolean | null>(null);
   const [sshOn, setSshOn] = useState<boolean | null>(null);
+  const [dockerOn, setDockerOn] = useState<boolean | null>(null);
   const reduceMotion = useSyncExternalStore(subscribeMotion, () => motionQuery.matches);
   const onSettings = location.pathname.startsWith("/settings");
   const selected = location.pathname.startsWith("/screenshot")
@@ -61,11 +63,12 @@ export default function AppShell() {
   const showClipboard = !isDesktop() || clipboardOn !== false;
   const showScreenshot = !isDesktop() || screenshotOn !== false;
   const showSsh = !isDesktop() || sshOn !== false;
+  const showDocker = !isDesktop() || dockerOn !== false;
   const navItems = [
     ...(showClipboard ? [clipboardItem] : []),
     ...(showScreenshot ? [screenshotItem] : []),
     ...(showSsh ? [sshItem] : []),
-    dockerItem,
+    ...(showDocker ? [dockerItem] : []),
   ];
 
   useEffect(() => {
@@ -106,6 +109,9 @@ export default function AppShell() {
     void sshStatus().then((status) => {
       if (!disposed) setSshOn(status.enabled);
     }).catch(() => undefined);
+    void dockerStatus().then((status) => {
+      if (!disposed) setDockerOn(status.enabled);
+    }).catch(() => undefined);
     void listen<ClipboardStatus>("clipboard://status", (event) => {
       setClipboardOn(event.payload.enabled);
     }).then((unlisten) => {
@@ -125,11 +131,19 @@ export default function AppShell() {
       if (disposed) unlisten();
       else stopSsh = unlisten;
     });
+    let stopDocker: (() => void) | undefined;
+    void listen<boolean>("docker://enabled", (event) => {
+      setDockerOn(event.payload);
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stopDocker = unlisten;
+    });
     return () => {
       disposed = true;
       stopStatus?.();
       stopScreenshot?.();
       stopSsh?.();
+      stopDocker?.();
     };
   }, []);
 
@@ -142,6 +156,11 @@ export default function AppShell() {
     if (!isDesktop() || sshOn !== false || location.pathname !== "/ssh") return;
     navigate("/settings", { replace: true });
   }, [location.pathname, navigate, sshOn]);
+
+  useEffect(() => {
+    if (!isDesktop() || dockerOn !== false || location.pathname !== "/docker") return;
+    navigate("/settings", { replace: true });
+  }, [location.pathname, navigate, dockerOn]);
 
   useEffect(() => {
     const onTool = location.pathname.startsWith("/ssh") || location.pathname.startsWith("/docker");

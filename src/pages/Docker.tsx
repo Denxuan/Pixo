@@ -32,20 +32,23 @@ export default function DockerPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const ticket = useRef(0);
+  const launchedEndpoint = useRef<number | null>(null);
+  const location = useLocation();
+  const navigate = useNavigate();
   const selected = endpoints.find((item) => item.id === selectedId) ?? null;
 
   const reload = useCallback(async () => {
-    const [status, listed] = await Promise.all([dockerStatus(), dockerEndpoints()]);
+    const [status, listed, ssh] = await Promise.all([
+      dockerStatus(),
+      dockerEndpoints(),
+      sshStatus()
+        .then(async (current) => ({ enabled: current.enabled, hosts: current.enabled ? await sshHosts() : [] }))
+        .catch(() => ({ enabled: false, hosts: [] as SshHost[] })),
+    ]);
     setEnabled(status.enabled);
     setEndpoints(listed);
-    try {
-      const ssh = await sshStatus();
-      setSshEnabled(ssh.enabled);
-      setHosts(await sshHosts());
-    } catch {
-      setSshEnabled(false);
-      setHosts([]);
-    }
+    setSshEnabled(ssh.enabled);
+    setHosts(ssh.hosts);
   }, []);
 
   useEffect(() => {
@@ -111,6 +114,21 @@ export default function DockerPage() {
     const id = selectedRef.current;
     if (id) void dockerDisconnect(id).catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (enabled !== true) return;
+    const endpointId = (location.state as { hostId?: number } | null)?.hostId;
+    if (!endpointId) {
+      launchedEndpoint.current = null;
+      return;
+    }
+    if (endpoints.length === 0 || launchedEndpoint.current === endpointId) return;
+    const endpoint = endpoints.find((item) => item.id === endpointId);
+    if (!endpoint) return;
+    launchedEndpoint.current = endpointId;
+    void connect(endpoint);
+    navigate("/docker", { replace: true, state: null });
+  }, [enabled, endpoints, location.state, navigate]);
 
   async function connect(endpoint: DockerEndpoint) {
     const current = ++ticket.current;

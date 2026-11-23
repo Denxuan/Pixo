@@ -373,6 +373,7 @@
         "confirm": "Confirm",
         "cancel": "Cancel",
         "endpoints": "Connections",
+        "trayAll": "All connections",
         "resizeEndpoints": "Resize the connection list",
         "search": "Search connections",
         "newEndpoint": "New connection",
@@ -580,7 +581,7 @@
         "clipboardFeature": "Turning this off stops clipboard history and its shortcut, and hides Clipboard in the left menu. Turning it on asks for confirmation first.",
         "screenshotFeature": "Turning this off stops the screenshot and recording shortcuts, the menu bar can no longer start a capture, and Screenshot is hidden from the left menu and from Settings.",
         "sshFeature": "Turning this off disconnects open SSH sessions and hides the sidebar entry.",
-        "dockerFeature": "Turning this off disconnects open Docker connections. The Docker menu stays in the sidebar so you can turn it on again.",
+        "dockerFeature": "Turning this off disconnects open Docker connections and hides Docker in the left menu. You can turn it on again in Settings.",
         "versionCurrent": "Current version {{version}}",
         "versionHelp": "The version comes from this installation. Releases take their version from the GitHub tag, and this check compares it with the latest release.",
         "updateTitle": "A new version is available",
@@ -665,7 +666,7 @@
         }
       },
       "intro": {
-        "body": "Press {{shortcut}} to open the clipboard. The shortcut works from other apps after Accessibility is allowed. Screenshot, recording, and hosts are in the menu bar icon's right-click menu.",
+        "body": "Press {{shortcut}} to open the clipboard. The shortcut works from other apps after Accessibility is allowed. Screenshot, recording, hosts, and Docker appear in the menu bar icon's right-click menu when those tools are turned on.",
         "needAccessibility": "Accessibility access is still off. Allow Pixo in System Settings, then open the panel.",
         "needScreen": "Screen recording is still off. Allow Pixo, then try the screenshot again.",
         "actionFailed": "That step did not finish. Read the message above and try again."
@@ -794,9 +795,10 @@
         "enableTitle": "Turn on Docker?",
         "enableBody": "You can then connect to a local or remote engine and view containers, images, networks, and volumes. Connections stay on this computer.",
         "disableTitle": "Turn off Docker?",
-        "disableBody": "This disconnects open engines. Saved connections are kept and can be turned on again later.",
+        "disableBody": "This disconnects open engines and hides the sidebar entry. Saved connections are kept and can be turned on again in Settings.",
         "desktopOnly": "Docker is available in the Pixo desktop app.",
         "emptyEndpoints": "No connections yet. Detect a local socket, or import Docker contexts you already have.",
+        "trayEmpty": "No connections yet",
         "noMatch": "No matching connections.",
         "insecureBadge": "Unprotected",
         "sshOff": "The SSH tool is off, so this connection is unavailable.",

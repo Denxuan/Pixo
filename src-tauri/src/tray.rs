@@ -51,6 +51,10 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let _ = app.listen("ssh://enabled", move |_| refresh(&handle));
     let handle = app.clone();
     let _ = app.listen("ssh://hosts", move |_| refresh(&handle));
+    let handle = app.clone();
+    let _ = app.listen("docker://enabled", move |_| refresh(&handle));
+    let handle = app.clone();
+    let _ = app.listen("docker://endpoints", move |_| refresh(&handle));
     Ok(())
 }
 
@@ -114,6 +118,12 @@ pub struct TrayLabels {
     no_shots: String,
     #[serde(default = "default_no_hosts_label")]
     no_hosts: String,
+    #[serde(default = "default_docker_label")]
+    docker: String,
+    #[serde(default = "default_open_docker_label")]
+    open_docker: String,
+    #[serde(default = "default_no_endpoints_label")]
+    no_endpoints: String,
     history: String,
     settings: String,
     quit: String,
@@ -141,6 +151,9 @@ impl Default for TrayLabels {
             open_hosts: default_open_hosts_label(),
             no_shots: default_no_shots_label(),
             no_hosts: default_no_hosts_label(),
+            docker: default_docker_label(),
+            open_docker: default_open_docker_label(),
+            no_endpoints: default_no_endpoints_label(),
             history: "打开全部历史".into(),
             settings: "设置".into(),
             quit: "退出 Pixo".into(),
@@ -182,6 +195,18 @@ fn default_no_shots_label() -> String {
 
 fn default_no_hosts_label() -> String {
     "还没有主机".into()
+}
+
+fn default_docker_label() -> String {
+    "Docker".into()
+}
+
+fn default_open_docker_label() -> String {
+    "全部连接".into()
+}
+
+fn default_no_endpoints_label() -> String {
+    "还没有连接".into()
 }
 
 struct TrayHost {
@@ -272,10 +297,36 @@ fn on_menu(app: &AppHandle, event: &MenuEvent) {
                 crate::screenshot::commands::screenshot_open_record(app.clone());
             }
         }
-        MenuAction::OpenShots => shortcut::present_tool(app, "/screenshot", None),
-        MenuAction::OpenHosts => shortcut::present_tool(app, "/ssh", None),
-        MenuAction::CopyShot(id) => crate::screenshot::commands::screenshot_menu_copy(app, id),
-        MenuAction::OpenHost(id) => shortcut::present_tool(app, "/ssh", Some(id)),
+        MenuAction::OpenShots => {
+            if crate::screenshot::commands::screenshot_is_enabled(app) {
+                shortcut::present_tool(app, "/screenshot", None);
+            }
+        }
+        MenuAction::OpenHosts => {
+            if crate::ssh::menu_hosts(app).0 {
+                shortcut::present_tool(app, "/ssh", None);
+            }
+        }
+        MenuAction::CopyShot(id) => {
+            if crate::screenshot::commands::screenshot_is_enabled(app) {
+                crate::screenshot::commands::screenshot_menu_copy(app, id);
+            }
+        }
+        MenuAction::OpenHost(id) => {
+            if crate::ssh::menu_hosts(app).0 {
+                shortcut::present_tool(app, "/ssh", Some(id));
+            }
+        }
+        MenuAction::OpenDocker => {
+            if crate::docker::menu_endpoints(app).0 {
+                shortcut::present_tool(app, "/docker", None);
+            }
+        }
+        MenuAction::OpenEndpoint(id) => {
+            if crate::docker::menu_endpoints(app).0 {
+                shortcut::present_tool(app, "/docker", Some(id));
+            }
+        }
         MenuAction::History => open_main(app, "/clipboard", false),
         MenuAction::Settings => open_main(app, "/settings", false),
         MenuAction::Quit => app.exit(0),
@@ -349,8 +400,10 @@ enum MenuAction {
     RecordScreen,
     OpenShots,
     OpenHosts,
+    OpenDocker,
     CopyShot(i64),
     OpenHost(i64),
+    OpenEndpoint(i64),
     History,
     Settings,
     Quit,
@@ -370,6 +423,12 @@ fn menu_action(id: &str) -> MenuAction {
             .map(MenuAction::OpenHost)
             .unwrap_or(MenuAction::Other);
     }
+    if let Some(rest) = id.strip_prefix("tray-endpoint-") {
+        return rest
+            .parse()
+            .map(MenuAction::OpenEndpoint)
+            .unwrap_or(MenuAction::Other);
+    }
     match id {
         "tray-show" => MenuAction::Show,
         "tray-record" => MenuAction::Pause,
@@ -378,6 +437,7 @@ fn menu_action(id: &str) -> MenuAction {
         "tray-record-screen" => MenuAction::RecordScreen,
         "tray-shots-open" => MenuAction::OpenShots,
         "tray-hosts-open" => MenuAction::OpenHosts,
+        "tray-docker-open" => MenuAction::OpenDocker,
         "tray-history" => MenuAction::History,
         "tray-settings" => MenuAction::Settings,
         "tray-quit" => MenuAction::Quit,
@@ -398,6 +458,7 @@ fn build_menu(app: &AppHandle, labels: &TrayLabels) -> tauri::Result<Menu<Wry>> 
         .is_some_and(|state| state.ignore_next_armed());
     let shots_on = crate::screenshot::commands::screenshot_is_enabled(app);
     let (hosts_on, hosts) = crate::ssh::menu_hosts(app);
+    let (docker_on, endpoints) = crate::docker::menu_endpoints(app);
     let shots = if shots_on {
         crate::screenshot::commands::screenshot_menu_shots(app)
     } else {
@@ -408,18 +469,19 @@ fn build_menu(app: &AppHandle, labels: &TrayLabels) -> tauri::Result<Menu<Wry>> 
         app,
         "tray-screenshot",
         text_or(&labels.screenshot, &default_screenshot_label()),
-        shots_on,
+        true,
         None::<&str>,
     )?;
     let record_screen = MenuItem::with_id(
         app,
         "tray-record-screen",
         text_or(&labels.record_screen, &default_record_label()),
-        shots_on,
+        true,
         None::<&str>,
     )?;
-    let shot_menu = shot_submenu(app, labels, shots_on, &shots)?;
-    let host_menu = host_submenu(app, labels, hosts_on, &hosts)?;
+    let shot_menu = shot_submenu(app, labels, true, &shots)?;
+    let host_menu = host_submenu(app, labels, true, &hosts)?;
+    let endpoint_menu = endpoint_submenu(app, labels, true, &endpoints)?;
     let pause = MenuItem::with_id(
         app,
         "tray-record",
@@ -446,37 +508,33 @@ fn build_menu(app: &AppHandle, labels: &TrayLabels) -> tauri::Result<Menu<Wry>> 
     let show = MenuItem::with_id(app, "tray-show", &labels.show, true, None::<&str>)?;
     #[cfg(target_os = "linux")]
     let gap_show = PredefinedMenuItem::separator(app)?;
-    // Linux does not deliver tray clicks, so the menu itself opens the clipboard panel.
+    // A tool stays out of the menu until its settings switch is on.
+    let mut entries: Vec<&dyn IsMenuItem<Wry>> = Vec::new();
     #[cfg(target_os = "linux")]
-    let entries: Vec<&dyn IsMenuItem<Wry>> = vec![
-        &show,
-        &gap_show,
-        &capture,
-        &record_screen,
-        &shot_menu,
-        &host_menu,
-        &gap_tools,
-        &pause,
-        &ignore,
-        &history,
-        &settings,
-        &gap_quit,
-        &quit,
-    ];
-    #[cfg(not(target_os = "linux"))]
-    let entries: Vec<&dyn IsMenuItem<Wry>> = vec![
-        &capture,
-        &record_screen,
-        &shot_menu,
-        &host_menu,
-        &gap_tools,
-        &pause,
-        &ignore,
-        &history,
-        &settings,
-        &gap_quit,
-        &quit,
-    ];
+    {
+        entries.push(&show);
+        entries.push(&gap_show);
+    }
+    if shots_on {
+        entries.push(&capture);
+        entries.push(&record_screen);
+        entries.push(&shot_menu);
+    }
+    if hosts_on {
+        entries.push(&host_menu);
+    }
+    if docker_on {
+        entries.push(&endpoint_menu);
+    }
+    if shots_on || hosts_on || docker_on {
+        entries.push(&gap_tools);
+    }
+    entries.push(&pause);
+    entries.push(&ignore);
+    entries.push(&history);
+    entries.push(&gap_quit);
+    entries.push(&settings);
+    entries.push(&quit);
     Menu::with_items(app, &entries)
 }
 
@@ -558,6 +616,47 @@ fn host_submenu(
     Submenu::with_items(
         app,
         text_or(&labels.hosts, &default_hosts_label()),
+        enabled,
+        &refs,
+    )
+}
+
+fn endpoint_submenu(
+    app: &AppHandle,
+    labels: &TrayLabels,
+    enabled: bool,
+    endpoints: &[(i64, String)],
+) -> tauri::Result<Submenu<Wry>> {
+    let mut owned = Vec::new();
+    for (id, label) in endpoints.iter().take(8) {
+        owned.push(MenuItem::with_id(
+            app,
+            format!("tray-endpoint-{id}"),
+            menu_text(label),
+            true,
+            None::<&str>,
+        )?);
+    }
+    if owned.is_empty() {
+        owned.push(MenuItem::with_id(
+            app,
+            "tray-endpoints-empty",
+            text_or(&labels.no_endpoints, &default_no_endpoints_label()),
+            false,
+            None::<&str>,
+        )?);
+    }
+    owned.push(MenuItem::with_id(
+        app,
+        "tray-docker-open",
+        text_or(&labels.open_docker, &default_open_docker_label()),
+        true,
+        None::<&str>,
+    )?);
+    let refs: Vec<&dyn IsMenuItem<Wry>> = owned.iter().map(|item| item as _).collect();
+    Submenu::with_items(
+        app,
+        text_or(&labels.docker, &default_docker_label()),
         enabled,
         &refs,
     )
@@ -815,6 +914,14 @@ mod tests {
         ));
         assert!(matches!(super::menu_action("tray-shot-12"), super::MenuAction::CopyShot(12)));
         assert!(matches!(super::menu_action("tray-host-4"), super::MenuAction::OpenHost(4)));
+        assert!(matches!(
+            super::menu_action("tray-docker-open"),
+            super::MenuAction::OpenDocker
+        ));
+        assert!(matches!(
+            super::menu_action("tray-endpoint-3"),
+            super::MenuAction::OpenEndpoint(3)
+        ));
         assert!(matches!(super::menu_action("tray-shot-nope"), super::MenuAction::Other));
     }
 

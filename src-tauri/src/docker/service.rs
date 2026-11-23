@@ -135,6 +135,7 @@ impl DockerState {
             self.shutdown();
         }
         let _ = self.inner.app.emit("docker://enabled", enabled);
+        self.touch_menu();
         self.status()
     }
 
@@ -153,6 +154,7 @@ impl DockerState {
         if let Some(id) = endpoint.id {
             self.drop_client(id);
         }
+        self.touch_menu();
         Ok(saved)
     }
 
@@ -160,6 +162,7 @@ impl DockerState {
         self.require()?;
         lock(&self.inner.store).delete(id)?;
         self.drop_client(id);
+        self.touch_menu();
         Ok(())
     }
 
@@ -190,6 +193,7 @@ impl DockerState {
         if saved.is_empty() {
             return Err(DockerError::new("invalid_input"));
         }
+        self.touch_menu();
         Ok(saved)
     }
 
@@ -635,6 +639,10 @@ impl DockerState {
             .map(|task| task.endpoint_id)
             .collect::<Vec<_>>();
         lock(&self.inner.clients).retain(|id, slot| active.contains(id) || slot.last_used.elapsed() < IDLE);
+    }
+
+    fn touch_menu(&self) {
+        let _ = self.inner.app.emit("docker://endpoints", ());
     }
 
     fn require(&self) -> Result<(), DockerError> {

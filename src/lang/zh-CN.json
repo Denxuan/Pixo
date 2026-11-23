@@ -373,6 +373,7 @@
         "confirm": "确认",
         "cancel": "取消",
         "endpoints": "连接",
+        "trayAll": "全部连接",
         "resizeEndpoints": "调整连接列表宽度",
         "search": "搜索连接",
         "newEndpoint": "新建连接",
@@ -580,7 +581,7 @@
         "clipboardFeature": "关闭后不再记录复制的内容，剪贴板快捷键也会停用，左侧菜单里的剪贴板会隐藏。重新打开前会先确认。",
         "screenshotFeature": "关闭后不再响应截图和录屏快捷键，菜单栏也不能开始截图，左侧菜单和设置里的截图页会隐藏。",
         "sshFeature": "关闭后会断开当前的 SSH 会话，并隐藏左侧入口。",
-        "dockerFeature": "关闭后会断开已打开的 Docker 连接。左侧的 Docker 菜单仍可打开，用来重新开启。",
+        "dockerFeature": "关闭后会断开已打开的 Docker 连接，并隐藏左侧菜单里的 Docker。可以在设置里重新开启。",
         "versionCurrent": "当前版本 {{version}}",
         "versionHelp": "版本号来自当前安装的构建。发布时由 GitHub 标签写入，检查更新会对照最新发布。",
         "updateTitle": "发现新版本",
@@ -665,7 +666,7 @@
         }
       },
       "intro": {
-        "body": "按 {{shortcut}} 可以打开剪贴板。允许辅助功能后，这个快捷键才能在其他应用里使用。截图、录屏和主机在菜单栏图标的右键菜单里。",
+        "body": "按 {{shortcut}} 可以打开剪贴板。允许辅助功能后，这个快捷键才能在其他应用里使用。截图、录屏、主机和 Docker 会在对应功能开启后出现在菜单栏图标的右键菜单里。",
         "needAccessibility": "还没有辅助功能权限。在系统设置里允许 Pixo 后，再打开面板。",
         "needScreen": "还没有屏幕录制权限。允许 Pixo 后，再试一次截图。",
         "actionFailed": "这一步没有完成。看完上面的提示后再试。"
@@ -794,9 +795,10 @@
         "enableTitle": "开启 Docker？",
         "enableBody": "开启后可以连接本机或远程引擎，查看容器、镜像、网络和数据卷。连接信息只保存在这台电脑上。",
         "disableTitle": "关闭 Docker？",
-        "disableBody": "关闭后会断开当前连接。已保存的连接会保留，可以稍后重新开启。",
+        "disableBody": "关闭后会断开当前连接，并隐藏左侧入口。已保存的连接会保留，可以在设置里重新开启。",
         "desktopOnly": "Docker 只能在 Pixo 桌面版中使用。",
         "emptyEndpoints": "还没有连接。可以检测本机套接字，或导入已有的 Docker context。",
+        "trayEmpty": "还没有连接",
         "noMatch": "没有匹配的连接。",
         "insecureBadge": "不受保护",
         "sshOff": "SSH 工具未开启，这种连接暂时不可用。",
