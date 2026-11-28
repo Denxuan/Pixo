@@ -71,6 +71,124 @@ pub fn monitor_layout() -> Vec<MonitorLayout> {
         .collect()
 }
 
+/// The display under the pointer, in the same physical space as [`monitor_layout`].
+/// Returns nothing when the pointer cannot be read, including Wayland.
+pub fn monitor_under_cursor() -> Option<MonitorLayout> {
+    let (x, y) = cursor_desktop()?;
+    let screens = desktop_screens();
+    let index = screen_index(
+        &screens
+            .iter()
+            .map(|screen| (screen.left, screen.top, screen.width, screen.height))
+            .collect::<Vec<_>>(),
+        x,
+        y,
+    )?;
+    screens.get(index).map(|screen| screen.layout)
+}
+
+struct DesktopScreen {
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+    layout: MonitorLayout,
+}
+
+fn desktop_screens() -> Vec<DesktopScreen> {
+    let Ok(monitors) = xcap::Monitor::all() else {
+        return Vec::new();
+    };
+    monitors
+        .into_iter()
+        .take(8)
+        .map(|monitor| {
+            let scale = f64::from(monitor.scale_factor().unwrap_or(1.0));
+            let raw_x = monitor.x().unwrap_or(0);
+            let raw_y = monitor.y().unwrap_or(0);
+            let raw_w = monitor.width().unwrap_or(0);
+            let raw_h = monitor.height().unwrap_or(0);
+            let (origin_x, origin_y) = to_physical_origin(raw_x, raw_y, scale);
+            let (width, height) = to_physical_size(raw_w, raw_h, scale);
+            let (left, top, hit_w, hit_h) = cursor_hit_rect(
+                raw_x, raw_y, raw_w, raw_h, origin_x, origin_y, width, height,
+            );
+            DesktopScreen {
+                left,
+                top,
+                width: hit_w,
+                height: hit_h,
+                layout: MonitorLayout {
+                    origin_x,
+                    origin_y,
+                    width,
+                    height,
+                    scale_factor: scale,
+                },
+            }
+        })
+        .collect()
+}
+
+/// macOS Quartz and Windows report the pointer in xcap's public origin space.
+/// X11's pointer is in root-window pixels, which matches the physical layout.
+fn cursor_hit_rect(
+    raw_x: i32,
+    raw_y: i32,
+    raw_w: u32,
+    raw_h: u32,
+    origin_x: i32,
+    origin_y: i32,
+    width: u32,
+    height: u32,
+) -> (f64, f64, f64, f64) {
+    if cfg!(target_os = "linux") {
+        (
+            f64::from(origin_x),
+            f64::from(origin_y),
+            f64::from(width),
+            f64::from(height),
+        )
+    } else {
+        (
+            f64::from(raw_x),
+            f64::from(raw_y),
+            f64::from(raw_w),
+            f64::from(raw_h),
+        )
+    }
+}
+
+fn screen_index(screens: &[(f64, f64, f64, f64)], x: f64, y: f64) -> Option<usize> {
+    if screens.is_empty() || !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    screens
+        .iter()
+        .position(|screen| contains_screen(*screen, x, y))
+        .or_else(|| {
+            screens
+                .iter()
+                .enumerate()
+                .min_by(|(_, left), (_, right)| {
+                    screen_distance(**left, x, y).total_cmp(&screen_distance(**right, x, y))
+                })
+                .map(|(index, _)| index)
+        })
+}
+
+fn contains_screen(screen: (f64, f64, f64, f64), x: f64, y: f64) -> bool {
+    let (left, top, width, height) = screen;
+    width > 0.0 && height > 0.0 && x >= left && y >= top && x < left + width && y < top + height
+}
+
+fn screen_distance(screen: (f64, f64, f64, f64), x: f64, y: f64) -> f64 {
+    let (left, top, width, height) = screen;
+    let dx = x - (left + width / 2.0);
+    let dy = y - (top + height / 2.0);
+    dx * dx + dy * dy
+}
+
 pub fn capture_monitors() -> Result<(Vec<CapturedMonitor>, bool), ScreenshotError> {
     if is_wayland() {
         return Err(ScreenshotError::with_params(
@@ -199,9 +317,73 @@ pub fn list_windows() -> Vec<RawWindow> {
         .collect()
 }
 
+#[cfg(target_os = "macos")]
+fn cursor_desktop() -> Option<(f64, f64)> {
+    unsafe {
+        let event = CGEventCreate(std::ptr::null_mut());
+        if event.is_null() {
+            return None;
+        }
+        let point = CGEventGetLocation(event);
+        CFRelease(event);
+        (point.x.is_finite() && point.y.is_finite()).then_some((point.x, point.y))
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct CgPoint {
+    x: f64,
+    y: f64,
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGEventCreate(source: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn CGEventGetLocation(event: *mut std::ffi::c_void) -> CgPoint;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFRelease(value: *const std::ffi::c_void);
+}
+
+#[cfg(target_os = "windows")]
+fn cursor_desktop() -> Option<(f64, f64)> {
+    use ::windows::Win32::Foundation::POINT;
+    use ::windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+    let mut point = POINT::default();
+    if unsafe { GetCursorPos(&mut point) }.is_err() {
+        return None;
+    }
+    Some((f64::from(point.x), f64::from(point.y)))
+}
+
+#[cfg(target_os = "linux")]
+fn cursor_desktop() -> Option<(f64, f64)> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::ConnectionExt;
+
+    if is_wayland() {
+        return None;
+    }
+    let (connection, screen_index) = x11rb::connect(None).ok()?;
+    let root = connection.setup().roots.get(screen_index)?.root;
+    let reply = connection.query_pointer(root).ok()?.reply().ok()?;
+    Some((f64::from(reply.root_x), f64::from(reply.root_y)))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+fn cursor_desktop() -> Option<(f64, f64)> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{scale_coord, scale_len, to_physical_origin, window_in_pixels};
+    use super::{scale_coord, scale_len, screen_index, to_physical_origin, window_in_pixels};
     use crate::screenshot::snap::{Bounds, RawWindow};
 
     #[test]
@@ -246,5 +428,22 @@ mod tests {
         } else {
             assert_eq!(pixels.bounds, window.bounds);
         }
+    }
+
+    #[test]
+    fn the_pointer_selects_the_screen_that_contains_it() {
+        let screens = [
+            (0.0, 0.0, 1920.0, 1080.0),
+            (1920.0, 0.0, 1440.0, 900.0),
+            (-1920.0, 0.0, 1920.0, 1080.0),
+        ];
+        assert_eq!(screen_index(&screens, 10.0, 10.0), Some(0));
+        assert_eq!(screen_index(&screens, 2000.0, 100.0), Some(1));
+        assert_eq!(screen_index(&screens, -100.0, 400.0), Some(2));
+        assert_eq!(screen_index(&screens, 1919.0, 0.0), Some(0));
+        assert_eq!(screen_index(&screens, 1920.0, 0.0), Some(1));
+        assert_eq!(screen_index(&screens, 3400.0, 400.0), Some(1));
+        assert_eq!(screen_index(&[], 0.0, 0.0), None);
+        assert_eq!(screen_index(&screens, f64::NAN, 0.0), None);
     }
 }

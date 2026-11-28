@@ -17,6 +17,7 @@ mod remote;
 mod secret;
 mod session;
 mod shell;
+mod socks;
 mod store;
 mod transfer;
 
@@ -24,6 +25,18 @@ pub use drops::install as install_drop;
 pub(crate) use error::SshError;
 pub(crate) use session::SshState;
 pub use session::initialize;
+
+pub(crate) fn live_sessions(app: &tauri::AppHandle) -> usize {
+    app.try_state::<session::SshState>()
+        .map(|state| state.session_count())
+        .unwrap_or(0)
+}
+
+pub(crate) fn hosts_json(app: &tauri::AppHandle) -> Result<String, String> {
+    let state = app.try_state::<session::SshState>().ok_or("storage")?;
+    let hosts = state.list().map_err(|error| error.code.to_string())?;
+    serde_json::to_string_pretty(&hosts).map_err(|_| "storage".to_string())
+}
 
 pub(crate) fn menu_hosts(app: &tauri::AppHandle) -> (bool, Vec<(i64, String)>) {
     let Some(state) = app.try_state::<session::SshState>() else {

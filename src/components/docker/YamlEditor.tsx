@@ -3,7 +3,7 @@ import { EditorView } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
 
 import { useSettingsStore } from "@/stores/settings";
-import { isDarkTheme } from "@/utils/theme";
+import { inkFrameStyle, isDarkTheme } from "@/utils/theme";
 
 const extensions = [yaml(), EditorView.lineWrapping];
 
@@ -41,11 +41,7 @@ export default function YamlEditor({
       placeholder={placeholder}
       aria-label={label}
       onChange={onChange}
-      style={{
-        border: `1px solid ${token.colorBorder}`,
-        borderRadius: token.borderRadius,
-        overflow: "hidden",
-      }}
+      style={{ overflow: "hidden", ...inkFrameStyle(token, token.borderRadius) }}
     />
   );
 }

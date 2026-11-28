@@ -15,9 +15,10 @@ export default function SessionExtras({
   const [mode, setMode] = useState<"forward" | "snippet" | null>(null);
   const [forwards, setForwards] = useState<SshForward[]>([]);
   const [snippets, setSnippets] = useState<SshSnippet[]>([]);
-  const [localPort, setLocalPort] = useState<number | null>(8080);
-  const [remoteHost, setRemoteHost] = useState("127.0.0.1");
-  const [remotePort, setRemotePort] = useState<number | null>(80);
+  const [kind, setKind] = useState<"local" | "remote" | "dynamic">("local");
+  const [listenPort, setListenPort] = useState<number | null>(8080);
+  const [targetHost, setTargetHost] = useState("127.0.0.1");
+  const [targetPort, setTargetPort] = useState<number | null>(80);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [error, setError] = useState("");
@@ -48,10 +49,11 @@ export default function SessionExtras({
   }, [loadForwards, loadSnippets, mode]);
 
   async function addForward() {
-    if (!sessionId || !localPort || !remotePort) return;
+    if (!sessionId || !listenPort) return;
+    if (kind !== "dynamic" && (!targetPort || targetHost.trim().length === 0)) return;
     setError("");
     try {
-      await sshForwardOpen(sessionId, localPort, remoteHost.trim(), remotePort);
+      await sshForwardOpen(sessionId, kind, listenPort, kind === "dynamic" ? "" : targetHost.trim(), kind === "dynamic" ? 0 : targetPort ?? 0);
       await loadForwards();
     } catch (caught) {
       if (caught instanceof SshRequestError) setError(sshErrorText(t, caught));
@@ -108,17 +110,55 @@ export default function SessionExtras({
         {mode === "forward" && (
           <Flex vertical gap={12}>
             <Typography.Paragraph type="secondary">{t("zdx.text.ssh.forwardHelp")}</Typography.Paragraph>
-            <InputNumber aria-label={t("zdx.label.ssh.localPort")} min={1} max={65535} value={localPort} placeholder={t("zdx.placeholder.ssh.localPort")} onChange={(value) => setLocalPort(typeof value === "number" ? value : null)} />
-            <Input aria-label={t("zdx.label.ssh.remoteHost")} value={remoteHost} placeholder={t("zdx.placeholder.ssh.remoteHost")} onChange={(event) => setRemoteHost(event.target.value)} />
-            <InputNumber aria-label={t("zdx.label.ssh.remotePort")} min={1} max={65535} value={remotePort} placeholder={t("zdx.placeholder.ssh.remotePort")} onChange={(value) => setRemotePort(typeof value === "number" ? value : null)} />
-            <Button type="primary" disabled={!ready || !localPort || !remotePort || remoteHost.trim().length === 0} onClick={() => void addForward()}>{t("zdx.label.ssh.forwardAdd")}</Button>
+            <Segmented
+              aria-label={t("zdx.label.ssh.forwards")}
+              value={kind}
+              onChange={(value) => {
+                if (value === "local" || value === "remote" || value === "dynamic") setKind(value);
+              }}
+              options={[
+                { value: "local", label: t("zdx.label.ssh.forwardLocal") },
+                { value: "remote", label: t("zdx.label.ssh.forwardRemote") },
+                { value: "dynamic", label: t("zdx.label.ssh.forwardDynamic") },
+              ]}
+            />
+            <Typography.Paragraph type="secondary">
+              {t(kind === "remote" ? "zdx.text.ssh.forwardRemoteHelp" : kind === "dynamic" ? "zdx.text.ssh.forwardDynamicHelp" : "zdx.text.ssh.forwardLocalHelp")}
+            </Typography.Paragraph>
+            <InputNumber
+              aria-label={t(kind === "remote" ? "zdx.label.ssh.remotePort" : "zdx.label.ssh.localPort")}
+              min={1}
+              max={65535}
+              value={listenPort}
+              placeholder={t(kind === "remote" ? "zdx.placeholder.ssh.remotePort" : "zdx.placeholder.ssh.localPort")}
+              onChange={(value) => setListenPort(typeof value === "number" ? value : null)}
+            />
+            {kind !== "dynamic" && (
+              <>
+                <Input
+                  aria-label={t(kind === "remote" ? "zdx.label.ssh.localForwardHost" : "zdx.label.ssh.remoteHost")}
+                  value={targetHost}
+                  placeholder={t(kind === "remote" ? "zdx.placeholder.ssh.localForwardHost" : "zdx.placeholder.ssh.remoteHost")}
+                  onChange={(event) => setTargetHost(event.target.value)}
+                />
+                <InputNumber
+                  aria-label={t(kind === "remote" ? "zdx.label.ssh.localPort" : "zdx.label.ssh.remotePort")}
+                  min={1}
+                  max={65535}
+                  value={targetPort}
+                  placeholder={t(kind === "remote" ? "zdx.placeholder.ssh.localPort" : "zdx.placeholder.ssh.remotePort")}
+                  onChange={(value) => setTargetPort(typeof value === "number" ? value : null)}
+                />
+              </>
+            )}
+            <Button type="primary" disabled={!ready || !listenPort || (kind !== "dynamic" && (!targetPort || targetHost.trim().length === 0))} onClick={() => void addForward()}>{t("zdx.label.ssh.forwardAdd")}</Button>
             {forwards.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("zdx.text.ssh.forwardEmpty")} />}
             <List
               dataSource={forwards}
               rowKey="id"
               renderItem={(item) => (
                 <List.Item actions={[<Button key="stop" type="link" danger onClick={() => void stopForward(item.id)}>{t("zdx.label.ssh.forwardClose")}</Button>]}>
-                  <span>127.0.0.1:{item.localPort} → {item.remoteHost}:{item.remotePort}</span>
+                  <span>{forwardLabel(t, item)}</span>
                 </List.Item>
               )}
             />
@@ -150,4 +190,10 @@ export default function SessionExtras({
       </Drawer>
     </>
   );
+}
+
+function forwardLabel(t: (key: string, options?: Record<string, unknown>) => string, item: SshForward) {
+  if (item.kind === "dynamic") return t("zdx.text.ssh.forwardDynamicRow", { port: item.listenPort });
+  if (item.kind === "remote") return t("zdx.text.ssh.forwardRemoteRow", { listen: item.listenPort, host: item.targetHost, port: item.targetPort });
+  return t("zdx.text.ssh.forwardLocalRow", { listen: item.listenPort, host: item.targetHost, port: item.targetPort });
 }

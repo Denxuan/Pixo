@@ -1,9 +1,11 @@
+import { inkFrameStyle } from "@/utils/theme";
+
 export function SettingGroup({ title, children }: { title?: ReactNode; children: ReactNode }) {
   const { token } = antdTheme.useToken();
   return (
     <section className="flex flex-col gap-2">
       {title && <Typography.Text strong className="px-1" style={{ fontSize: token.fontSizeSM, color: token.colorTextSecondary }}>{title}</Typography.Text>}
-      <div className="overflow-hidden" style={{ background: token.colorBgContainer, border: `1px solid ${token.colorBorderSecondary}`, borderRadius: token.borderRadiusLG }}>
+      <div className="overflow-hidden" style={{ background: token.colorBgContainer, ...inkFrameStyle(token, token.borderRadiusLG) }}>
         {children}
       </div>
     </section>

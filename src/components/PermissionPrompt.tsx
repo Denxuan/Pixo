@@ -1,8 +1,13 @@
+import { listen } from "@tauri-apps/api/event";
+
 import { permissionsOpen, permissionsPrepare, permissionsStatus, type SystemPermission } from "@/api/permissions";
-import { toClipboardError } from "@/api/clipboard";
+import { clipboardStatus, toClipboardError } from "@/api/clipboard";
 import { SettingGroup, SettingRow } from "@/components/SettingGroup";
 import { clipboardErrorText } from "@/utils/clipboardMessage";
 import { isDesktop } from "@/utils/desktop";
+import { permissionPromptHeld } from "@/utils/permissionGate";
+import { useSettingsStore } from "@/stores/settings";
+import type { ClipboardStatus } from "@/types/clipboard";
 
 const permissionCopy = {
   accessibility: {
@@ -26,14 +31,35 @@ function isPermissionId(id: string): id is SystemPermission["id"] {
 export default function PermissionPrompt() {
   const { t } = useTranslation();
   const desktop = isDesktop();
+  const introduced = useSettingsStore((state) => state.introduced);
+  const [clipboardOn, setClipboardOn] = useState(false);
   const [items, setItems] = useState<SystemPermission[]>([]);
   const [dismissed, setDismissed] = useState(false);
   const [error, setError] = useState("");
   const missing = items.filter((item) => !item.granted && isPermissionId(item.id));
-  const open = desktop && !dismissed && missing.length > 0;
+  const open = desktop && introduced && clipboardOn && !permissionPromptHeld() && !dismissed && missing.length > 0;
 
   useEffect(() => {
-    if (!desktop) return;
+    if (!desktop || !introduced) return;
+    let alive = true;
+    let stop: (() => void) | undefined;
+    void clipboardStatus().then((status) => {
+      if (alive) setClipboardOn(status.enabled);
+    }).catch(() => undefined);
+    void listen<ClipboardStatus>("clipboard://status", (event) => {
+      setClipboardOn(event.payload.enabled);
+    }).then((unlisten) => {
+      if (alive) stop = unlisten;
+      else unlisten();
+    });
+    return () => {
+      alive = false;
+      stop?.();
+    };
+  }, [desktop, introduced]);
+
+  useEffect(() => {
+    if (!desktop || !introduced || !clipboardOn) return;
     let alive = true;
     const apply = (next: SystemPermission[]) => {
       if (alive) setItems(next);
@@ -50,7 +76,7 @@ export default function PermissionPrompt() {
     return () => {
       alive = false;
     };
-  }, [desktop]);
+  }, [clipboardOn, desktop, introduced]);
 
   useEffect(() => {
     if (!open) return;

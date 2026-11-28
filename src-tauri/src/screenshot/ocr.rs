@@ -113,21 +113,22 @@ pub fn available() -> bool {
 }
 
 pub fn recognize(png_base64: &str) -> Result<OcrText, ScreenshotError> {
-    let job = Job::begin()?;
-    if job.stopped() {
-        return Err(ScreenshotError::new("cancelled"));
-    }
     if png_base64.len() > PNG_LIMIT.saturating_mul(2) {
         return Err(ScreenshotError::new("invalid_input"));
     }
     let bytes = decode_base64(png_base64)?;
+    recognize_png(&bytes)
+}
+
+pub fn recognize_png(bytes: &[u8]) -> Result<OcrText, ScreenshotError> {
+    let job = Job::begin()?;
     if job.stopped() {
         return Err(ScreenshotError::new("cancelled"));
     }
     if bytes.len() > PNG_LIMIT || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Err(ScreenshotError::new("invalid_input"));
     }
-    let fitted = fit_png(&bytes)?;
+    let fitted = fit_png(bytes)?;
     if job.stopped() {
         return Err(ScreenshotError::new("cancelled"));
     }

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use hmac::{Hmac, Mac};
 use russh::keys::ssh_key::known_hosts::{Entry, HostPatterns, KnownHosts, Marker};
 use russh::keys::{HashAlg, PublicKey};
+use serde::Serialize;
 use sha1::Sha1;
 
 use super::error::SshError;
@@ -28,6 +29,15 @@ pub enum Decision {
         fingerprint: String,
     },
     Changed(KeyChange),
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustedHost {
+    pub host: String,
+    pub port: u16,
+    pub algorithm: String,
+    pub fingerprint: String,
 }
 
 pub struct KnownStore {
@@ -92,6 +102,24 @@ impl KnownStore {
             output.push('\n');
         }
         fs::write(&self.path, output).map_err(storage)
+    }
+
+    pub fn list(&self) -> Vec<TrustedHost> {
+        let mut hosts = Vec::new();
+        for entry in load_entries(&self.path) {
+            let Some(host) = describe_entry(&entry) else {
+                continue;
+            };
+            if hosts.iter().any(|saved: &TrustedHost| {
+                saved.host == host.host
+                    && saved.port == host.port
+                    && saved.fingerprint == host.fingerprint
+            }) {
+                continue;
+            }
+            hosts.push(host);
+        }
+        hosts
     }
 }
 
@@ -243,6 +271,56 @@ fn fingerprint(key: &PublicKey) -> String {
     key.fingerprint(HashAlg::Sha256).to_string()
 }
 
+fn describe_entry(entry: &Entry) -> Option<TrustedHost> {
+    if matches!(
+        entry.marker(),
+        Some(Marker::CertAuthority | Marker::Revoked)
+    ) {
+        return None;
+    }
+    let HostPatterns::Patterns(patterns) = entry.host_patterns() else {
+        return None;
+    };
+    let marker = patterns.first()?;
+    if patterns.len() != 1 {
+        return None;
+    }
+    let (host, port) = split_marker(marker)?;
+    Some(TrustedHost {
+        host,
+        port,
+        algorithm: entry.public_key().algorithm().to_string(),
+        fingerprint: fingerprint(entry.public_key()),
+    })
+}
+
+fn split_marker(marker: &str) -> Option<(String, u16)> {
+    if marker.is_empty()
+        || marker.len() > 253
+        || marker.chars().any(|ch| {
+            ch.is_whitespace() || ch.is_control() || matches!(ch, '*' | '?' | '!' | ',' | '@')
+        })
+    {
+        return None;
+    }
+    if let Some(body) = marker.strip_prefix('[') {
+        let (host, port) = body.split_once("]:")?;
+        let port = port.parse::<u16>().ok()?;
+        if host.is_empty() || port == 0 || host.contains(['[', ']']) {
+            return None;
+        }
+        return Some((host.to_string(), port));
+    }
+    if marker.contains(['[', ']']) {
+        return None;
+    }
+    Some((marker.to_string(), 22))
+}
+
+pub fn acceptable_host(host: &str) -> bool {
+    split_marker(host).is_some_and(|(parsed, port)| port == 22 && parsed == host)
+}
+
 fn ends_with_newline(file: &mut std::fs::File) -> bool {
     use std::io::{Read, Seek, SeekFrom};
     let Ok(len) = file.seek(SeekFrom::End(0)) else {
@@ -383,6 +461,17 @@ mod tests {
             store.decide("example.com", 22, &key).unwrap(),
             Decision::Trusted
         ));
+        let listed = store.list();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].host, "example.com");
+        assert_eq!(listed[0].port, 22);
+        store.trust("example.com", 2222, &key).unwrap();
+        let listed = store.list();
+        assert!(
+            listed
+                .iter()
+                .any(|item| item.host == "example.com" && item.port == 2222)
+        );
         store.forget("example.com", 22).unwrap();
         assert!(matches!(
             store.decide("example.com", 22, &key).unwrap(),

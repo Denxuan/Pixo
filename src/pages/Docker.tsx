@@ -248,6 +248,7 @@ export default function DockerPage() {
             onEdit={(endpoint) => { setEditing(endpoint); setFormOpen(true); }}
             onDelete={remove}
             onImport={() => setImportOpen(true)}
+            onSettings={() => navigate("/settings/docker")}
           />
         )}
         end={(
@@ -262,7 +263,11 @@ export default function DockerPage() {
         {selected && phase === "closed" && (
           <div className="flex flex-1 items-center justify-center p-6">
             <Empty description={error || t("zdx.text.docker.unreachableTitle")}>
-              <Button onClick={() => void connect(selected)}>{t("zdx.label.docker.connect")}</Button>
+              {selected.kind === "ssh" && !sshEnabled ? (
+                <Button onClick={() => navigate("/settings/ssh")}>{t("zdx.label.docker.openSsh")}</Button>
+              ) : (
+                <Button onClick={() => void connect(selected)}>{t("zdx.label.docker.connect")}</Button>
+              )}
             </Empty>
           </div>
         )}
@@ -306,6 +311,5 @@ export default function DockerPage() {
 
 function containerHost(endpoint: DockerEndpoint, hosts: SshHost[]): string {
   if (endpoint.kind === "ssh") return hosts.find((item) => item.id === endpoint.sshHostId)?.host ?? "";
-  if (endpoint.kind === "tcp" || endpoint.kind === "tls") return endpoint.host ?? "";
   return "127.0.0.1";
 }

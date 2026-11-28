@@ -13,6 +13,7 @@ import type {
   EngineSummary,
   ImageRow,
   NetworkRow,
+  VolumeRow,
   ComposePreview,
   ComposeProjectRequest,
   ComposeProject,
@@ -86,6 +87,9 @@ export const dockerImageRemove = (endpointId: number, name: string) => call<void
 export const dockerNetworks = (endpointId: number) => call<NetworkRow[]>("docker_networks", { endpointId });
 export const dockerNetworkInspect = (endpointId: number, name: string) => call<unknown>("docker_network_inspect", { endpointId, name });
 export const dockerNetworkRemove = (endpointId: number, name: string) => call<void>("docker_network_remove", { endpointId, name });
+export const dockerVolumes = (endpointId: number) => call<VolumeRow[]>("docker_volumes", { endpointId });
+export const dockerVolumeInspect = (endpointId: number, name: string) => call<unknown>("docker_volume_inspect", { endpointId, name });
+export const dockerVolumeRemove = (endpointId: number, name: string) => call<void>("docker_volume_remove", { endpointId, name });
 export const dockerComposeProjects = (endpointId: number) => call<ComposeProject[]>("docker_compose_projects", { endpointId });
 export const dockerComposePreview = (path: string) => call<ComposePreview>("docker_compose_preview", { path });
 export const dockerPickFolder = (title: string) => call<string | null>("docker_pick_folder", { title });
@@ -111,6 +115,42 @@ export function dockerComposeLogs(endpointId: number, name: string, events: Chan
   return call<number>("docker_compose_logs", { endpointId, name, events });
 }
 
-export function dockerImagePull(endpointId: number, reference: string, events: Channel<DockerPullEvent>) {
-  return call<number>("docker_image_pull", { endpointId, reference, events });
+export function dockerImagePull(
+  endpointId: number,
+  reference: string,
+  events: Channel<DockerPullEvent>,
+  auth?: { username: string; password: string; remember: boolean },
+) {
+  return call<number>("docker_image_pull", {
+    endpointId,
+    reference,
+    events,
+    username: auth?.username ?? null,
+    password: auth?.password ?? null,
+    remember: auth?.remember ?? false,
+  });
 }
+
+export type DockerExecEvent = { type: "state"; state: string } | { type: "closed"; code: string; params?: Record<string, unknown> };
+
+export function dockerImageRun(endpointId: number, image: string, name: string, ports: string, command: string) {
+  return call<string>("docker_image_run", { endpointId, image, name, ports, command });
+}
+
+export type ContainerUsage = {
+  cpuPercent: number | null;
+  memoryBytes: number;
+  memoryLimit: number | null;
+};
+
+export function dockerContainerStats(endpointId: number, id: string) {
+  return call<ContainerUsage>("docker_container_stats", { endpointId, id });
+}
+
+export function dockerExecOpen(endpointId: number, containerId: string, cols: number, rows: number, command: string, output: Channel<unknown>, events: Channel<DockerExecEvent>) {
+  return call<number>("docker_exec_open", { endpointId, containerId, cols, rows, command, output, events });
+}
+
+export const dockerExecWrite = (id: number, data: number[]) => call<void>("docker_exec_write", { id, data });
+export const dockerExecResize = (id: number, cols: number, rows: number) => call<void>("docker_exec_resize", { id, cols, rows });
+export const dockerExecClose = (id: number) => call<void>("docker_exec_close", { id });

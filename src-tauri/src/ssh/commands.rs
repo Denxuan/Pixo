@@ -24,6 +24,20 @@ pub fn ssh_set_keepalive(state: State<'_, SshState>, seconds: u32) -> Result<Ssh
 }
 
 #[tauri::command]
+pub fn ssh_known_hosts(state: State<'_, SshState>) -> Vec<super::known_hosts::TrustedHost> {
+    state.trusted_hosts()
+}
+
+#[tauri::command]
+pub fn ssh_known_host_forget(
+    state: State<'_, SshState>,
+    host: String,
+    port: u16,
+) -> Result<(), SshError> {
+    state.forget_trusted(&host, port)
+}
+
+#[tauri::command]
 pub fn ssh_hosts_list(state: State<'_, SshState>) -> Result<Vec<Host>, SshError> {
     state.list()
 }
@@ -326,12 +340,13 @@ pub fn ssh_transfer_forget(state: State<'_, SshState>, task_id: u64) -> Result<(
 pub async fn ssh_forward_open(
     state: State<'_, SshState>,
     session_id: u64,
-    local_port: u32,
-    remote_host: String,
-    remote_port: u32,
+    kind: String,
+    listen_port: u32,
+    target_host: String,
+    target_port: u32,
 ) -> Result<ForwardView, SshError> {
     state
-        .open_forward(session_id, local_port, &remote_host, remote_port)
+        .open_forward(session_id, &kind, listen_port, &target_host, target_port)
         .await
 }
 

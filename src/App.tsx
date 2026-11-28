@@ -1,12 +1,12 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { setBackground, setTrayIcon } from "@/api/system";
+import { setBackground, setLauncherShortcut, setTrayIcon } from "@/api/system";
 
 import BootScreen from "@/components/BootScreen";
 import { useSharedSettings } from "@/hooks/useSharedSettings";
 import { useSettingsStore } from "@/stores/settings";
 import { isTrayIcon } from "@/components/icons/TrayMark";
 import { isDesktop } from "@/utils/desktop";
-import { appTheme, isDarkTheme, SHELL_BACKGROUND } from "@/utils/theme";
+import { ILLUSTRATION, illustrationConfig, illustrationPalette, isDarkTheme, SHELL_BACKGROUND } from "@/utils/theme";
 
 const ClipboardPanel = lazy(() => import("@/pages/ClipboardPanel"));
 const ScreenshotOverlay = lazy(() => import("@/pages/ScreenshotOverlay"));
@@ -23,7 +23,7 @@ const subscribe = (onChange: () => void) => {
 };
 
 function useSurface(): "app" | "panel" | "overlay" | "pin" | "recorder" | "camera" | "scroll" {
-  if (!isDesktop()) return "app";
+  if (!isDesktop()) return new URLSearchParams(window.location.search).get("view") === "panel" ? "panel" : "app";
   try {
     const label = getCurrentWindow().label;
     if (label === "clipboard-panel") return "panel";
@@ -36,6 +36,40 @@ function useSurface(): "app" | "panel" | "overlay" | "pin" | "recorder" | "camer
     return "app";
   }
   return "app";
+}
+
+function themeProps(illustrated: boolean, dark: boolean) {
+  const algorithm = dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm;
+  if (!illustrated) return { button: { autoInsertSpace: false }, theme: { algorithm } };
+  const skin = illustrationConfig(dark);
+  return { ...skin, theme: { ...skin.theme, algorithm } };
+}
+
+function IllustrationVars({ active, canvas, dark }: { active: boolean; canvas: boolean; dark: boolean }) {
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    const names = ["--pixo-ink", "--pixo-line", "--pixo-radius", "--pixo-radius-lg", "--pixo-paper", "--pixo-primary", "--pixo-sider", "--pixo-shadow", "--pixo-shadow-sm"];
+    if (!active) {
+      for (const name of names) root.style.removeProperty(name);
+      root.style.removeProperty("background");
+      root.style.removeProperty("color-scheme");
+      return;
+    }
+    const palette = illustrationPalette(dark);
+    root.style.setProperty("--pixo-ink", palette.ink);
+    root.style.setProperty("--pixo-line", `${ILLUSTRATION.line}px`);
+    root.style.setProperty("--pixo-radius", `${ILLUSTRATION.radius}px`);
+    root.style.setProperty("--pixo-radius-lg", `${ILLUSTRATION.radiusLG}px`);
+    root.style.setProperty("--pixo-paper", palette.container);
+    root.style.setProperty("--pixo-primary", "#52C41A");
+    root.style.setProperty("--pixo-sider", palette.sider);
+    root.style.setProperty("--pixo-shadow", `${ILLUSTRATION.shadow}px`);
+    root.style.setProperty("--pixo-shadow-sm", `${ILLUSTRATION.shadowSm}px`);
+    if (canvas) root.style.background = palette.paper;
+    else root.style.removeProperty("background");
+    root.style.colorScheme = dark ? "dark" : "light";
+  }, [active, canvas, dark]);
+  return null;
 }
 
 function ScrollbarTone() {
@@ -75,6 +109,9 @@ export default function App() {
     void setTrayIcon(isTrayIcon(trayIcon) ? trayIcon : "board").catch((error) => {
       console.error("Failed to apply taskbar icon", error);
     });
+    void setLauncherShortcut(useSettingsStore.getState().launcherShortcut).catch((error) => {
+      console.error("Failed to register launcher shortcut", error);
+    });
   }, [appWindow, hydrated]);
 
   useEffect(() => {
@@ -84,18 +121,20 @@ export default function App() {
     void current.setBackgroundColor(dark ? SHELL_BACKGROUND.dark : SHELL_BACKGROUND.light).catch(() => undefined);
   }, [appWindow, dark, hydrated, mode]);
 
+  const illustrated = appWindow || surface === "panel";
+  const provider = themeProps(illustrated, dark);
+
   useEffect(() => {
+    const props = themeProps(illustrated, dark);
     ConfigProvider.config({
-      holderRender: (children) => <ConfigProvider button={{ autoInsertSpace: false }}>{children}</ConfigProvider>,
-      theme: {
-        ...(appWindow ? appTheme(dark) : {}),
-        algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
-      },
+      holderRender: (children) => <ConfigProvider {...props}>{children}</ConfigProvider>,
+      theme: props.theme,
     });
-  }, [appWindow, dark]);
+  }, [dark, illustrated]);
 
   return (
-    <ConfigProvider button={{ autoInsertSpace: false }} theme={{ ...(appWindow ? appTheme(dark) : {}), algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm }}>
+    <ConfigProvider {...provider}>
+      <IllustrationVars active={illustrated} canvas={appWindow} dark={dark} />
       <ScrollbarTone />
       <div className={dark ? "dark h-full overflow-hidden" : "h-full overflow-hidden"} style={{ colorScheme: dark ? "dark" : "light", background: surface === "panel" || surface === "recorder" || surface === "camera" || surface === "overlay" ? "transparent" : surface === "scroll" ? "#1c1c1c" : appWindow ? undefined : "#000" }}>
         <Suspense fallback={appWindow ? <BootScreen /> : null}>

@@ -14,6 +14,7 @@ declare global {
   const AppstoreOutlined: typeof import('@ant-design/icons').AppstoreOutlined
   const AutoComplete: typeof import('antd').AutoComplete
   const Avatar: typeof import('antd').Avatar
+  const BorderOuterOutlined: typeof import('@ant-design/icons').BorderOuterOutlined
   const Button: typeof import('antd').Button
   const CaretRightOutlined: typeof import('@ant-design/icons').CaretRightOutlined
   const Checkbox: typeof import('antd').Checkbox

@@ -5,10 +5,13 @@ import { dockerStatus } from "@/api/docker";
 import { screenshotGetSettings } from "@/api/screenshot";
 import { sshStatus } from "@/api/ssh";
 import FirstRun from "@/components/FirstRun";
+import Launcher from "@/components/Launcher";
 import PermissionPrompt from "@/components/PermissionPrompt";
 import UpdatePrompt from "@/components/UpdatePrompt";
 import type { ClipboardStatus } from "@/types/clipboard";
 import { isDesktop } from "@/utils/desktop";
+import { inkFrameStyle } from "@/utils/theme";
+import { redirectForClosedTool } from "@/utils/toolEntry";
 
 const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
 const subscribeMotion = (onChange: () => void) => {
@@ -20,6 +23,7 @@ function mainWindowPath(path: string) {
   const clean = path.split("?")[0];
   if (clean === "/settings" || clean === "/settings/clipboard" || clean === "/settings/screenshot") return clean;
   if (clean === "/clipboard/settings") return "/settings/clipboard";
+  if (clean === "/settings/ssh" || clean === "/settings/docker" || clean === "/settings/data") return clean;
   if (clean === "/clipboard" || clean === "/screenshot" || clean === "/ssh" || clean === "/docker") return clean;
   return "/clipboard";
 }
@@ -40,6 +44,7 @@ export default function AppShell() {
   const navigate = useNavigate();
   const { token } = antdTheme.useToken();
   const [collapsed, setCollapsed] = useState(false);
+  const [launcherOpen, setLauncherOpen] = useState(false);
   const collapsedByTool = useRef(false);
   const [clipboardOn, setClipboardOn] = useState<boolean | null>(null);
   const [screenshotOn, setScreenshotOn] = useState<boolean | null>(null);
@@ -74,11 +79,18 @@ export default function AppShell() {
   useEffect(() => {
     if (!isDesktop()) return;
     let stop: (() => void) | undefined;
+    let stopLauncher: (() => void) | undefined;
     let disposed = false;
     const open = (request: { path: string; enable: boolean; hostId?: number | null }) => {
       const hostId = typeof request.hostId === "number" ? request.hostId : null;
       navigate(mainWindowPath(request.path), { state: request.enable || hostId ? { enable: request.enable, hostId } : null });
     };
+    void listen("launcher://toggle", () => {
+      setLauncherOpen((open) => !open);
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stopLauncher = unlisten;
+    });
     void listen<{ path: string; enable: boolean; hostId?: number | null }>("clipboard://open-main", (event) => {
       open(event.payload);
       void takeClipboardMainRequest();
@@ -92,6 +104,7 @@ export default function AppShell() {
     return () => {
       disposed = true;
       stop?.();
+      stopLauncher?.();
     };
   }, [navigate]);
 
@@ -148,19 +161,15 @@ export default function AppShell() {
   }, []);
 
   useEffect(() => {
-    if (!isDesktop() || screenshotOn !== false || location.pathname !== "/screenshot") return;
-    navigate("/settings", { replace: true });
-  }, [location.pathname, navigate, screenshotOn]);
-
-  useEffect(() => {
-    if (!isDesktop() || sshOn !== false || location.pathname !== "/ssh") return;
-    navigate("/settings", { replace: true });
-  }, [location.pathname, navigate, sshOn]);
-
-  useEffect(() => {
-    if (!isDesktop() || dockerOn !== false || location.pathname !== "/docker") return;
-    navigate("/settings", { replace: true });
-  }, [location.pathname, navigate, dockerOn]);
+    if (!isDesktop()) return;
+    const next = redirectForClosedTool(location.pathname, {
+      clipboard: clipboardOn,
+      screenshot: screenshotOn,
+      ssh: sshOn,
+      docker: dockerOn,
+    });
+    if (next) navigate(next, { replace: true });
+  }, [clipboardOn, dockerOn, location.pathname, navigate, screenshotOn, sshOn]);
 
   useEffect(() => {
     const onTool = location.pathname.startsWith("/ssh") || location.pathname.startsWith("/docker");
@@ -187,7 +196,7 @@ export default function AppShell() {
         width={216}
         collapsedWidth={64}
         trigger={null}
-        style={{ height: "100%", background: "transparent", transition: reduceMotion ? "none" : undefined }}
+        style={{ height: "100%", borderInlineEnd: `${token.lineWidth}px solid ${token.colorBorder}`, transition: reduceMotion ? "none" : undefined }}
       >
         <nav aria-label={t("zdx.label.nav.tools")} className="flex h-full flex-col">
           <div className={collapsed ? "flex shrink-0 justify-center px-0 pb-4 pt-5" : "flex shrink-0 items-center gap-2.5 px-5 pb-4 pt-5"}>
@@ -203,8 +212,8 @@ export default function AppShell() {
             mode="inline"
             inlineCollapsed={collapsed}
             selectedKeys={selected ? [selected] : []}
-            className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
-            style={{ borderInlineEnd: 0 }}
+            className="pixo-nav min-h-0 flex-1 overflow-y-auto overflow-x-hidden"
+            style={{ borderInlineEnd: 0, background: "transparent" }}
             onClick={({ key }) => {
               if (key === "clipboard") navigate("/clipboard");
               if (key === "screenshot") navigate("/screenshot");
@@ -218,9 +227,16 @@ export default function AppShell() {
               mode="inline"
               inlineCollapsed={collapsed}
               selectedKeys={onSettings ? ["settings"] : []}
-              style={{ borderInlineEnd: 0 }}
-              onClick={() => navigate("/settings")}
-              items={[{ key: "settings", icon: <SettingOutlined />, label: t("zdx.label.nav.settings") }]}
+              className="pixo-nav"
+              style={{ borderInlineEnd: 0, background: "transparent" }}
+              onClick={({ key }) => {
+                if (key === "search") setLauncherOpen(true);
+                if (key === "settings") navigate("/settings");
+              }}
+              items={[
+                { key: "search", icon: <SearchOutlined />, label: t("zdx.label.launcher.open") },
+                { key: "settings", icon: <SettingOutlined />, label: t("zdx.label.nav.settings") },
+              ]}
             />
             <div className={collapsed ? "flex justify-center pt-1" : "flex px-3 pt-1"}>
               <Tooltip title={collapsed ? t("zdx.label.nav.expand") : t("zdx.label.nav.collapse")} placement="right">
@@ -236,19 +252,22 @@ export default function AppShell() {
           </div>
         </nav>
       </Layout.Sider>
-      <Layout.Content className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden py-2 pr-2">
+      <Layout.Content className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-3 pl-2">
         <main
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
-          style={{
-            background: token.colorBgContainer,
-            border: `1px solid ${token.colorBorderSecondary}`,
-            borderRadius: token.borderRadiusLG,
-            boxShadow: "0 1px 2px rgba(0, 0, 0, 0.04)",
-          }}
+          style={{ background: token.colorBgContainer, ...inkFrameStyle(token, token.borderRadiusLG) }}
         >
           <Outlet />
         </main>
       </Layout.Content>
+      <Launcher
+        open={launcherOpen}
+        clipboardOn={clipboardOn}
+        screenshotOn={screenshotOn}
+        sshOn={sshOn}
+        dockerOn={dockerOn}
+        onClose={() => setLauncherOpen(false)}
+      />
       <PermissionPrompt />
       <UpdatePrompt />
       <FirstRun />

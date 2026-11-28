@@ -18,7 +18,15 @@ type OpenTab = {
   generation: number;
   sessionId: number | null;
   phase: string;
+  suspended: boolean;
 };
+
+function sessionDot(phase: string) {
+  if (phase === "ready") return "inline-block h-1.5 w-1.5 rounded-full bg-green-500";
+  if (phase === "closed") return "inline-block h-1.5 w-1.5 rounded-full bg-red-400";
+  if (phase === "idle") return "inline-block h-1.5 w-1.5 rounded-full bg-neutral-400";
+  return "inline-block h-1.5 w-1.5 rounded-full bg-amber-400";
+}
 
 let tabSerial = 0;
 
@@ -111,7 +119,8 @@ export default function SshPage() {
       host,
       generation: 0,
       sessionId: null,
-      phase: "connecting",
+      phase: "idle",
+      suspended: true,
     }));
     skipEmptySave.current = true;
     setTabs(next);
@@ -144,7 +153,7 @@ export default function SshPage() {
       return;
     }
     const key = `ssh-${host.id}-${tabSerial += 1}`;
-    setTabs((current) => current.some((tab) => tab.host.id === host.id) && !fresh ? current : [...current, { key, host, generation: 0, sessionId: null, phase: "connecting" }]);
+    setTabs((current) => current.some((tab) => tab.host.id === host.id) && !fresh ? current : [...current, { key, host, generation: 0, sessionId: null, phase: "connecting", suspended: false }]);
     setActive(key);
   }
 
@@ -174,7 +183,7 @@ export default function SshPage() {
   }
 
   function reconnectTab(key: string) {
-    setTabs((current) => current.map((item) => item.key === key ? { ...item, generation: item.generation + 1, phase: "connecting", sessionId: null } : item));
+    setTabs((current) => current.map((item) => item.key === key ? { ...item, generation: item.generation + 1, phase: "connecting", sessionId: null, suspended: false } : item));
   }
 
   function tabKeyFrom(target: EventTarget | null) {
@@ -209,6 +218,14 @@ export default function SshPage() {
       setTabs((current) => current.filter((tab) => tab.host.id !== host.id));
       await loadHosts();
     } catch (caught) {
+      if (caught instanceof SshRequestError && caught.code === "endpoint_in_use") {
+        Modal.warning({
+          title: t("zdx.text.ssh.endpointInUseTitle", { name: host.name }),
+          content: t("zdx.text.ssh.endpointInUseBody", { endpoints: String(caught.params.endpoints ?? "") }),
+          okText: t("zdx.label.ssh.cancel"),
+        });
+        return;
+      }
       if (caught instanceof SshRequestError && caught.code === "jump_in_use") {
         Modal.confirm({
           title: t("zdx.text.ssh.jumpInUseTitle", { name: host.name }),
@@ -277,6 +294,7 @@ export default function SshPage() {
             onDelete={(host) => void removeHost(host)}
             onCreate={() => { setEditing(null); setFormOpen(true); }}
             onImport={() => setImportOpen(true)}
+            onSettings={() => navigate("/settings/ssh")}
             keepalive={keepalive}
             onKeepalive={(seconds) => {
               setKeepalive(seconds);
@@ -335,7 +353,7 @@ export default function SshPage() {
                     key: tab.key,
                     label: (
                       <span className="inline-flex items-center gap-2">
-                        <span className={tab.phase === "ready" ? "inline-block h-1.5 w-1.5 rounded-full bg-green-500" : tab.phase === "closed" ? "inline-block h-1.5 w-1.5 rounded-full bg-red-400" : "inline-block h-1.5 w-1.5 rounded-full bg-amber-400"} />
+                        <span className={sessionDot(tab.phase)} />
                         {tab.host.name}
                       </span>
                     ),
@@ -343,6 +361,7 @@ export default function SshPage() {
                       <TerminalView
                         host={tab.host}
                         connectKey={tab.generation}
+                        autoConnect={!tab.suspended}
                         onSession={(sessionId) => setTabs((current) => current.map((item) => item.key === tab.key ? { ...item, sessionId } : item))}
                         onEvent={(sessionId, event) => onEvent(tab, sessionId, event)}
                         onReconnect={() => reconnectTab(tab.key)}

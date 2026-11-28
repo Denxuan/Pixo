@@ -199,6 +199,58 @@ pub fn screenshot_library_path(
 }
 
 #[tauri::command]
+pub fn screenshot_library_pin(
+    state: State<'_, ScreenshotState>,
+    id: i64,
+) -> Result<u8, ScreenshotError> {
+    state.library_pin(id)
+}
+
+#[tauri::command(async)]
+pub async fn screenshot_library_recognize(
+    state: State<'_, ScreenshotState>,
+    id: i64,
+) -> Result<super::ocr::OcrText, ScreenshotError> {
+    let state = (*state).clone();
+    tauri::async_runtime::spawn_blocking(move || state.library_recognize(id))
+        .await
+        .map_err(|error| {
+            eprintln!("screenshot library ocr: {error}");
+            ScreenshotError::new("capture_failed")
+        })?
+}
+
+#[tauri::command(async)]
+pub async fn screenshot_pin_clipboard(
+    clipboard: State<'_, crate::clipboard::ClipboardState>,
+    shots: State<'_, ScreenshotState>,
+    id: i64,
+) -> Result<u8, ScreenshotError> {
+    // Read the pointer before the image leaves disk. A large clipboard file
+    // can take long enough for the pointer to reach another display.
+    let monitor = super::capture::monitor_under_cursor();
+    let bytes = clipboard.image(id, false).map_err(|error| {
+        ScreenshotError::new(match error.code {
+            "not_found" => "not_found",
+            "too_large" => "too_large",
+            _ => "storage",
+        })
+    })?;
+    let shots = (*shots).clone();
+    // Resize away from the window call. Opening the pin while this task is
+    // still awaited deadlocks the main thread, so the click never finishes.
+    let placed = tauri::async_runtime::spawn_blocking(move || {
+        super::session::place_clipboard_image(bytes, monitor)
+    })
+    .await
+    .map_err(|error| {
+        eprintln!("clipboard pin: {error}");
+        ScreenshotError::new("capture_failed")
+    })??;
+    shots.present_clipboard_pin(placed)
+}
+
+#[tauri::command]
 pub fn screenshot_library_thumb(
     state: State<'_, ScreenshotState>,
     id: i64,

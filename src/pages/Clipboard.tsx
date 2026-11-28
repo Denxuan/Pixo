@@ -1,4 +1,6 @@
 import { ClipboardRequestError, clipboardSetLabel } from "@/api/clipboard";
+import { ScreenshotRequestError, screenshotPinClipboard } from "@/api/screenshot";
+import { screenshotErrorText } from "@/utils/screenshotMessage";
 import HistoryList from "@/components/clipboard/HistoryList";
 import Page from "@/components/Page";
 import { useClipboardHistory } from "@/hooks/useClipboard";
@@ -18,6 +20,7 @@ export default function ClipboardPage() {
   const [clearAll, setClearAll] = useState(false);
   const [enableOpen, setEnableOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
+  const [stickingId, setStickingId] = useState<number | null>(null);
   const [labelDraft, setLabelDraft] = useState("");
   const desktop = isDesktop();
   const active = history.items.find((item) => item.id === activeId) ?? null;
@@ -66,6 +69,22 @@ export default function ClipboardPage() {
         setNoticeTone("warning");
         setNotice(clipboardErrorText(t, error));
       }
+    }
+  }
+
+  async function stick(id: number) {
+    if (stickingId !== null) return;
+    setStickingId(id);
+    setNotice("");
+    try {
+      await screenshotPinClipboard(id);
+      setNoticeTone("success");
+      setNotice(t("zdx.text.clipboard.stuck"));
+    } catch (error) {
+      setNoticeTone("warning");
+      setNotice(error instanceof ScreenshotRequestError ? screenshotErrorText(t, error) : t("zdx.text.screenshot.error.unknown"));
+    } finally {
+      setStickingId(null);
     }
   }
 
@@ -146,6 +165,7 @@ export default function ClipboardPage() {
 
         {desktop && (
           <>
+            {notice && <Alert type={noticeTone} showIcon closable message={notice} onClose={() => setNotice("")} />}
             <Flex gap={12} wrap align="center" justify="space-between">
               <Input
                 allowClear
@@ -193,12 +213,11 @@ export default function ClipboardPage() {
               {!history.loading && history.items.length === 0 && <Empty className="py-12" image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} />}
               {history.items.length > 0 && (
                 <>
-                  <HistoryList items={history.items} activeId={activeId} onActive={setActiveId} onCopy={(id) => void copy(id)} onPin={(id, pinned) => void history.pinItem(id, pinned)} onDelete={setPendingDelete} />
+                  <HistoryList items={history.items} activeId={activeId} onActive={setActiveId} onCopy={(id) => void copy(id)} onPin={(id, pinned) => void history.pinItem(id, pinned)} onStick={(id) => void stick(id)} stickingId={stickingId} onDelete={setPendingDelete} />
                   {history.nextCursor && <Flex justify="center" className="py-2"><Button type="text" onClick={() => void history.loadMore()}>{t("zdx.label.clipboard.loadMore")}</Button></Flex>}
                 </>
               )}
             </div>
-            {notice && <Alert type={noticeTone} showIcon closable message={notice} onClose={() => setNotice("")} />}
             {history.error && history.error.code !== "desktop_only" && <Alert type="error" showIcon message={clipboardErrorText(t, history.error)} />}
           </>
         )}

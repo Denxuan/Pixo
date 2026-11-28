@@ -11,6 +11,7 @@ export default function HostList({
   onDelete,
   onCreate,
   onImport,
+  onSettings,
   keepalive,
   onKeepalive,
 }: {
@@ -24,10 +25,12 @@ export default function HostList({
   onDelete: (host: SshHost) => void;
   onCreate: () => void;
   onImport: () => void;
+  onSettings: () => void;
   keepalive: number;
   onKeepalive: (seconds: number) => void;
 }) {
   const { t } = useTranslation();
+  const { token } = antdTheme.useToken();
   const needle = query.trim().toLocaleLowerCase();
   const visible = hosts.filter((host) => {
     if (!needle) return true;
@@ -44,9 +47,8 @@ export default function HostList({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-2 px-3 pb-3 pt-4">
+      <div className="flex shrink-0 flex-col gap-2 px-3 pb-3 pt-4">
         <Input
-          className="min-w-0 flex-1"
           allowClear
           aria-label={t("zdx.label.ssh.search")}
           placeholder={t("zdx.placeholder.ssh.search")}
@@ -54,12 +56,17 @@ export default function HostList({
           value={query}
           onChange={(event) => onQuery(event.target.value)}
         />
-        <Tooltip title={t("zdx.label.ssh.importConfig")}>
-          <Button aria-label={t("zdx.label.ssh.importConfig")} icon={<ImportOutlined />} onClick={onImport} />
-        </Tooltip>
-        <Tooltip title={t("zdx.label.ssh.newHost")}>
-          <Button aria-label={t("zdx.label.ssh.newHost")} icon={<PlusOutlined />} onClick={onCreate} />
-        </Tooltip>
+        <div className="flex items-center gap-2">
+          <Tooltip title={t("zdx.label.ssh.importConfig")}>
+            <Button aria-label={t("zdx.label.ssh.importConfig")} icon={<ImportOutlined />} onClick={onImport} />
+          </Tooltip>
+          <Tooltip title={t("zdx.label.ssh.newHost")}>
+            <Button aria-label={t("zdx.label.ssh.newHost")} icon={<PlusOutlined />} onClick={onCreate} />
+          </Tooltip>
+          <Tooltip title={t("zdx.label.nav.settings")}>
+            <Button aria-label={t("zdx.label.nav.settings")} icon={<SettingOutlined />} onClick={onSettings} />
+          </Tooltip>
+        </div>
       </div>
       <div className="flex shrink-0 items-center gap-2 px-3 pb-3">
         <Tooltip title={t("zdx.text.ssh.keepaliveHint")}>
@@ -93,7 +100,7 @@ export default function HostList({
                   aria-selected={selected}
                   tabIndex={0}
                   className="mb-1 flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 outline-none"
-                  style={{ background: selected ? "rgba(79, 93, 240, 0.12)" : undefined }}
+                  style={{ background: selected ? token.colorPrimaryBg : undefined }}
                   onClick={() => onSelect(host.id)}
                   onDoubleClick={() => onConnect(host)}
                   onKeyDown={(event) => {

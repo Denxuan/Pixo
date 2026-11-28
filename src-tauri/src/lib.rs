@@ -93,6 +93,7 @@ pub fn run() {
             clipboard::commands::clipboard_show_panel,
             shortcut::clipboard_dismiss_panel,
             shortcut::launcher_open,
+            shortcut::launcher_set_shortcut,
             tray::clipboard_set_tray_labels,
             tray::clipboard_set_tray_icon,
             tray::clipboard_take_main_request,
@@ -103,6 +104,8 @@ pub fn run() {
             system_settings::system_set_autostart,
             system_settings::system_set_background,
             system_settings::system_check_update,
+            system_settings::system_data_profile,
+            system_settings::system_export_bundle,
             screenshot::commands::screenshot_status,
             screenshot::commands::screenshot_get_settings,
             screenshot::commands::screenshot_update_settings,
@@ -126,6 +129,9 @@ pub fn run() {
             screenshot::commands::screenshot_library_copy,
             screenshot::commands::screenshot_library_path,
             screenshot::commands::screenshot_library_thumb,
+            screenshot::commands::screenshot_library_pin,
+            screenshot::commands::screenshot_library_recognize,
+            screenshot::commands::screenshot_pin_clipboard,
             screenshot::commands::screenshot_scroll,
             screenshot::commands::screenshot_scroll_stop,
             screenshot::commands::screenshot_scroll_set_auto,
@@ -152,6 +158,8 @@ pub fn run() {
             ssh::commands::ssh_status,
             ssh::commands::ssh_set_enabled,
             ssh::commands::ssh_set_keepalive,
+            ssh::commands::ssh_known_hosts,
+            ssh::commands::ssh_known_host_forget,
             ssh::commands::ssh_hosts_list,
             ssh::commands::ssh_host_save,
             ssh::commands::ssh_host_delete,
@@ -209,6 +217,12 @@ pub fn run() {
             docker::commands::docker_image_inspect,
             docker::commands::docker_image_remove,
             docker::commands::docker_image_pull,
+            docker::commands::docker_image_run,
+            docker::commands::docker_container_stats,
+            docker::commands::docker_exec_open,
+            docker::commands::docker_exec_write,
+            docker::commands::docker_exec_resize,
+            docker::commands::docker_exec_close,
             docker::commands::docker_networks,
             docker::commands::docker_network_inspect,
             docker::commands::docker_network_remove,
@@ -248,9 +262,9 @@ pub(crate) fn ensure_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
 
 fn window_canvas() -> Color {
     if startup_dark() {
-        Color(16, 16, 18, 255)
+        Color(28, 22, 18, 255)
     } else {
-        Color(243, 244, 246, 255)
+        Color(255, 249, 240, 255)
     }
 }
 

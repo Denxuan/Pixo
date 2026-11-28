@@ -305,8 +305,12 @@ impl ScreenshotState {
             .settings
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = next.clone();
-        if !enabled && !super::record::is_active() {
-            let _ = self.cancel();
+        if !enabled {
+            if super::record::is_active() {
+                super::record::stop();
+            } else {
+                let _ = self.cancel();
+            }
         }
         let _ = self.inner.app.emit("screenshot://enabled", enabled);
         Ok(next)
@@ -901,6 +905,74 @@ impl ScreenshotState {
         library.as_ref().map(apply)
     }
 
+    pub fn library_pin(&self, id: i64) -> Result<u8, ScreenshotError> {
+        let item = self
+            .with_library(|library| library.get(id))
+            .ok_or_else(|| ScreenshotError::new("storage"))??;
+        if item.kind != "image" {
+            return Err(ScreenshotError::new("invalid_input"));
+        }
+        let encoded = fs::read(&item.path).map_err(|_| ScreenshotError::new("not_found"))?;
+        self.place_image(encoded, true)
+    }
+
+    pub fn library_recognize(&self, id: i64) -> Result<super::ocr::OcrText, ScreenshotError> {
+        if !super::ocr::available() {
+            return Err(ScreenshotError::with_params(
+                "unsupported",
+                serde_json::json!({ "reason": "ocr" }),
+            ));
+        }
+        let item = self
+            .with_library(|library| library.get(id))
+            .ok_or_else(|| ScreenshotError::new("storage"))??;
+        if item.kind != "image" {
+            return Err(ScreenshotError::new("invalid_input"));
+        }
+        let encoded = fs::read(&item.path).map_err(|_| ScreenshotError::new("not_found"))?;
+        if encoded.len() > 32 * 1024 * 1024 {
+            return Err(ScreenshotError::new("too_large"));
+        }
+        let png = if encoded.starts_with(b"\x89PNG\r\n\x1a\n") {
+            encoded
+        } else {
+            let (width, height, rgba) = super::bytes::decode_rgba_png(&encoded)?;
+            super::bytes::encode_png(width, height, &rgba)?
+        };
+        let text = super::ocr::recognize_png(&png)?;
+        self.with_library(|library| library.set_text(id, &text.text))
+            .ok_or_else(|| ScreenshotError::new("storage"))??;
+        self.notify_library();
+        Ok(text)
+    }
+
+    pub fn present_clipboard_pin(&self, placed: PlacedPin) -> Result<u8, ScreenshotError> {
+        self.show_pin_bytes(
+            placed.png,
+            placed.x,
+            placed.y,
+            placed.width,
+            placed.height,
+            placed.scale,
+            false,
+        )
+    }
+
+    fn place_image(&self, encoded: Vec<u8>, wait_ready: bool) -> Result<u8, ScreenshotError> {
+        if encoded.len() > 80 * 1024 * 1024 {
+            return Err(ScreenshotError::new("too_large"));
+        }
+        let (width, height) = super::bytes::image_size(&encoded)?;
+        let layouts = super::capture::monitor_layout();
+        let (x, y, frame_w, frame_h, scale) = place_pin(layouts.first(), width, height);
+        let png = super::bytes::fit_pin_png(
+            encoded,
+            frame_w.round().max(1.0) as u32,
+            frame_h.round().max(1.0) as u32,
+        )?;
+        self.show_pin_bytes(png, x, y, frame_w, frame_h, scale, wait_ready)
+    }
+
     pub fn pin(
         &self,
         png_base64: &str,
@@ -911,6 +983,19 @@ impl ScreenshotState {
         scale_factor: f64,
     ) -> Result<u8, ScreenshotError> {
         let bytes = decode_base64(png_base64)?;
+        self.show_pin_bytes(bytes, x, y, width, height, scale_factor, true)
+    }
+
+    fn show_pin_bytes(
+        &self,
+        bytes: Vec<u8>,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        scale_factor: f64,
+        wait_ready: bool,
+    ) -> Result<u8, ScreenshotError> {
         if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
             return Err(ScreenshotError::new("invalid_input"));
         }
@@ -955,8 +1040,11 @@ impl ScreenshotState {
             "screenshot://pin-show",
             serde_json::json!({ "slot": shown }),
         );
-        // The overlay stays up until the warmed pin has painted this image.
-        let _ = ready.recv_timeout(Duration::from_secs(4));
+        // The capture overlay stays up until the warmed pin has painted this image.
+        // Clipboard pins return immediately so a large picture cannot freeze the click.
+        if wait_ready {
+            let _ = ready.recv_timeout(Duration::from_secs(4));
+        }
         Ok(shown)
     }
 
@@ -1598,6 +1686,64 @@ fn scroll_cursor(monitor: &MonitorInfo, area: (u32, u32, u32, u32)) -> super::sc
     }
 }
 
+pub struct PlacedPin {
+    pub png: Vec<u8>,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub scale: f64,
+}
+
+pub fn place_clipboard_image(
+    encoded: Vec<u8>,
+    monitor: Option<super::capture::MonitorLayout>,
+) -> Result<PlacedPin, ScreenshotError> {
+    if encoded.len() > 80 * 1024 * 1024 {
+        return Err(ScreenshotError::new("too_large"));
+    }
+    let (width, height) = super::bytes::image_size(&encoded)?;
+    let monitor = monitor.or_else(|| super::capture::monitor_layout().into_iter().next());
+    let (x, y, width, height, scale) = place_pin(monitor.as_ref(), width, height);
+    let png = super::bytes::fit_pin_png(
+        encoded,
+        width.round().max(1.0) as u32,
+        height.round().max(1.0) as u32,
+    )?;
+    Ok(PlacedPin {
+        png,
+        x,
+        y,
+        width,
+        height,
+        scale,
+    })
+}
+
+fn place_pin(
+    monitor: Option<&super::capture::MonitorLayout>,
+    image_w: u32,
+    image_h: u32,
+) -> (f64, f64, f64, f64, f64) {
+    let scale = monitor
+        .map(|item| item.scale_factor.max(1.0))
+        .unwrap_or(1.0);
+    let origin_x = monitor.map(|item| item.origin_x).unwrap_or(0);
+    let origin_y = monitor.map(|item| item.origin_y).unwrap_or(0);
+    let monitor_w = f64::from(monitor.map(|item| item.width).unwrap_or(1440).max(1));
+    let monitor_h = f64::from(monitor.map(|item| item.height).unwrap_or(900).max(1));
+    let max_w = monitor_w * 0.8;
+    let max_h = monitor_h * 0.8;
+    let mut width = f64::from(image_w.max(1));
+    let mut height = f64::from(image_h.max(1));
+    let fit = (max_w / width).min(max_h / height).min(1.0);
+    width = (width * fit).max(1.0);
+    height = (height * fit).max(1.0);
+    let x = f64::from(origin_x) + (monitor_w - width) / 2.0;
+    let y = f64::from(origin_y) + (monitor_h - height) / 2.0;
+    (x, y, width, height, scale)
+}
+
 fn result_frame(monitor: &MonitorInfo, image_w: u32, image_h: u32) -> (f64, f64, f64, f64) {
     let scale = monitor.scale_factor.max(1.0);
     let monitor_w = f64::from(monitor.width) / scale;
@@ -1766,6 +1912,21 @@ mod tests {
             fallback
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_pin_is_centered_on_the_monitor_under_the_pointer() {
+        let monitor = super::super::capture::MonitorLayout {
+            origin_x: 3024,
+            origin_y: -200,
+            width: 1920,
+            height: 1080,
+            scale_factor: 2.0,
+        };
+        let (x, y, width, height, scale) = super::place_pin(Some(&monitor), 400, 200);
+        assert_eq!((width, height, scale), (400.0, 200.0, 2.0));
+        assert!((x - (3024.0 + (1920.0 - 400.0) / 2.0)).abs() < 0.01);
+        assert!((y - (-200.0 + (1080.0 - 200.0) / 2.0)).abs() < 0.01);
     }
 
     #[test]

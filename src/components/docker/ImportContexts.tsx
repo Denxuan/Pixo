@@ -88,15 +88,12 @@ export default function ImportContexts({
 function kindLabel(t: (key: string) => string, kind: string) {
   if (kind === "local") return t("zdx.label.docker.kindLocal");
   if (kind === "ssh") return t("zdx.label.docker.kindSsh");
-  if (kind === "tls") return t("zdx.label.docker.kindTls");
-  if (kind === "tcp") return t("zdx.label.docker.kindTcp");
   return kind;
 }
 
 function warningText(t: (key: string) => string, row: DockerContextPreview) {
   if (row.warning === "unsupported") return t("zdx.text.docker.contextSkipped");
   if (row.warning === "ssh_unmatched") return t("zdx.text.docker.contextSsh");
-  if (row.warning === "insecure") return t("zdx.text.docker.contextInsecure");
   if (row.current) return t("zdx.text.docker.contextCurrent");
   return "";
 }

@@ -41,15 +41,15 @@ sha1 = "0.10"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "sync", "time"] }
 zeroize = "1"
 russh-sftp = "3.0.1"
-bollard = { version = "0.21.1", features = ["ssl"] }
+bollard = { version = "0.21.1" }
 futures-util = "0.3"
-rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 serde_yml = "0.0.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = { version = "11", features = ["macos_13_0"] }
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSAppearance", "NSBitmapImageRep", "NSControl", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSImageView", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow", "NSWorkspace"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSAppearance", "NSBitmapImageRep", "NSControl", "NSEvent", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSImageView", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow", "NSWorkspace", "block2"] }
+block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSArray", "NSDictionary", "NSError", "NSFileManager", "NSGeometry", "NSString", "NSData", "NSURL", "NSUserDefaults", "NSValue", "objc2-core-foundation"] }
 objc2-vision = { version = "0.3", features = ["VNObservation", "VNRecognizeTextRequest", "VNRequest", "VNRequestHandler", "objc2-core-foundation"] }
 dispatch2 = "0.3"

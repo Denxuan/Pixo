@@ -1,0 +1,97 @@
+/* Ant Design 的运行时样式会在 hover 和 focus 时改写边框与阴影，这里用更高优先级把插画描边留住。 */
+
+.pixo-ink-button.ant-btn-primary,
+.pixo-ink-button.ant-btn-default,
+.pixo-ink-button.ant-btn-dashed,
+.pixo-ink-button.ant-btn-variant-solid,
+.pixo-ink-button.ant-btn-variant-outlined,
+.pixo-ink-button.ant-btn-variant-dashed,
+.pixo-ink-button.ant-btn-variant-filled {
+  border-color: var(--pixo-ink) !important;
+  box-shadow: var(--pixo-shadow) var(--pixo-shadow) 0 var(--pixo-ink) !important;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.pixo-ink-button.ant-btn-primary:focus-visible,
+.pixo-ink-button.ant-btn-default:focus-visible,
+.pixo-ink-button.ant-btn-dashed:focus-visible,
+.pixo-ink-button.ant-btn-variant-solid:focus-visible,
+.pixo-ink-button.ant-btn-variant-outlined:focus-visible,
+.pixo-ink-button.ant-btn-variant-dashed:focus-visible,
+.pixo-ink-button.ant-btn-variant-filled:focus-visible {
+  box-shadow:
+    var(--pixo-shadow) var(--pixo-shadow) 0 var(--pixo-ink),
+    0 0 0 3px color-mix(in srgb, var(--pixo-primary) 45%, transparent) !important;
+}
+
+.pixo-ink-button.ant-btn-text:focus-visible,
+.pixo-ink-button.ant-btn-link:focus-visible,
+.pixo-ink-button.ant-btn-variant-text:focus-visible,
+.pixo-ink-button.ant-btn-variant-link:focus-visible {
+  outline: 2px solid var(--pixo-primary);
+  outline-offset: 2px;
+}
+
+.pixo-ink-field:not([class*="status-error"]):not([class*="status-warning"]) {
+  border-color: var(--pixo-ink) !important;
+  box-shadow: var(--pixo-shadow) var(--pixo-shadow) 0 var(--pixo-ink) !important;
+}
+
+.pixo-ink-field.ant-select:not([class*="status-error"]):not([class*="status-warning"]) .ant-select-selector {
+  border-color: var(--pixo-ink) !important;
+}
+
+.pixo-ink-field:focus,
+.pixo-ink-field:focus-within {
+  box-shadow:
+    var(--pixo-shadow) var(--pixo-shadow) 0 var(--pixo-ink),
+    0 0 0 3px color-mix(in srgb, var(--pixo-primary) 45%, transparent) !important;
+}
+
+.pixo-ink-box,
+.pixo-ink-notice.ant-notification-notice,
+.pixo-ink-notice .ant-notification-notice {
+  border: var(--pixo-line) solid var(--pixo-ink) !important;
+  box-shadow: var(--pixo-shadow) var(--pixo-shadow) 0 var(--pixo-ink) !important;
+}
+
+.pixo-ink-border {
+  border: var(--pixo-line) solid var(--pixo-ink) !important;
+}
+
+.pixo-ink-popup {
+  border: var(--pixo-line) solid var(--pixo-ink) !important;
+  border-radius: var(--pixo-radius-lg) !important;
+  background-color: var(--pixo-paper) !important;
+  box-shadow: var(--pixo-shadow) var(--pixo-shadow) 0 var(--pixo-ink) !important;
+}
+
+.pixo-ink-title {
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.pixo-ink-tooltip {
+  padding: 8px 10px;
+}
+
+.pixo-ink-actions {
+  width: 12px;
+}
+
+.pixo-progress-rail {
+  border: var(--pixo-line) solid var(--pixo-ink) !important;
+  box-shadow: var(--pixo-shadow-sm) var(--pixo-shadow-sm) 0 var(--pixo-ink) !important;
+}
+
+.pixo-progress-track {
+  border: none !important;
+}
+
+.pixo-nav .ant-menu-item-selected {
+  outline: 2px solid var(--pixo-ink);
+  box-shadow: var(--pixo-shadow-sm) var(--pixo-shadow-sm) 0 var(--pixo-ink);
+}

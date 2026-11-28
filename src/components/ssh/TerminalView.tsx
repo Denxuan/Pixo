@@ -56,6 +56,7 @@ function pathUnderPointer(term: Terminal, event: MouseEvent) {
 export default function TerminalView({
   host,
   connectKey,
+  autoConnect = true,
   onSession,
   onEvent,
   onReconnect,
@@ -63,6 +64,7 @@ export default function TerminalView({
 }: {
   host: SshHost;
   connectKey: number;
+  autoConnect?: boolean;
   onSession: (sessionId: number) => void;
   onEvent: (sessionId: number, event: SshSessionEvent) => void;
   onReconnect: () => void;
@@ -92,7 +94,7 @@ export default function TerminalView({
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const sessionRef = useRef(0);
-  const phaseRef = useRef("connecting");
+  const phaseRef = useRef(autoConnect ? "connecting" : "idle");
   const darkRef = useRef(dark);
   const onEventRef = useRef(onEvent);
   const onSessionRef = useRef(onSession);
@@ -101,7 +103,7 @@ export default function TerminalView({
   onEventRef.current = onEvent;
   onSessionRef.current = onSession;
   translateRef.current = t;
-  const [phase, setPhase] = useState("connecting");
+  const [phase, setPhase] = useState(autoConnect ? "connecting" : "idle");
   const [sessionLive, setSessionLive] = useState(0);
   const [closed, setClosed] = useState("");
   const [query, setQuery] = useState("");
@@ -265,22 +267,31 @@ export default function TerminalView({
       void sshResize(sessionId, term.cols, term.rows).catch(() => undefined);
     });
     observer.observe(element);
-    void sshConnect(host.id, term.cols || 80, term.rows || 24, output, events).then((id) => {
-      if (cancelled) {
-        void sshDisconnect(id);
-        return;
-      }
-      sessionId = id;
-      sessionRef.current = id;
-      setSessionLive(id);
-      onSessionRef.current(id);
-      for (const event of pending) handle(id, event);
-      void sshResize(id, term.cols, term.rows).catch(() => undefined);
-    }).catch((error) => {
-      if (cancelled) return;
-      setPhase("closed");
-      setClosed(error instanceof SshRequestError ? sshErrorText(translateRef.current, error) : translateRef.current("zdx.text.ssh.error.unknown"));
-    });
+    if (autoConnect) {
+      setPhase("connecting");
+      phaseRef.current = "connecting";
+      setClosed("");
+      void sshConnect(host.id, term.cols || 80, term.rows || 24, output, events).then((id) => {
+        if (cancelled) {
+          void sshDisconnect(id);
+          return;
+        }
+        sessionId = id;
+        sessionRef.current = id;
+        setSessionLive(id);
+        onSessionRef.current(id);
+        for (const event of pending) handle(id, event);
+        void sshResize(id, term.cols, term.rows).catch(() => undefined);
+      }).catch((error) => {
+        if (cancelled) return;
+        setPhase("closed");
+        setClosed(error instanceof SshRequestError ? sshErrorText(translateRef.current, error) : translateRef.current("zdx.text.ssh.error.unknown"));
+      });
+    } else {
+      setPhase("idle");
+      phaseRef.current = "idle";
+      setClosed(translateRef.current("zdx.text.ssh.restored"));
+    }
     return () => {
       cancelled = true;
       outputAck.close();
@@ -292,7 +303,7 @@ export default function TerminalView({
       fitRef.current = null;
       searchRef.current = null;
     };
-  }, [connectKey, host.id]);
+  }, [autoConnect, connectKey, host.id]);
 
   useEffect(() => {
     if (!transferActive) return;
@@ -421,48 +432,66 @@ export default function TerminalView({
 
   return (
     <div ref={rootRef} className="flex h-full min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-2">
-        <span className="text-xs" style={{ opacity: 0.7 }}>{closed || sshPhaseText(t, phase)}</span>
-        <span className="max-w-72 truncate text-xs" style={{ opacity: 0.7 }}>{cwd ? t("zdx.text.ssh.uploadTarget", { path: cwd }) : t("zdx.text.ssh.uploadTargetPending")}</span>
-        <Dropdown
-          menu={{
-            items: [
-              { key: "files", label: t("zdx.label.ssh.uploadFiles"), disabled: phase !== "ready", onClick: () => void pickUpload("files") },
-              { key: "folder", label: t("zdx.label.ssh.uploadFolder"), disabled: phase !== "ready", onClick: () => void pickUpload("folder") },
-            ],
-          }}
-        >
-          <Button size="small" aria-label={t("zdx.label.ssh.upload")} icon={<UploadOutlined />} disabled={phase !== "ready"} />
-        </Dropdown>
-        <Tooltip title={t("zdx.label.ssh.files")}>
-          <Button size="small" aria-label={t("zdx.label.ssh.files")} icon={<FileOutlined />} disabled={phase !== "ready"} onClick={() => setFilesOpen(true)} />
-        </Tooltip>
-        <SessionExtras
-          sessionId={sessionLive}
-          ready={phase === "ready"}
-          onSend={(body) => {
-            if (!sessionRef.current) return;
-            const text = body.endsWith("\n") ? body : `${body}\n`;
-            void sshWrite(sessionRef.current, new TextEncoder().encode(text));
-          }}
-        />
-        <Select
-          size="small"
-          aria-label={t("zdx.label.ssh.theme")}
-          className="w-28"
-          popupMatchSelectWidth={false}
-          value={themeId}
-          onChange={(value) => setThemeId(value as SshThemeId)}
-          options={sshThemes.map((theme) => ({ value: theme, label: t(`zdx.label.ssh.theme${theme[0].toUpperCase()}${theme.slice(1)}`) }))}
-        />
-        <Tooltip title={t("zdx.label.ssh.appearance")}>
-          <Button size="small" aria-label={t("zdx.label.ssh.appearance")} icon={<FontColorsOutlined />} onClick={() => setAppearanceOpen(true)} />
-        </Tooltip>
+      <div className="flex shrink-0 flex-col gap-2 px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs" style={{ opacity: 0.7 }}>{closed || sshPhaseText(t, phase)}</span>
+          <span className="max-w-72 truncate text-xs" style={{ opacity: 0.7 }}>{cwd ? t("zdx.text.ssh.uploadTarget", { path: cwd }) : t("zdx.text.ssh.uploadTargetPending")}</span>
+          <Dropdown
+            menu={{
+              items: [
+                { key: "files", label: t("zdx.label.ssh.uploadFiles"), disabled: phase !== "ready", onClick: () => void pickUpload("files") },
+                { key: "folder", label: t("zdx.label.ssh.uploadFolder"), disabled: phase !== "ready", onClick: () => void pickUpload("folder") },
+              ],
+            }}
+          >
+            <Button size="small" aria-label={t("zdx.label.ssh.upload")} icon={<UploadOutlined />} disabled={phase !== "ready"} />
+          </Dropdown>
+          <Tooltip title={t("zdx.label.ssh.files")}>
+            <Button size="small" aria-label={t("zdx.label.ssh.files")} icon={<FileOutlined />} disabled={phase !== "ready"} onClick={() => setFilesOpen(true)} />
+          </Tooltip>
+          <SessionExtras
+            sessionId={sessionLive}
+            ready={phase === "ready"}
+            onSend={(body) => {
+              if (!sessionRef.current) return;
+              const text = body.endsWith("\n") ? body : `${body}\n`;
+              void sshWrite(sessionRef.current, new TextEncoder().encode(text));
+            }}
+          />
+          <Select
+            size="small"
+            aria-label={t("zdx.label.ssh.theme")}
+            className="w-28"
+            popupMatchSelectWidth={false}
+            value={themeId}
+            onChange={(value) => setThemeId(value as SshThemeId)}
+            options={sshThemes.map((theme) => ({ value: theme, label: t(`zdx.label.ssh.theme${theme[0].toUpperCase()}${theme.slice(1)}`) }))}
+          />
+          <Tooltip title={t("zdx.label.ssh.appearance")}>
+            <Button size="small" aria-label={t("zdx.label.ssh.appearance")} icon={<FontColorsOutlined />} onClick={() => setAppearanceOpen(true)} />
+          </Tooltip>
+          <Tooltip title={t("zdx.label.ssh.screenReader")}>
+            <Switch size="small" aria-label={t("zdx.label.ssh.screenReader")} checked={reader} onChange={(checked) => {
+              setReader(checked);
+              if (termRef.current) termRef.current.options.screenReaderMode = checked;
+            }} />
+          </Tooltip>
+          <Tooltip title={t("zdx.text.ssh.leaveHint")}>
+            <Button size="small" aria-label={t("zdx.label.ssh.leaveTerminal")} onClick={() => termRef.current?.blur()}>{t("zdx.label.ssh.leaveTerminal")}</Button>
+          </Tooltip>
+          <Tooltip title={t("zdx.label.ssh.reconnect")}>
+            <Button size="small" aria-label={t("zdx.label.ssh.reconnect")} icon={<ReloadOutlined />} onClick={onReconnect} />
+          </Tooltip>
+          <Tooltip title={t("zdx.label.ssh.disconnect")}>
+            <Button size="small" aria-label={t("zdx.label.ssh.disconnect")} icon={<DisconnectOutlined />} onClick={() => {
+              if (sessionRef.current) void sshDisconnect(sessionRef.current);
+            }} />
+          </Tooltip>
+        </div>
         <Input
           ref={searchInputRef}
           size="small"
           allowClear
-          className="ml-auto w-40"
           aria-label={t("zdx.label.ssh.searchOutput")}
           placeholder={t("zdx.placeholder.ssh.searchOutput")}
           value={query}
@@ -474,23 +503,6 @@ export default function TerminalView({
             if (query) searchRef.current?.findNext(query);
           }}
         />
-        <Tooltip title={t("zdx.label.ssh.screenReader")}>
-          <Switch size="small" aria-label={t("zdx.label.ssh.screenReader")} checked={reader} onChange={(checked) => {
-            setReader(checked);
-            if (termRef.current) termRef.current.options.screenReaderMode = checked;
-          }} />
-        </Tooltip>
-        <Tooltip title={t("zdx.text.ssh.leaveHint")}>
-          <Button size="small" aria-label={t("zdx.label.ssh.leaveTerminal")} onClick={() => termRef.current?.blur()}>{t("zdx.label.ssh.leaveTerminal")}</Button>
-        </Tooltip>
-        <Tooltip title={t("zdx.label.ssh.reconnect")}>
-          <Button size="small" aria-label={t("zdx.label.ssh.reconnect")} icon={<ReloadOutlined />} onClick={onReconnect} />
-        </Tooltip>
-        <Tooltip title={t("zdx.label.ssh.disconnect")}>
-          <Button size="small" aria-label={t("zdx.label.ssh.disconnect")} icon={<DisconnectOutlined />} onClick={() => {
-            if (sessionRef.current) void sshDisconnect(sessionRef.current);
-          }} />
-        </Tooltip>
       </div>
       {notice && <Alert className="mx-3" type="warning" showIcon closable message={notice} onClose={() => setNotice("")} />}
       <div className="relative min-h-0 flex-1" style={{ background: palette.background }}>
@@ -548,7 +560,7 @@ export default function TerminalView({
         {closed && (
           <div className="absolute inset-x-6 top-4">
             <Alert
-              type="warning"
+              type={phase === "idle" ? "info" : "warning"}
               showIcon
               message={closed}
               action={<Button size="small" onClick={onReconnect}>{t("zdx.label.ssh.reconnect")}</Button>}

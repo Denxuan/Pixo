@@ -10,6 +10,7 @@ export default function EndpointList({
   onEdit,
   onDelete,
   onImport,
+  onSettings,
 }: {
   endpoints: DockerEndpoint[];
   selectedId: number | null;
@@ -20,6 +21,7 @@ export default function EndpointList({
   onEdit: (endpoint: DockerEndpoint) => void;
   onDelete: (endpoint: DockerEndpoint) => void;
   onImport: () => void;
+  onSettings: () => void;
 }) {
   const { t } = useTranslation();
   const { token } = antdTheme.useToken();
@@ -45,6 +47,7 @@ export default function EndpointList({
       <div className="flex shrink-0 gap-2 px-3 pb-2">
         <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>{t("zdx.label.docker.newEndpoint")}</Button>
         <Button icon={<ImportOutlined />} aria-label={t("zdx.label.docker.importContexts")} onClick={onImport} />
+        <Button icon={<SettingOutlined />} aria-label={t("zdx.label.nav.settings")} onClick={onSettings} />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {endpoints.length === 0 && (
@@ -57,29 +60,29 @@ export default function EndpointList({
           {visible.map((endpoint) => {
             const selected = endpoint.id === selectedId;
             const sshOff = endpoint.kind === "ssh" && !sshEnabled;
+            const detail = endpointDetail(endpoint);
             return (
               <div
                 key={endpoint.id}
-                className="rounded-lg px-2 py-2"
+                className="flex items-start gap-1 rounded-lg px-2 py-1.5"
                 style={{ background: selected ? token.colorFillSecondary : undefined }}
               >
                 <button
                   type="button"
-                  className="w-full cursor-pointer border-0 bg-transparent p-0 text-left"
+                  className="min-w-0 flex-1 cursor-pointer border-0 bg-transparent p-0 text-left"
                   onClick={() => onSelect(endpoint)}
                 >
-                  <div className="truncate text-sm font-medium" style={{ color: token.colorText }}>{endpoint.name}</div>
-                  <div className="mt-1 flex flex-wrap items-center gap-1">
-                    <Tag>{kindLabel(t, endpoint.kind)}</Tag>
-                    {endpoint.insecure && <Tag color="warning">{t("zdx.text.docker.insecureBadge")}</Tag>}
-                    {selected && phase === "ready" && <Tag color="success">{t("zdx.text.docker.ready")}</Tag>}
-                    {selected && phase === "connecting" && <Tag>{t("zdx.text.docker.connecting")}</Tag>}
-                    {selected && phase === "closed" && <Tag color="error">{t("zdx.text.docker.unreachableTitle")}</Tag>}
+                  <div className="flex min-w-0 flex-wrap items-center gap-1">
+                    <span className="truncate text-sm font-medium" style={{ color: token.colorText }}>{endpoint.name}</span>
+                    <Tag style={badgeStyle}>{kindLabel(t, endpoint.kind)}</Tag>
+                    {selected && phase === "ready" && <Tag color="success" style={badgeStyle}>{t("zdx.text.docker.ready")}</Tag>}
+                    {selected && phase === "connecting" && <Tag style={badgeStyle}>{t("zdx.text.docker.connecting")}</Tag>}
+                    {selected && phase === "closed" && <Tag color="error" style={badgeStyle}>{t("zdx.text.docker.unreachableTitle")}</Tag>}
                   </div>
-                  <div className="mt-1 truncate text-xs" style={{ color: token.colorTextTertiary }}>{endpointDetail(endpoint)}</div>
-                  {sshOff && <div className="mt-1 text-xs" style={{ color: token.colorWarning }}>{t("zdx.text.docker.sshOff")}</div>}
+                  {detail && <div className="truncate text-xs" style={{ color: token.colorTextTertiary }}>{detail}</div>}
+                  {sshOff && <div className="text-xs" style={{ color: token.colorWarning }}>{t("zdx.text.docker.sshOff")}</div>}
                 </button>
-                <div className="mt-1 flex justify-end">
+                <div className="flex shrink-0">
                   <Tooltip title={t("zdx.label.docker.editEndpoint")}>
                     <Button type="text" size="small" aria-label={t("zdx.label.docker.editEndpoint")} icon={<EditOutlined />} onClick={() => onEdit(endpoint)} />
                   </Tooltip>
@@ -96,16 +99,14 @@ export default function EndpointList({
   );
 }
 
+const badgeStyle = { margin: 0, fontSize: 12, lineHeight: "16px", paddingInline: 6 };
+
 function kindLabel(t: (key: string) => string, kind: DockerKind) {
   if (kind === "local") return t("zdx.label.docker.kindLocal");
-  if (kind === "ssh") return t("zdx.label.docker.kindSsh");
-  if (kind === "tls") return t("zdx.label.docker.kindTls");
-  return t("zdx.label.docker.kindTcp");
+  return t("zdx.label.docker.kindSsh");
 }
 
 function endpointDetail(endpoint: DockerEndpoint) {
   if (endpoint.kind === "local") return endpoint.socketPath || "";
-  if (endpoint.kind === "ssh") return endpoint.remoteSocket || "";
-  if (endpoint.host) return `${endpoint.host}:${endpoint.port ?? ""}`;
-  return "";
+  return endpoint.remoteSocket || "";
 }

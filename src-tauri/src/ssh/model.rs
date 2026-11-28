@@ -110,9 +110,10 @@ pub struct SnippetDraft {
 pub struct ForwardView {
     pub id: u64,
     pub session_id: u64,
-    pub local_port: u16,
-    pub remote_host: String,
-    pub remote_port: u16,
+    pub kind: String,
+    pub listen_port: u16,
+    pub target_host: String,
+    pub target_port: u16,
 }
 
 #[derive(Debug, Clone, Serialize)]

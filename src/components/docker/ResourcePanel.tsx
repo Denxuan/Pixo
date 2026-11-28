@@ -11,23 +11,30 @@ import {
   dockerComposeProjects,
   dockerComposeRemove,
   dockerContainers,
+  dockerContainerStats,
   dockerImageInspect,
   dockerImagePull,
   dockerImageRemove,
+  dockerImageRun,
   dockerImages,
   dockerPickFile,
   dockerSummary,
   dockerNetworkInspect,
   dockerNetworkRemove,
   dockerNetworks,
+  dockerVolumeInspect,
+  dockerVolumeRemove,
+  dockerVolumes,
   dockerTaskStop,
 } from "@/api/docker";
+import DockerShell from "@/components/docker/DockerShell";
 import LogsDialog from "@/components/docker/LogsDialog";
 import YamlEditor from "@/components/docker/YamlEditor";
-import type { ComposeProject, ContainerRow, DockerPullEvent, EngineSummary, ImageRow, NetworkRow } from "@/types/docker";
+import type { ContainerUsage } from "@/api/docker";
+import type { ComposeProject, ContainerRow, DockerPullEvent, EngineSummary, ImageRow, NetworkRow, VolumeRow } from "@/types/docker";
 import { dockerErrorText, formatBytes, formatTime } from "@/utils/dockerMessage";
 
-type TabKey = "overview" | "containers" | "images" | "networks" | "compose";
+type TabKey = "overview" | "containers" | "images" | "networks" | "volumes" | "compose";
 
 type ComposeSource = "file" | "yaml";
 
@@ -53,6 +60,8 @@ export default function ResourcePanel({
   const [containers, setContainers] = useState<ContainerRow[]>([]);
   const [images, setImages] = useState<ImageRow[]>([]);
   const [networks, setNetworks] = useState<NetworkRow[]>([]);
+  const [volumes, setVolumes] = useState<VolumeRow[]>([]);
+  const [shell, setShell] = useState<{ id: string; name: string } | null>(null);
   const [projects, setProjects] = useState<ComposeProject[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -67,6 +76,9 @@ export default function ResourcePanel({
   const [logs, setLogs] = useState<{ name: string; containerId?: string } | null>(null);
   const [acting, setActing] = useState(false);
   const [pullOpen, setPullOpen] = useState(false);
+  const [runImage, setRunImage] = useState<ImageRow | null>(null);
+  const [notice, setNotice] = useState("");
+  const [usage, setUsage] = useState<Record<string, ContainerUsage>>({});
   const lostRef = useRef(onLost);
   lostRef.current = onLost;
 
@@ -85,12 +97,40 @@ export default function ResourcePanel({
         ? dockerImages(endpointId).then((rows) => { if (alive) setImages(rows); })
         : tab === "networks"
           ? dockerNetworks(endpointId).then((rows) => { if (alive) setNetworks(rows); })
-          : dockerComposeProjects(endpointId).then((rows) => { if (alive) setProjects(rows); });
+          : tab === "volumes"
+            ? dockerVolumes(endpointId).then((rows) => { if (alive) setVolumes(rows); })
+            : dockerComposeProjects(endpointId).then((rows) => { if (alive) setProjects(rows); });
     void load.catch((caught: unknown) => {
       if (alive) report(caught);
     }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [endpointId, tab, tick, t]);
+
+  useEffect(() => {
+    if (tab !== "containers") return;
+    const running = containers.filter((row) => row.state === "running" || row.state === "restarting");
+    if (running.length === 0) {
+      setUsage({});
+      return;
+    }
+    let alive = true;
+    void (async () => {
+      const next: Record<string, ContainerUsage> = {};
+      for (let index = 0; index < running.length; index += 4) {
+        const slice = running.slice(index, index + 4);
+        await Promise.all(slice.map(async (row) => {
+          try {
+            next[row.id] = await dockerContainerStats(endpointId, row.id);
+          } catch {
+            return;
+          }
+        }));
+        if (!alive) return;
+        setUsage({ ...next });
+      }
+    })();
+    return () => { alive = false; };
+  }, [containers, endpointId, tab]);
 
   async function showInspect(title: string, load: () => Promise<unknown>) {
     setError("");
@@ -153,6 +193,7 @@ export default function ResourcePanel({
   const containerRows = containers.filter((row) => matches(needle, row.name, row.image, row.id, row.status));
   const imageRows = images.filter((row) => matches(needle, row.id, row.tags.join(" ")));
   const networkRows = networks.filter((row) => matches(needle, row.name, row.driver, row.id));
+  const volumeRows = volumes.filter((row) => matches(needle, row.name, row.driver, row.mountpoint));
   const projectRows = projects.filter((row) => matches(needle, row.name, row.configPath, row.services.map((service) => service.name).join(" ")));
 
   async function runCompose(name: string, action: "build" | "up" | "down") {
@@ -252,6 +293,7 @@ export default function ResourcePanel({
         {tab !== "overview" && <Input allowClear style={{ width: 220 }} value={query} placeholder={t("zdx.placeholder.docker.filter")} aria-label={t("zdx.placeholder.docker.filter")} onChange={(event) => setQuery(event.target.value)} />}
       </div>
       {error && <Alert type="error" showIcon message={error} />}
+      {notice && <Alert type="success" showIcon closable message={notice} onClose={() => setNotice("")} />}
       <Tabs
         activeKey={tab}
         onChange={(key) => setTab(key as TabKey)}
@@ -260,6 +302,7 @@ export default function ResourcePanel({
           { key: "containers", label: t("zdx.label.docker.containers") },
           { key: "images", label: t("zdx.label.docker.images") },
           { key: "networks", label: t("zdx.label.docker.networks") },
+          { key: "volumes", label: t("zdx.label.docker.volumes") },
           { key: "compose", label: t("zdx.label.docker.compose") },
         ]}
       />
@@ -293,12 +336,17 @@ export default function ResourcePanel({
             {
               title: t("zdx.label.docker.status"),
               ellipsis: true,
-              render: (_, row) => (
-                <span className="inline-flex max-w-full items-center gap-2">
-                  <Tag className="m-0" color={stateColor(row.state)}>{stateLabel(t, row.state)}</Tag>
-                  <span className="truncate">{row.status}</span>
-                </span>
-              ),
+              render: (_, row) => {
+                const current = usage[row.id];
+                const usageLabel = current ? usageText(t, current) : "";
+                return (
+                  <span className="inline-flex max-w-full items-center gap-2">
+                    <Tag className="m-0" color={stateColor(row.state)}>{stateLabel(t, row.state)}</Tag>
+                    <span className="truncate">{row.status}</span>
+                    {usageLabel && <span className="truncate text-xs" style={{ color: token.colorTextSecondary }}>{usageLabel}</span>}
+                  </span>
+                );
+              },
             },
             {
               title: t("zdx.label.docker.ports"),
@@ -323,7 +371,7 @@ export default function ResourcePanel({
                 );
               },
             },
-            actionsColumn<ContainerRow>(t, 120, (_, row) => {
+            actionsColumn<ContainerRow>(t, 148, (_, row) => {
               const active = row.state === "running" || row.state === "restarting";
               const sites = publishedTcp(row.ports);
               return (
@@ -356,6 +404,7 @@ export default function ResourcePanel({
                       items: [
                         { key: "restart", icon: <RedoOutlined />, label: t("zdx.label.docker.restart") },
                         { key: "details", icon: <InfoCircleOutlined />, label: t("zdx.label.docker.details") },
+                        { key: "shell", icon: <CodeOutlined />, label: t("zdx.label.docker.shell"), disabled: !active },
                         { key: "logs", icon: <FileTextOutlined />, label: t("zdx.label.docker.runLogs") },
                         { type: "divider" },
                         { key: "remove", icon: <DeleteOutlined />, label: t("zdx.label.docker.remove"), danger: true },
@@ -363,6 +412,7 @@ export default function ResourcePanel({
                       onClick: ({ key }) => {
                         if (key === "restart") runContainer(row.id, "restart");
                         if (key === "details") void showInspect(row.name, () => dockerContainerInspect(endpointId, row.id));
+                        if (key === "shell") setShell({ id: row.id, name: row.name });
                         if (key === "logs") setLogs({ name: row.name, containerId: row.id });
                         if (key === "remove") confirmRemove(row.name, (force) => dockerContainerAction(endpointId, row.id, "remove", force).catch(fail), active);
                       },
@@ -389,10 +439,11 @@ export default function ResourcePanel({
             { title: t("zdx.label.docker.tags"), render: (_, row) => row.tags.length ? row.tags.join(", ") : row.id.slice(0, 12), ellipsis: true },
             { title: t("zdx.label.docker.size"), width: 110, render: (_, row) => formatBytes(row.size) },
             { title: t("zdx.label.docker.created"), width: 180, render: (_, row) => formatTime(row.created) },
-            actionsColumn<ImageRow>(t, 80, (_, row) => {
+            actionsColumn<ImageRow>(t, 148, (_, row) => {
               const name = row.tags[0] || row.id;
               return (
                 <>
+                  <ActionIcon label={t("zdx.label.docker.run")} icon={<PlayCircleOutlined />} onClick={() => { setNotice(""); setRunImage(row); }} />
                   <ActionIcon label={t("zdx.label.docker.inspect")} icon={<EyeOutlined />} onClick={() => void showInspect(name, () => dockerImageInspect(endpointId, name))} />
                   <ActionIcon label={t("zdx.label.docker.remove")} danger icon={<DeleteOutlined />} onClick={() => confirmRemove(name, () => dockerImageRemove(endpointId, name).catch(fail))} />
                 </>
@@ -414,10 +465,33 @@ export default function ResourcePanel({
             { title: t("zdx.label.docker.name"), dataIndex: "name", ellipsis: true },
             { title: t("zdx.label.docker.driver"), dataIndex: "driver", width: 120 },
             { title: t("zdx.label.docker.scope"), dataIndex: "scope", width: 120 },
-            actionsColumn<NetworkRow>(t, 80, (_, row) => (
+            actionsColumn<NetworkRow>(t, 136, (_, row) => (
               <>
                 <ActionIcon label={t("zdx.label.docker.inspect")} icon={<EyeOutlined />} onClick={() => void showInspect(row.name, () => dockerNetworkInspect(endpointId, row.name))} />
                 <ActionIcon label={t("zdx.label.docker.remove")} danger icon={<DeleteOutlined />} onClick={() => confirmRemove(row.name, () => dockerNetworkRemove(endpointId, row.name).catch(fail))} />
+              </>
+            )),
+          ]}
+        />
+      )}
+      {tab === "volumes" && (
+        <Table
+          size="small"
+          rowKey="name"
+          loading={loading}
+          dataSource={volumeRows}
+          pagination={false}
+          locale={{ emptyText: t("zdx.text.docker.emptyVolumes") }}
+          scroll={{ x: "max-content" }}
+          columns={[
+            { title: t("zdx.label.docker.name"), dataIndex: "name", ellipsis: true },
+            { title: t("zdx.label.docker.driver"), dataIndex: "driver", width: 120 },
+            { title: t("zdx.label.docker.mount"), dataIndex: "mountpoint", ellipsis: true },
+            { title: t("zdx.label.docker.scope"), dataIndex: "scope", width: 120 },
+            actionsColumn<VolumeRow>(t, 136, (_, row) => (
+              <>
+                <ActionIcon label={t("zdx.label.docker.inspect")} icon={<EyeOutlined />} onClick={() => void showInspect(row.name, () => dockerVolumeInspect(endpointId, row.name))} />
+                <ActionIcon label={t("zdx.label.docker.remove")} danger icon={<DeleteOutlined />} onClick={() => confirmRemove(row.name, () => dockerVolumeRemove(endpointId, row.name).catch(fail))} />
               </>
             )),
           ]}
@@ -544,6 +618,19 @@ export default function ResourcePanel({
         <pre className="m-0 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">{composeView?.body}</pre>
       </Drawer>
       <PullDialog open={pullOpen} endpointId={endpointId} onClose={() => setPullOpen(false)} onDone={() => setTick((value) => value + 1)} />
+      <DockerShell key={shell?.id ?? "shell"} endpointId={endpointId} container={shell} onClose={() => setShell(null)} />
+      <RunDialog
+        endpointId={endpointId}
+        image={runImage}
+        onClose={() => setRunImage(null)}
+        onDone={() => {
+          setRunImage(null);
+          setNotice(t("zdx.text.docker.ran"));
+          setTab("containers");
+          setTick((value) => value + 1);
+        }}
+        onError={report}
+      />
     </div>
   );
 }
@@ -591,19 +678,25 @@ function Overview({ summary }: { summary: EngineSummary }) {
 }
 
 function actionsColumn<T>(t: (key: string) => string, width: number, render: (value: unknown, row: T, index: number) => ReactNode) {
+  const cell = { whiteSpace: "nowrap" as const, minWidth: width };
   return {
     title: t("zdx.label.docker.actions"),
     width,
+    minWidth: width,
     fixed: "right" as const,
     align: "right" as const,
-    render,
+    onCell: () => ({ style: cell }),
+    onHeaderCell: () => ({ style: cell }),
+    render: (value: unknown, row: T, index: number) => (
+      <div style={{ display: "inline-flex", flexFlow: "row nowrap", alignItems: "center", justifyContent: "flex-end" }}>{render(value, row, index)}</div>
+    ),
   };
 }
 
 function ActionIcon({ label, icon, danger, onClick }: { label: string; icon: ReactNode; danger?: boolean; onClick: () => void }) {
   return (
     <Tooltip title={label}>
-      <Button type="text" size="small" danger={danger} title={label} aria-label={label} icon={icon} onClick={onClick} />
+      <Button type="text" size="small" danger={danger} title={label} aria-label={label} icon={icon} style={{ flex: "none" }} onClick={onClick} />
     </Tooltip>
   );
 }
@@ -643,6 +736,86 @@ function InspectDrawer({ value, onClose }: { value: { title: string; body: strin
   );
 }
 
+function usageText(t: (key: string, options?: Record<string, unknown>) => string, usage: ContainerUsage) {
+  if (usage.cpuPercent == null && usage.memoryBytes <= 0 && usage.memoryLimit == null) return "";
+  const memory = formatBytes(usage.memoryBytes);
+  const limit = usage.memoryLimit == null ? "" : formatBytes(usage.memoryLimit);
+  const cpu = usage.cpuPercent == null ? "" : usage.cpuPercent.toFixed(1);
+  if (cpu && limit) return t("zdx.text.docker.usageCpuMemoryLimit", { cpu, memory, limit });
+  if (cpu) return t("zdx.text.docker.usageCpuMemory", { cpu, memory });
+  if (limit) return t("zdx.text.docker.usageMemoryLimit", { memory, limit });
+  return t("zdx.text.docker.usageMemory", { memory });
+}
+
+function RunDialog({
+  endpointId,
+  image,
+  onClose,
+  onDone,
+  onError,
+}: {
+  endpointId: number;
+  image: ImageRow | null;
+  onClose: () => void;
+  onDone: () => void;
+  onError: (caught: unknown) => void;
+}) {
+  const { t } = useTranslation();
+  const [name, setName] = useState("");
+  const [ports, setPorts] = useState("");
+  const [command, setCommand] = useState("");
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState("");
+  const imageName = image ? image.tags[0] || image.id : "";
+
+  useEffect(() => {
+    if (image) return;
+    setName("");
+    setPorts("");
+    setCommand("");
+    setRunning(false);
+    setError("");
+  }, [image]);
+
+  async function start() {
+    if (!imageName || running) return;
+    setRunning(true);
+    setError("");
+    try {
+      await dockerImageRun(endpointId, imageName, name.trim(), ports.trim(), command.trim());
+      onDone();
+    } catch (caught) {
+      if (caught instanceof DockerRequestError) {
+        setError(dockerErrorText(t, caught));
+        if (caught.code === "disconnected" || caught.code === "unreachable" || caught.code === "timeout") onError(caught);
+      }
+      setRunning(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={t("zdx.text.docker.runTitle", { name: imageName })}
+      open={image !== null}
+      okText={t("zdx.label.docker.run")}
+      cancelText={t("zdx.label.docker.cancel")}
+      confirmLoading={running}
+      onCancel={onClose}
+      onOk={() => void start()}
+      destroyOnHidden
+    >
+      <Flex vertical gap={8}>
+        {error && <Alert type="error" showIcon message={error} />}
+        <Input value={name} disabled={running} aria-label={t("zdx.label.docker.containerName")} placeholder={t("zdx.placeholder.docker.containerName")} onChange={(event) => setName(event.target.value)} />
+        <Input value={ports} disabled={running} aria-label={t("zdx.label.docker.publish")} placeholder={t("zdx.placeholder.docker.publish")} onChange={(event) => setPorts(event.target.value)} />
+        <Typography.Text type="secondary">{t("zdx.text.docker.publishHint")}</Typography.Text>
+        <Input value={command} disabled={running} aria-label={t("zdx.label.docker.command")} placeholder={t("zdx.placeholder.docker.command")} onChange={(event) => setCommand(event.target.value)} />
+        <Typography.Text type="secondary">{t("zdx.text.docker.commandHint")}</Typography.Text>
+      </Flex>
+    </Modal>
+  );
+}
+
 function PullDialog({
   open,
   endpointId,
@@ -656,6 +829,10 @@ function PullDialog({
 }) {
   const { t } = useTranslation();
   const [reference, setReference] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(true);
+  const [needsAuth, setNeedsAuth] = useState(false);
   const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
@@ -665,6 +842,10 @@ function PullDialog({
   useEffect(() => {
     if (open) return;
     setReference("");
+    setUsername("");
+    setPassword("");
+    setRemember(true);
+    setNeedsAuth(false);
     setLines([]);
     setError("");
     setRunning(false);
@@ -695,6 +876,7 @@ function PullDialog({
               onDone();
               onClose();
             } else {
+              setNeedsAuth(event.code === "registry_auth");
               setError(dockerErrorText(t, { code: event.code, params: event.params ?? {} }));
             }
             return;
@@ -706,7 +888,8 @@ function PullDialog({
         setRunning(true);
         setError("");
         setLines([]);
-        void dockerImagePull(endpointId, name, events).then((id) => {
+        const auth = needsAuth && username.trim() && password ? { username: username.trim(), password, remember } : undefined;
+        void dockerImagePull(endpointId, name, events, auth).then((id) => {
           if (stopped.current) {
             void dockerTaskStop(id).catch(() => undefined);
             return;
@@ -733,6 +916,14 @@ function PullDialog({
       destroyOnHidden
     >
       <Input value={reference} disabled={running} placeholder={t("zdx.placeholder.docker.image")} aria-label={t("zdx.label.docker.reference")} onChange={(event) => setReference(event.target.value)} />
+      {needsAuth && (
+        <Flex vertical gap={8} className="mt-3">
+          <Typography.Text type="secondary">{t("zdx.text.docker.registryHint")}</Typography.Text>
+          <Input value={username} disabled={running} autoComplete="off" aria-label={t("zdx.label.docker.registryUser")} placeholder={t("zdx.label.docker.registryUser")} onChange={(event) => setUsername(event.target.value)} />
+          <Input.Password value={password} disabled={running} autoComplete="off" aria-label={t("zdx.label.docker.registryPassword")} placeholder={t("zdx.label.docker.registryPassword")} onChange={(event) => setPassword(event.target.value)} />
+          <Checkbox checked={remember} disabled={running} onChange={(event) => setRemember(event.target.checked)}>{t("zdx.label.docker.rememberRegistry")}</Checkbox>
+        </Flex>
+      )}
       {error && <Alert className="mt-3" type="error" showIcon message={error} />}
       {lines.length > 0 && <pre className="mt-3 max-h-60 overflow-auto whitespace-pre-wrap text-xs">{lines.join("\n")}</pre>}
       {running && lines.length === 0 && <div className="mt-3 text-sm">{t("zdx.text.docker.pullProgress")}</div>}

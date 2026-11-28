@@ -378,13 +378,6 @@ pub fn docker_host_value(kind: &str, address: &str) -> Result<String, DockerErro
                 Err(DockerError::new("invalid_input"))
             }
         }
-        "tcp" | "tls" => {
-            if address.is_empty() || address.contains('\0') {
-                Err(DockerError::new("invalid_input"))
-            } else {
-                Ok(format!("tcp://{address}"))
-            }
-        }
         "ssh" => Err(DockerError::new("compose_start_unsupported")),
         _ => Err(DockerError::new("invalid_input")),
     }
@@ -888,10 +881,6 @@ services:
         assert_eq!(
             docker_host_value("local", r"\\.\pipe\docker_engine").unwrap(),
             "npipe:////./pipe/docker_engine"
-        );
-        assert_eq!(
-            docker_host_value("tcp", "10.0.0.8:2375").unwrap(),
-            "tcp://10.0.0.8:2375"
         );
         assert_eq!(
             docker_host_value("ssh", "ignored").unwrap_err().code,

@@ -46,6 +46,59 @@ pub fn decode_base64(input: &str) -> Result<Vec<u8>, ScreenshotError> {
     Ok(output)
 }
 
+pub fn image_size(bytes: &[u8]) -> Result<(u32, u32), ScreenshotError> {
+    if let Some(size) = png_size(bytes) {
+        return Ok(size);
+    }
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| ScreenshotError::new("invalid_input"))?
+        .into_dimensions()
+        .map_err(|_| ScreenshotError::new("invalid_input"))
+}
+
+fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 24 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") || &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
+    let height = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
+    (width > 0 && height > 0).then_some((width, height))
+}
+
+/// Shrinks an image to the pin frame. A PNG that already fits is returned unchanged.
+pub fn fit_pin_png(
+    bytes: Vec<u8>,
+    max_width: u32,
+    max_height: u32,
+) -> Result<Vec<u8>, ScreenshotError> {
+    let (width, height) = image_size(&bytes)?;
+    if width > 16_384 || height > 16_384 {
+        return Err(ScreenshotError::new("too_large"));
+    }
+    let max_width = max_width.max(1);
+    let max_height = max_height.max(1);
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") && width <= max_width && height <= max_height {
+        return Ok(bytes);
+    }
+    let image = image::load_from_memory(&bytes).map_err(|error| {
+        eprintln!("screenshot pin image: {error}");
+        ScreenshotError::new("invalid_input")
+    })?;
+    let scale = (f64::from(max_width) / f64::from(width.max(1)))
+        .min(f64::from(max_height) / f64::from(height.max(1)))
+        .min(1.0);
+    let target_width = (f64::from(width) * scale).round().max(1.0) as u32;
+    let target_height = (f64::from(height) * scale).round().max(1.0) as u32;
+    let fitted = if target_width == image.width() && target_height == image.height() {
+        image
+    } else {
+        image.thumbnail(target_width, target_height)
+    };
+    let rgba = fitted.to_rgba8();
+    encode_png(rgba.width(), rgba.height(), rgba.as_raw())
+}
+
 pub fn decode_rgba_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ScreenshotError> {
     let image = image::load_from_memory(bytes).map_err(|error| {
         eprintln!("screenshot png: {error}");
@@ -112,6 +165,15 @@ mod tests {
         assert_eq!(decode_base64("TWFu").unwrap(), b"Man");
         assert_eq!(decode_base64("TWE=").unwrap(), b"Ma");
         assert_eq!(decode_base64("TQ==").unwrap(), b"M");
+    }
+
+    #[test]
+    fn a_small_png_is_pinned_unchanged_and_a_wide_one_shrinks() {
+        let small = encode_png(2, 2, &[255, 0, 0, 255].repeat(4)).unwrap();
+        assert_eq!(fit_pin_png(small.clone(), 8, 8).unwrap(), small);
+        let wide = encode_png(40, 10, &[0, 0, 255, 255].repeat(400)).unwrap();
+        let fitted = fit_pin_png(wide, 8, 8).unwrap();
+        assert_eq!(image_size(&fitted).unwrap(), (8, 2));
     }
 
     #[test]

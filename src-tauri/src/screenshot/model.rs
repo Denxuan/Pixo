@@ -31,7 +31,7 @@ impl ShotSettings {
             hide_self: true,
             scroll_max_height: 30_000,
             scroll_auto: false,
-            enabled: true,
+            enabled: false,
         }
     }
 
@@ -62,7 +62,7 @@ fn default_record_shortcut() -> String {
 }
 
 fn default_shot_enabled() -> bool {
-    true
+    false
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -507,13 +507,13 @@ mod tests {
         assert_eq!(settings.shortcut, DEFAULT_SHORTCUT);
         assert_ne!(settings.shortcut, settings.record_shortcut);
         assert!(settings.validate().is_ok());
-        assert!(settings.enabled);
+        assert!(!settings.enabled);
         let stored = serde_json::to_string(&settings).unwrap();
         let mut value: serde_json::Value = serde_json::from_str(&stored).unwrap();
         value.as_object_mut().unwrap().remove("enabled");
         value.as_object_mut().unwrap().remove("scrollAuto");
         let restored: ShotSettings = serde_json::from_value(value).unwrap();
-        assert!(restored.enabled);
+        assert!(!restored.enabled);
         assert!(!restored.scroll_auto);
         settings.jpeg_quality = 10;
         assert!(settings.validate().is_err());

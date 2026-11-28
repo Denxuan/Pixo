@@ -109,8 +109,7 @@ fn load_contexts(
                 continue;
             }
         };
-        let tls = root.join("contexts").join("tls").join(&name).join("docker");
-        match parse_meta(&value, &tls, ssh_hosts) {
+        match parse_meta(&value, ssh_hosts) {
             Some(mut item) => {
                 item.current = current.as_deref() == Some(item.draft.name.as_str());
                 items.push(item);
@@ -124,7 +123,6 @@ fn load_contexts(
 
 pub fn parse_meta(
     value: &Value,
-    tls_dir: &Path,
     ssh_hosts: &[(i64, String, String, u16)],
 ) -> Option<ImportableContext> {
     let name = value
@@ -152,10 +150,6 @@ pub fn parse_meta(
         remote_socket: None,
         host: None,
         port: None,
-        ca_path: None,
-        cert_path: None,
-        key_path: None,
-        insecure: false,
     };
     let mut warning = None;
     let mut importable = true;
@@ -198,23 +192,6 @@ pub fn parse_meta(
             warning = Some("ssh_unmatched".to_string());
             importable = false;
         }
-    } else if let Some(rest) = host.strip_prefix("tcp://") {
-        let (address, port) = parse_tcp_authority(rest)?;
-        let ca = tls_dir.join("ca.pem");
-        let cert = tls_dir.join("cert.pem");
-        let key = tls_dir.join("key.pem");
-        if ca.is_file() && cert.is_file() && key.is_file() {
-            draft.kind = EndpointKind::Tls;
-            draft.ca_path = Some(ca.to_string_lossy().into_owned());
-            draft.cert_path = Some(cert.to_string_lossy().into_owned());
-            draft.key_path = Some(key.to_string_lossy().into_owned());
-        } else {
-            draft.kind = EndpointKind::Tcp;
-            draft.insecure = true;
-            warning = Some("insecure".to_string());
-        }
-        draft.host = Some(address);
-        draft.port = Some(port);
     } else {
         return None;
     }
@@ -237,10 +214,6 @@ fn skipped(name: &str, warning: &str) -> ImportableContext {
             remote_socket: None,
             host: None,
             port: None,
-            ca_path: None,
-            cert_path: None,
-            key_path: None,
-            insecure: false,
         },
         warning: Some(warning.to_string()),
         importable: false,
@@ -258,11 +231,6 @@ fn detail_of(draft: &EndpointDraft) -> String {
                 .port
                 .map(|port| format!(":{port}"))
                 .unwrap_or_default()
-        ),
-        EndpointKind::Tls | EndpointKind::Tcp => format!(
-            "{}:{}",
-            draft.host.clone().unwrap_or_default(),
-            draft.port.unwrap_or(0)
         ),
     }
 }
@@ -303,10 +271,6 @@ fn parse_ssh_authority(value: &str) -> Option<(String, String, u16)> {
     Some((user, host, port))
 }
 
-fn parse_tcp_authority(value: &str) -> Option<(String, u16)> {
-    split_host_port(value.trim().trim_end_matches('/'), 2375)
-}
-
 fn split_host_port(value: &str, default_port: u16) -> Option<(String, u16)> {
     if let Some(rest) = value.strip_prefix('[') {
         let (host, port) = rest.split_once("]:")?;
@@ -334,7 +298,6 @@ fn split_host_port(value: &str, default_port: u16) -> Option<(String, u16)> {
 #[cfg(test)]
 mod tests {
     use super::parse_meta;
-    use std::path::Path;
 
     #[test]
     fn ssh_context_without_a_saved_host_is_shown_but_not_imported() {
@@ -342,7 +305,7 @@ mod tests {
             "Name": "edge",
             "Endpoints": { "docker": { "Host": "ssh://dev@10.0.0.8:2222" } }
         });
-        let parsed = parse_meta(&value, Path::new("/missing"), &[]).unwrap();
+        let parsed = parse_meta(&value, &[]).unwrap();
         assert_eq!(parsed.warning.as_deref(), Some("ssh_unmatched"));
         assert!(!parsed.importable);
         assert_eq!(parsed.draft.host.as_deref(), Some("10.0.0.8"));
@@ -350,12 +313,12 @@ mod tests {
     }
 
     #[test]
-    fn unix_and_plain_tcp_contexts_keep_their_endpoint_shape() {
+    fn unix_context_keeps_its_socket_and_tcp_context_is_skipped() {
         let unix = serde_json::json!({
             "Name": "desktop",
             "Endpoints": { "docker": { "Host": "unix:///Users/dev/.docker/run/docker.sock" } }
         });
-        let parsed = parse_meta(&unix, Path::new("/missing"), &[]).unwrap();
+        let parsed = parse_meta(&unix, &[]).unwrap();
         assert_eq!(
             parsed.draft.socket_path.as_deref(),
             Some("/Users/dev/.docker/run/docker.sock")
@@ -366,10 +329,7 @@ mod tests {
             "Name": "lab",
             "Endpoints": { "docker": { "Host": "tcp://10.1.1.8:2375" } }
         });
-        let parsed = parse_meta(&tcp, Path::new("/missing"), &[]).unwrap();
-        assert!(parsed.draft.insecure);
-        assert_eq!(parsed.warning.as_deref(), Some("insecure"));
-        assert_eq!(parsed.draft.port, Some(2375));
+        assert!(parse_meta(&tcp, &[]).is_none());
     }
 
     #[test]
@@ -378,6 +338,6 @@ mod tests {
             "Name": "k8s",
             "Endpoints": { "kubernetes": { "Host": "https://example" } }
         });
-        assert!(parse_meta(&value, Path::new("/missing"), &[]).is_none());
+        assert!(parse_meta(&value, &[]).is_none());
     }
 }

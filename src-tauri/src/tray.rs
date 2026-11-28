@@ -8,7 +8,7 @@ use objc2::rc::Retained;
 #[cfg(target_os = "macos")]
 use objc2::runtime::{AnyClass, AnyObject};
 #[cfg(target_os = "macos")]
-use objc2::{MainThreadMarker, msg_send};
+use objc2::{MainThreadMarker, Message, msg_send};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
     NSApplication, NSMenu, NSPopUpMenuWindowLevel, NSStatusBarButton, NSStatusItem,
@@ -35,7 +35,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let icon = TrayIconBuilder::with_id("clipboard-status")
         .icon(glyph_image(glyph_for(enabled, paused)))
         .icon_as_template(cfg!(target_os = "macos"))
-        .tooltip(tooltip_for(&labels, enabled, paused))
+        .tooltip(tooltip_for(&labels, enabled, paused, false, 0, 0))
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_tray_icon_event(|icon, event| match event {
@@ -75,6 +75,12 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let _ = app.listen("docker://enabled", move |_| refresh(&handle));
     let handle = app.clone();
     let _ = app.listen("docker://endpoints", move |_| refresh(&handle));
+    let handle = app.clone();
+    let _ = app.listen("ssh://sessions", move |_| refresh(&handle));
+    let handle = app.clone();
+    let _ = app.listen("docker://links", move |_| refresh(&handle));
+    let handle = app.clone();
+    let _ = app.listen("screenshot://record", move |_| refresh(&handle));
     Ok(())
 }
 
@@ -153,6 +159,12 @@ pub struct TrayLabels {
     tooltip_recording: String,
     tooltip_paused: String,
     tooltip_disabled: String,
+    #[serde(default)]
+    tooltip_capture: String,
+    #[serde(default)]
+    tooltip_ssh: String,
+    #[serde(default)]
+    tooltip_docker: String,
 }
 
 impl Default for TrayLabels {
@@ -181,6 +193,9 @@ impl Default for TrayLabels {
             tooltip_recording: "正在记录剪贴板".into(),
             tooltip_paused: "剪贴板记录已暂停".into(),
             tooltip_disabled: "剪贴板记录未开启".into(),
+            tooltip_capture: "正在录屏".into(),
+            tooltip_ssh: "SSH {count}".into(),
+            tooltip_docker: "Docker {count}".into(),
         }
     }
 }
@@ -237,7 +252,7 @@ struct TrayHost {
 static PENDING_MAIN: Mutex<Option<MainRequest>> = Mutex::new(None);
 static TRAY_MARK: Mutex<TrayMark> = Mutex::new(TrayMark::Board);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TrayMark {
     Board,
     Clip,
@@ -287,7 +302,7 @@ fn on_primary(app: &AppHandle, rect: tauri::Rect) {
     if enabled {
         shortcut::toggle_from_status(app, rect);
     } else {
-        open_main(app, "/clipboard", true);
+        open_main(app, "/settings", false);
     }
 }
 
@@ -347,7 +362,16 @@ fn on_menu(app: &AppHandle, event: &MenuEvent) {
                 shortcut::present_tool(app, "/docker", Some(id));
             }
         }
-        MenuAction::History => open_main(app, "/clipboard", false),
+        MenuAction::History => {
+            let clipboard_on = app
+                .try_state::<ClipboardState>()
+                .is_some_and(|state| state.status().enabled);
+            if clipboard_on {
+                open_main(app, "/clipboard", false);
+            } else {
+                open_main(app, "/settings", false);
+            }
+        }
         MenuAction::Settings => open_main(app, "/settings", false),
         MenuAction::Quit => app.exit(0),
         MenuAction::Other => {}
@@ -361,7 +385,7 @@ fn toggle_record(app: &AppHandle) {
     let status = clipboard.status();
     if !status.enabled {
         drop(clipboard);
-        open_main(app, "/clipboard", true);
+        open_main(app, "/settings", false);
         return;
     }
     let _ = clipboard.set_paused(!status.paused);
@@ -404,9 +428,14 @@ fn refresh(app: &AppHandle) {
         Some(glyph_image(glyph_for(status.enabled, status.paused))),
         cfg!(target_os = "macos"),
     );
-    let _ = host
-        .icon
-        .set_tooltip(Some(tooltip_for(&labels, status.enabled, status.paused)));
+    let _ = host.icon.set_tooltip(Some(tooltip_for(
+        &labels,
+        status.enabled,
+        status.paused,
+        crate::screenshot::capture_active(),
+        crate::ssh::live_sessions(app),
+        crate::docker::live_links(app),
+    )));
     if let Ok(menu) = build_menu(app, &labels) {
         let _ = host.icon.set_menu(Some(menu));
     }
@@ -463,6 +492,52 @@ fn menu_action(id: &str) -> MenuAction {
         "tray-quit" => MenuAction::Quit,
         _ => MenuAction::Other,
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrayEntry {
+    Capture,
+    RecordScreen,
+    Shots,
+    Hosts,
+    Endpoints,
+    ToolGap,
+    QuitGap,
+    Pause,
+    Ignore,
+    History,
+    Settings,
+    Quit,
+}
+
+fn tray_entries(clipboard: bool, screenshot: bool, ssh: bool, docker: bool) -> Vec<TrayEntry> {
+    let mut entries = Vec::new();
+    if screenshot {
+        entries.push(TrayEntry::Capture);
+        entries.push(TrayEntry::RecordScreen);
+        entries.push(TrayEntry::Shots);
+    }
+    if ssh {
+        entries.push(TrayEntry::Hosts);
+    }
+    if docker {
+        entries.push(TrayEntry::Endpoints);
+    }
+    let other_tools = screenshot || ssh || docker;
+    if other_tools && clipboard {
+        entries.push(TrayEntry::ToolGap);
+    }
+    if clipboard {
+        entries.push(TrayEntry::Pause);
+        entries.push(TrayEntry::Ignore);
+        entries.push(TrayEntry::History);
+    }
+    if other_tools || clipboard {
+        entries.push(TrayEntry::QuitGap);
+    }
+    entries.push(TrayEntry::Settings);
+    entries.push(TrayEntry::Quit);
+    entries
 }
 
 fn build_menu(app: &AppHandle, labels: &TrayLabels) -> tauri::Result<Menu<Wry>> {
@@ -535,26 +610,22 @@ fn build_menu(app: &AppHandle, labels: &TrayLabels) -> tauri::Result<Menu<Wry>> 
         entries.push(&show);
         entries.push(&gap_show);
     }
-    if shots_on {
-        entries.push(&capture);
-        entries.push(&record_screen);
-        entries.push(&shot_menu);
+    for entry in tray_entries(enabled, shots_on, hosts_on, docker_on) {
+        match entry {
+            TrayEntry::Capture => entries.push(&capture),
+            TrayEntry::RecordScreen => entries.push(&record_screen),
+            TrayEntry::Shots => entries.push(&shot_menu),
+            TrayEntry::Hosts => entries.push(&host_menu),
+            TrayEntry::Endpoints => entries.push(&endpoint_menu),
+            TrayEntry::ToolGap => entries.push(&gap_tools),
+            TrayEntry::QuitGap => entries.push(&gap_quit),
+            TrayEntry::Pause => entries.push(&pause),
+            TrayEntry::Ignore => entries.push(&ignore),
+            TrayEntry::History => entries.push(&history),
+            TrayEntry::Settings => entries.push(&settings),
+            TrayEntry::Quit => entries.push(&quit),
+        }
     }
-    if hosts_on {
-        entries.push(&host_menu);
-    }
-    if docker_on {
-        entries.push(&endpoint_menu);
-    }
-    if shots_on || hosts_on || docker_on {
-        entries.push(&gap_tools);
-    }
-    entries.push(&pause);
-    entries.push(&ignore);
-    entries.push(&history);
-    entries.push(&gap_quit);
-    entries.push(&settings);
-    entries.push(&quit);
     Menu::with_items(app, &entries)
 }
 
@@ -718,13 +789,29 @@ fn record_label(labels: &TrayLabels, enabled: bool, paused: bool) -> String {
     }
 }
 
-fn tooltip_for(labels: &TrayLabels, enabled: bool, paused: bool) -> String {
-    if !enabled {
+fn tooltip_for(labels: &TrayLabels, enabled: bool, paused: bool, capture: bool, ssh: usize, docker: usize) -> String {
+    let base = if !enabled {
         labels.tooltip_disabled.clone()
     } else if paused {
         labels.tooltip_paused.clone()
     } else {
         labels.tooltip_recording.clone()
+    };
+    let mut parts = Vec::new();
+    if capture {
+        parts.push(text_or(&labels.tooltip_capture, "正在录屏"));
+    }
+    if ssh > 0 {
+        parts.push(text_or(&labels.tooltip_ssh, "SSH {count}").replace("{count}", &ssh.to_string()));
+    }
+    if docker > 0 {
+        parts.push(text_or(&labels.tooltip_docker, "Docker {count}").replace("{count}", &docker.to_string()));
+    }
+    if parts.is_empty() {
+        base
+    } else {
+        parts.push(base);
+        parts.join(" · ")
     }
 }
 
@@ -786,45 +873,98 @@ fn glyph_alpha(kind: Glyph, mark: TrayMark, x: u32, y: u32) -> u8 {
 }
 
 fn mark_shape(mark: TrayMark, px: f64, py: f64) -> bool {
+    // The menu-bar image is 44px. Icons are drawn on the same 24-unit grid as the settings preview.
+    let x = px * 24.0 / 44.0;
+    let y = py * 24.0 / 44.0;
     match mark {
         TrayMark::Board => {
-            stroke_round(px, py, 11.0, 15.0, 33.0, 39.0, 4.0, 2.2)
-                || inside_round(px, py, 17.0, 8.0, 27.0, 17.0, 2.5)
-                || inside_rect(px, py, 16.0, 23.0, 28.0, 25.0)
-                || inside_rect(px, py, 16.0, 29.0, 24.0, 31.0)
+            let board = svg_stroke_round(x, y, 5.0, 6.4, 19.0, 20.0, 2.2, 2.0)
+                && !(x >= 8.8 && x <= 15.2 && y <= 7.4);
+            let clip = svg_stroke_round(x, y, 8.8, 3.6, 15.2, 8.2, 1.5, 2.0);
+            board
+                || clip
+                || on_stroke(x, y, &[(8.3, 12.2), (15.7, 12.2)], 0.825)
+                || on_stroke(x, y, &[(8.3, 15.4), (13.2, 15.4)], 0.825)
         }
-        TrayMark::Clip => on_stroke(
-            px,
-            py,
-            &[
-                (20.0, 30.0),
-                (20.0, 16.0),
-                (24.0, 11.0),
-                (29.0, 14.0),
-                (29.0, 32.0),
-                (22.0, 36.0),
-                (15.0, 32.0),
-                (15.0, 18.0),
-            ],
-            1.7,
-        ),
-        TrayMark::Mark => {
-            inside_rect(px, py, 14.0, 11.0, 18.6, 33.0)
-                || (inside_round(px, py, 14.0, 11.0, 31.0, 23.8, 6.2)
-                    && !inside_round(px, py, 18.6, 14.4, 27.4, 20.6, 3.0)
-                    && px >= 16.5)
-        }
+        TrayMark::Clip => on_stroke(x, y, &paperclip(), 1.0),
+        TrayMark::Mark => on_stroke(x, y, &letter_p(), 1.2),
         TrayMark::Pages => {
-            inside_round(px, py, 8.0, 15.0, 26.0, 36.0, 3.2)
-                || inside_round(px, py, 16.0, 8.0, 36.0, 29.0, 3.2)
+            let covered = inside_round(x, y, 7.8, 7.4, 20.3, 20.6, 3.0);
+            let back = svg_stroke_round(x, y, 4.5, 4.0, 15.0, 15.2, 2.0, 2.0) && !covered;
+            let front = svg_stroke_round(x, y, 8.8, 8.4, 19.3, 19.6, 2.0, 2.0);
+            back || front
+                || on_stroke(x, y, &[(11.4, 12.6), (16.4, 12.6)], 0.8)
+                || on_stroke(x, y, &[(11.4, 15.5), (14.2, 15.5)], 0.8)
         }
         TrayMark::Pin => {
-            let dx = px - 22.0;
-            let dy = py - 12.0;
-            dx * dx + dy * dy <= 20.0
-                || inside_rect(px, py, 20.6, 15.0, 23.4, 34.5)
-                || inside_rect(px, py, 15.0, 19.0, 29.0, 21.6)
+            let head = svg_stroke_round(x, y, 6.9, 3.6, 17.1, 9.2, 2.8, 2.0);
+            let needle = on_stroke(x, y, &[(12.0, 9.2), (12.0, 20.4)], 1.0);
+            head || needle
         }
+    }
+}
+
+fn paperclip() -> Vec<(f64, f64)> {
+    let mut points = vec![(6.8, 7.6), (6.8, 14.6)];
+    arc(&mut points, 11.6, 14.6, 4.8, std::f64::consts::PI, 0.0, 12);
+    points.push((16.4, 6.6));
+    arc(&mut points, 13.3, 6.6, 3.1, 0.0, -std::f64::consts::PI, 10);
+    points.push((10.2, 14.8));
+    arc(&mut points, 11.7, 14.8, 1.5, std::f64::consts::PI, 0.0, 8);
+    points.push((13.2, 9.6));
+    points
+}
+
+fn letter_p() -> Vec<(f64, f64)> {
+    let mut points = vec![(6.9, 19.6), (6.9, 4.4), (12.1, 4.4)];
+    arc(
+        &mut points,
+        12.1,
+        9.4,
+        5.0,
+        -std::f64::consts::FRAC_PI_2,
+        std::f64::consts::FRAC_PI_2,
+        16,
+    );
+    points.push((6.9, 14.4));
+    points
+}
+
+fn svg_stroke_round(
+    px: f64,
+    py: f64,
+    left: f64,
+    top: f64,
+    right: f64,
+    bottom: f64,
+    radius: f64,
+    stroke: f64,
+) -> bool {
+    let half = stroke / 2.0;
+    stroke_round(
+        px,
+        py,
+        left - half,
+        top - half,
+        right + half,
+        bottom + half,
+        radius + half,
+        stroke,
+    )
+}
+
+fn arc(
+    points: &mut Vec<(f64, f64)>,
+    cx: f64,
+    cy: f64,
+    radius: f64,
+    start: f64,
+    end: f64,
+    steps: usize,
+) {
+    for step in 0..=steps {
+        let angle = start + (end - start) * (step as f64) / (steps as f64);
+        points.push((cx + radius * angle.cos(), cy + radius * angle.sin()));
     }
 }
 
@@ -892,10 +1032,6 @@ fn inside_round(
     let dx = px - cx;
     let dy = py - cy;
     dx * dx + dy * dy <= radius * radius
-}
-
-fn inside_rect(px: f64, py: f64, left: f64, top: f64, right: f64, bottom: f64) -> bool {
-    px >= left && py >= top && px <= right && py <= bottom
 }
 
 fn is_popup_menu_window(class_name: &str) -> bool {
@@ -993,6 +1129,50 @@ fn clear_status_highlight(icon: TrayIcon<Wry>) {
 }
 
 #[cfg(target_os = "macos")]
+struct StatusButton(*mut NSView);
+
+#[cfg(target_os = "macos")]
+unsafe impl Send for StatusButton {}
+
+#[cfg(target_os = "macos")]
+static STATUS_BUTTON: Mutex<StatusButton> = Mutex::new(StatusButton(std::ptr::null_mut()));
+
+#[cfg(target_os = "macos")]
+fn remember_status_button(button: &NSStatusBarButton) {
+    let mut slot = match STATUS_BUTTON.lock() {
+        Ok(slot) => slot,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if !slot.0.is_null() {
+        return;
+    }
+    slot.0 = Retained::into_raw(status_button_view(button).retain());
+}
+
+/// Screen rectangle of the menu-bar icon, in AppKit points, grown slightly so a
+/// click on its highlight still counts as the icon.
+#[cfg(target_os = "macos")]
+pub(crate) fn status_button_frame() -> Option<(f64, f64, f64, f64)> {
+    let slot = match STATUS_BUTTON.lock() {
+        Ok(slot) => slot,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if slot.0.is_null() {
+        return None;
+    }
+    let view = unsafe { &*slot.0 };
+    let window = view.window()?;
+    let screen = window.convertRectToScreen(view.convertRect_toView(view.bounds(), None));
+    let slop = 4.0;
+    Some((
+        screen.origin.x - slop,
+        screen.origin.y - slop,
+        screen.size.width + slop * 2.0,
+        screen.size.height + slop * 2.0,
+    ))
+}
+
+#[cfg(target_os = "macos")]
 fn allow_status_item_in_fullscreen(item: &NSStatusItem) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -1000,6 +1180,7 @@ fn allow_status_item_in_fullscreen(item: &NSStatusItem) {
     let Some(button) = item.button(mtm) else {
         return;
     };
+    remember_status_button(&button);
     let Some(window) = status_button_view(&button).window() else {
         return;
     };
@@ -1087,23 +1268,83 @@ fn dist_to_segment(px: f64, py: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f64 
 
 #[cfg(test)]
 mod tests {
-    use super::{Glyph, TrayMark, glyph_alpha, main_request_path};
+    use super::{Glyph, TrayEntry, TrayMark, glyph_alpha, main_request_path, tray_entries};
 
     #[test]
-    fn paused_mark_is_only_on_the_paused_icon() {
-        assert_eq!(glyph_alpha(Glyph::Recording, TrayMark::Board, 21, 21), 0);
-        assert_eq!(glyph_alpha(Glyph::Disabled, TrayMark::Board, 21, 21), 0);
-        assert!(glyph_alpha(Glyph::Paused, TrayMark::Board, 21, 21) > 200);
+    fn paused_slash_appears_only_on_the_paused_icon() {
+        let mut slash = 0;
         let mut recording = 0u8;
         let mut disabled = 0u8;
         for y in 0..44 {
             for x in 0..44 {
-                recording = recording.max(glyph_alpha(Glyph::Recording, TrayMark::Board, x, y));
-                disabled = disabled.max(glyph_alpha(Glyph::Disabled, TrayMark::Board, x, y));
+                let live = glyph_alpha(Glyph::Recording, TrayMark::Board, x, y);
+                let paused = glyph_alpha(Glyph::Paused, TrayMark::Board, x, y);
+                let off = glyph_alpha(Glyph::Disabled, TrayMark::Board, x, y);
+                if live == 0 && paused > 200 {
+                    slash += 1;
+                }
+                if live > 0 {
+                    assert_eq!(off, 96);
+                } else {
+                    assert_eq!(off, 0);
+                }
+                recording = recording.max(live);
+                disabled = disabled.max(off);
             }
         }
         assert_eq!(recording, 255);
         assert_eq!(disabled, 96);
+        assert!(
+            slash > 20,
+            "the pause slash should stay visible beside the mark"
+        );
+    }
+
+    #[test]
+    fn taskbar_marks_share_one_optical_frame() {
+        for mark in [
+            TrayMark::Board,
+            TrayMark::Clip,
+            TrayMark::Mark,
+            TrayMark::Pages,
+            TrayMark::Pin,
+        ] {
+            let mut ink = 0;
+            let mut min_x = 44u32;
+            let mut min_y = 44u32;
+            let mut max_x = 0u32;
+            let mut max_y = 0u32;
+            for y in 0..44 {
+                for x in 0..44 {
+                    if glyph_alpha(Glyph::Recording, mark, x, y) == 0 {
+                        continue;
+                    }
+                    ink += 1;
+                    min_x = min_x.min(x);
+                    min_y = min_y.min(y);
+                    max_x = max_x.max(x);
+                    max_y = max_y.max(y);
+                }
+            }
+            assert!(
+                ink > 120 && ink < 1100,
+                "{mark:?} has {ink} pixels, outside the shared weight"
+            );
+            assert!(
+                min_x >= 3 && min_y >= 3,
+                "{mark:?} touches the top or left edge at {min_x},{min_y}"
+            );
+            assert!(
+                max_x <= 40 && max_y <= 40,
+                "{mark:?} touches the bottom or right edge at {max_x},{max_y}"
+            );
+            let width = max_x - min_x;
+            let height = max_y - min_y;
+            assert!(
+                width >= 14 && height >= 24,
+                "{mark:?} is {width}x{height}, too small for the menu bar"
+            );
+        }
     }
 
     #[test]
@@ -1158,6 +1399,32 @@ mod tests {
     }
 
     #[test]
+    fn a_turned_off_tool_leaves_the_tray() {
+        let clipboard_off = tray_entries(false, true, true, true);
+        assert!(!clipboard_off.contains(&TrayEntry::Pause));
+        assert!(!clipboard_off.contains(&TrayEntry::Ignore));
+        assert!(!clipboard_off.contains(&TrayEntry::History));
+        assert!(clipboard_off.contains(&TrayEntry::Capture));
+        assert!(clipboard_off.contains(&TrayEntry::Hosts));
+        assert!(clipboard_off.contains(&TrayEntry::Endpoints));
+        assert_eq!(
+            tray_entries(true, false, false, false),
+            vec![
+                TrayEntry::Pause,
+                TrayEntry::Ignore,
+                TrayEntry::History,
+                TrayEntry::QuitGap,
+                TrayEntry::Settings,
+                TrayEntry::Quit,
+            ]
+        );
+        assert_eq!(
+            tray_entries(false, false, false, false),
+            vec![TrayEntry::Settings, TrayEntry::Quit]
+        );
+    }
+
+    #[test]
     fn every_taskbar_mark_draws_and_unknown_names_are_rejected() {
         for mark in [
             TrayMark::Board,
@@ -1207,5 +1474,18 @@ mod tests {
         assert_eq!(super::ivar_byte_len(&encoding), 40);
         let encoding = CString::new("not-an-array").unwrap();
         assert_eq!(super::ivar_byte_len(&encoding), 40);
+    }
+
+    #[test]
+    fn tooltip_puts_live_work_ahead_of_the_clipboard_state() {
+        let labels = super::TrayLabels::default();
+        assert_eq!(
+            super::tooltip_for(&labels, true, false, false, 0, 0),
+            "正在记录剪贴板"
+        );
+        assert_eq!(
+            super::tooltip_for(&labels, false, false, true, 2, 1),
+            "正在录屏 · SSH 2 · Docker 1 · 剪贴板记录未开启"
+        );
     }
 }

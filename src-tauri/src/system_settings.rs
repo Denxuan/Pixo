@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_dialog::DialogExt;
 
 #[derive(Default)]
 pub struct BackgroundMode(pub AtomicBool);
@@ -73,6 +74,72 @@ pub struct UpdateStatus {
 struct GitHubRelease {
     tag_name: String,
     html_url: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataProfile {
+    pub app_data_dir: String,
+    pub clipboard_db: String,
+    pub screenshot_library: String,
+    pub screenshot_save_dir: String,
+    pub ssh_db: String,
+    pub docker_db: String,
+    pub recording: bool,
+    pub ssh_sessions: usize,
+    pub docker_links: usize,
+}
+
+#[tauri::command]
+pub fn system_data_profile(app: AppHandle) -> Result<DataProfile, String> {
+    let root = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    Ok(DataProfile {
+        clipboard_db: root.join("clipboard").join("history.db").to_string_lossy().into_owned(),
+        screenshot_library: root.join("screenshot").join("library.db").to_string_lossy().into_owned(),
+        screenshot_save_dir: crate::screenshot::save_directory(&app),
+        ssh_db: root.join("ssh").join("hosts.db").to_string_lossy().into_owned(),
+        docker_db: root.join("docker").join("endpoints.db").to_string_lossy().into_owned(),
+        app_data_dir: root.to_string_lossy().into_owned(),
+        recording: crate::screenshot::capture_active(),
+        ssh_sessions: crate::ssh::live_sessions(&app),
+        docker_links: crate::docker::live_links(&app),
+    })
+}
+
+#[tauri::command]
+pub async fn system_export_bundle(app: AppHandle, kind: String, title: String) -> Result<bool, String> {
+    if title.trim().is_empty() || title.chars().count() > 80 {
+        return Err("invalid_input".into());
+    }
+    let (file_name, body) = match kind.as_str() {
+        "hosts" => ("pixo-hosts.json".to_string(), crate::ssh::hosts_json(&app)?),
+        "endpoints" => ("pixo-endpoints.json".to_string(), crate::docker::endpoints_json(&app)?),
+        _ => return Err("invalid_input".into()),
+    };
+    let dialog_app = app.clone();
+    let dialog_title = title;
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        dialog_app
+            .dialog()
+            .file()
+            .set_title(dialog_title)
+            .set_file_name(file_name)
+            .add_filter("JSON", &["json"])
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|_| "storage".to_string())?;
+    let Some(picked) = picked else {
+        return Ok(false);
+    };
+    let path = picked.into_path().map_err(|_| "invalid_input".to_string())?;
+    std::fs::write(&path, body).map_err(|_| "storage".to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(true)
 }
 
 #[tauri::command]

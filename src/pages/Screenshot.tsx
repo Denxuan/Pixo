@@ -4,11 +4,12 @@ import ShotLibrary from "@/components/screenshot/ShotLibrary";
 import type { ShotStatus } from "@/types/screenshot";
 import { isDesktop } from "@/utils/desktop";
 import { screenshotErrorText, screenshotReasonText } from "@/utils/screenshotMessage";
+import { inkFrameStyle } from "@/utils/theme";
 
 function ActionCard({ icon, title, description, action }: { icon: ReactNode; title: string; description: string; action?: ReactNode }) {
   const { token } = antdTheme.useToken();
   return (
-    <div className="flex flex-col gap-3 p-5" style={{ border: `1px solid ${token.colorBorderSecondary}`, borderRadius: token.borderRadiusLG, background: token.colorBgContainer }}>
+    <div className="flex flex-col gap-3 p-5" style={{ background: token.colorBgContainer, ...inkFrameStyle(token, token.borderRadiusLG) }}>
       <span className="flex h-10 w-10 items-center justify-center text-lg" style={{ borderRadius: token.borderRadius, background: token.colorPrimaryBg, color: token.colorPrimary }} aria-hidden="true">{icon}</span>
       <div className="flex flex-1 flex-col gap-1">
         <Typography.Text strong>{title}</Typography.Text>

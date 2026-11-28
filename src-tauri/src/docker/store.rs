@@ -63,6 +63,18 @@ impl Store {
             conn.pragma_update(None, "user_version", 2)
                 .map_err(storage)?;
         }
+        if version < 3 {
+            conn.execute_batch(
+                "DELETE FROM docker_compose_projects
+                 WHERE endpoint_id IN (
+                   SELECT id FROM docker_endpoints WHERE kind IN ('tls', 'tcp')
+                 );
+                 DELETE FROM docker_endpoints WHERE kind IN ('tls', 'tcp');",
+            )
+            .map_err(storage)?;
+            conn.pragma_update(None, "user_version", 3)
+                .map_err(storage)?;
+        }
         Ok(Self { conn })
     }
 
@@ -85,7 +97,7 @@ impl Store {
         let mut statement = self
             .conn
             .prepare(
-                "SELECT id, name, kind, socket_path, ssh_host_id, remote_socket, host, port, ca_path, cert_path, key_path, insecure, source, sort_order
+                "SELECT id, name, kind, socket_path, ssh_host_id, remote_socket, host, port, source, sort_order
                  FROM docker_endpoints
                  ORDER BY sort_order, id",
             )
@@ -97,7 +109,7 @@ impl Store {
     pub fn get(&self, id: i64) -> Result<Endpoint, DockerError> {
         self.conn
             .query_row(
-                "SELECT id, name, kind, socket_path, ssh_host_id, remote_socket, host, port, ca_path, cert_path, key_path, insecure, source, sort_order
+                "SELECT id, name, kind, socket_path, ssh_host_id, remote_socket, host, port, source, sort_order
                  FROM docker_endpoints WHERE id = ?1",
                 params![id],
                 row_to_endpoint,
@@ -117,7 +129,6 @@ impl Store {
             return Err(DockerError::new("invalid_input"));
         }
         let port = endpoint.port.map(i64::from);
-        let insecure = if endpoint.insecure { 1 } else { 0 };
         if let Some(id) = endpoint.id {
             let existing = self.get(id)?;
             let changed = self
@@ -125,8 +136,8 @@ impl Store {
                 .execute(
                     "UPDATE docker_endpoints
                      SET name = ?1, kind = ?2, socket_path = ?3, ssh_host_id = ?4, remote_socket = ?5,
-                         host = ?6, port = ?7, ca_path = ?8, cert_path = ?9, key_path = ?10, insecure = ?11, updated_at = ?12
-                     WHERE id = ?13",
+                         host = ?6, port = ?7, ca_path = NULL, cert_path = NULL, key_path = NULL, insecure = 0, updated_at = ?8
+                     WHERE id = ?9",
                     params![
                         endpoint.name,
                         endpoint.kind.as_str(),
@@ -135,10 +146,6 @@ impl Store {
                         endpoint.remote_socket,
                         endpoint.host,
                         port,
-                        endpoint.ca_path,
-                        endpoint.cert_path,
-                        endpoint.key_path,
-                        insecure,
                         now,
                         id,
                     ],
@@ -154,7 +161,7 @@ impl Store {
                 .execute(
                     "INSERT INTO docker_endpoints (
                         name, kind, socket_path, ssh_host_id, remote_socket, host, port, ca_path, cert_path, key_path, insecure, source, sort_order, created_at, updated_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, NULL, 0, ?8, ?9, ?10, ?10)",
                     params![
                         endpoint.name,
                         endpoint.kind.as_str(),
@@ -163,10 +170,6 @@ impl Store {
                         endpoint.remote_socket,
                         endpoint.host,
                         port,
-                        endpoint.ca_path,
-                        endpoint.cert_path,
-                        endpoint.key_path,
-                        insecure,
                         source,
                         now,
                         now,
@@ -306,12 +309,8 @@ fn row_to_endpoint(row: &rusqlite::Row<'_>) -> rusqlite::Result<Endpoint> {
         remote_socket: row.get(5)?,
         host: row.get(6)?,
         port: port.and_then(|value| u16::try_from(value).ok()),
-        ca_path: row.get(8)?,
-        cert_path: row.get(9)?,
-        key_path: row.get(10)?,
-        insecure: row.get::<_, i64>(11)? != 0,
-        source: row.get(12)?,
-        sort_order: row.get(13)?,
+        source: row.get(8)?,
+        sort_order: row.get(9)?,
     })
 }
 

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -39,6 +40,7 @@ pub(crate) struct Bridge {
     next_prompt: AtomicU64,
     failure: Mutex<Option<SshError>>,
     pub(crate) output: OutputWindow,
+    pub(crate) remote_routes: Mutex<HashMap<u32, (String, u16)>>,
 }
 
 impl Bridge {
@@ -51,6 +53,7 @@ impl Bridge {
             next_prompt: AtomicU64::new(1),
             failure: Mutex::new(None),
             output: OutputWindow::new(),
+            remote_routes: Mutex::new(HashMap::new()),
         })
     }
 }
@@ -704,6 +707,36 @@ impl Handler for ClientHandler {
         }
         reply.accept().await;
         tauri::async_runtime::spawn(super::agent::relay(channel));
+        Ok(())
+    }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<russh::client::Msg>,
+        _connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let target = lock(&self.bridge.remote_routes)
+            .get(&connected_port)
+            .cloned();
+        let Some((host, port)) = target else {
+            reply
+                .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        };
+        reply.accept().await;
+        tauri::async_runtime::spawn(async move {
+            let Ok(mut local) = TcpStream::connect((host.as_str(), port)).await else {
+                return;
+            };
+            let mut remote = channel.into_stream();
+            let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
+        });
         Ok(())
     }
 }

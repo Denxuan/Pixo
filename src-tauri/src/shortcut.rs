@@ -11,20 +11,25 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindo
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState, ShortcutWrapper};
 
 #[cfg(target_os = "macos")]
+use block2::RcBlock;
+#[cfg(target_os = "macos")]
 use dispatch2::{DispatchQueue, DispatchTime};
 #[cfg(target_os = "macos")]
 use objc2::rc::Retained;
 #[cfg(target_os = "macos")]
-use objc2::runtime::AnyClass;
+use objc2::runtime::{AnyClass, AnyObject};
 #[cfg(target_os = "macos")]
 use objc2::{MainThreadMarker, Message, msg_send, sel};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSFloatingWindowLevel, NSResponder, NSView,
-    NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventMask, NSFloatingWindowLevel,
+    NSResponder, NSView, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior,
+    NSWindowStyleMask,
 };
 #[cfg(target_os = "macos")]
 use objc2_foundation::{NSPoint, NSRect, NSSize};
+#[cfg(target_os = "macos")]
+use std::ptr::NonNull;
 
 use crate::clipboard::ClipboardError;
 
@@ -179,6 +184,79 @@ fn present(app: &AppHandle, toggle: bool, placement: Placement) {
     }
 }
 
+static LAUNCHER_SHORTCUT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+#[tauri::command]
+pub fn launcher_set_shortcut(app: AppHandle, shortcut: String) -> Result<(), ClipboardError> {
+    let shortcut = shortcut.trim().to_string();
+    let mut registered = LAUNCHER_SHORTCUT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if shortcut.is_empty() {
+        if let Some(current) = registered.take() {
+            let _ = app.global_shortcut().unregister(current.as_str());
+        }
+        return Ok(());
+    }
+    if registered.as_deref() == Some(shortcut.as_str()) {
+        return Ok(());
+    }
+    parse_shortcut(&shortcut)?;
+    let previous = registered.clone();
+    if let Some(previous) = previous.as_deref() {
+        let _ = app.global_shortcut().unregister(previous);
+    }
+    let app_handle = app.clone();
+    match app
+        .global_shortcut()
+        .on_shortcut(shortcut.as_str(), move |_app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                open_launcher(&app_handle);
+            }
+        }) {
+        Ok(()) => {
+            *registered = Some(shortcut);
+            Ok(())
+        }
+        Err(error) => {
+            eprintln!("launcher shortcut: {error}");
+            *registered = None;
+            if let Some(previous) = previous {
+                let app_handle = app.clone();
+                if app
+                    .global_shortcut()
+                    .on_shortcut(previous.as_str(), move |_app, _shortcut, event| {
+                        if event.state == ShortcutState::Pressed {
+                            open_launcher(&app_handle);
+                        }
+                    })
+                    .is_ok()
+                {
+                    *registered = Some(previous);
+                }
+            }
+            Err(ClipboardError::new("shortcut_conflict"))
+        }
+    }
+}
+
+fn open_launcher(app: &AppHandle) {
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        dismiss(&app);
+        if crate::ensure_main_window(&app).is_err() {
+            return;
+        }
+        let Some(window) = app.get_webview_window("main") else {
+            return;
+        };
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = window.emit("launcher://toggle", ());
+    });
+}
+
 #[tauri::command]
 pub fn clipboard_dismiss_panel(app: AppHandle) {
     let app = app.clone();
@@ -196,11 +274,170 @@ fn dismiss(app: &AppHandle) {
 }
 
 fn hide_panel(app: &AppHandle) {
+    stop_outside_click();
     #[cfg(target_os = "macos")]
     stop_key_capture();
     if let Some(window) = app.get_webview_window(PANEL_LABEL) {
         let _ = window.hide();
     }
+}
+
+fn start_outside_click(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    watch_outside_clicks(app);
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+}
+
+fn stop_outside_click() {
+    #[cfg(target_os = "macos")]
+    clear_outside_clicks();
+}
+
+#[derive(Clone, Copy)]
+struct ScreenBox {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+fn contains_point(area: ScreenBox, x: f64, y: f64) -> bool {
+    x >= area.x && y >= area.y && x <= area.x + area.width && y <= area.y + area.height
+}
+
+/// A press closes the panel when it lands outside the card. The status item is
+/// excluded so that same click can still toggle the panel shut on mouse up.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn outside_click_dismisses(panel: ScreenBox, status: Option<ScreenBox>, x: f64, y: f64) -> bool {
+    if contains_point(panel, x, y) {
+        return false;
+    }
+    if status.is_some_and(|item| contains_point(item, x, y)) {
+        return false;
+    }
+    true
+}
+
+#[cfg(target_os = "macos")]
+struct ClickWatch {
+    global_monitor: *mut AnyObject,
+    local_monitor: *mut AnyObject,
+    global_block: *mut block2::Block<dyn Fn(NonNull<NSEvent>)>,
+    local_block: *mut block2::Block<dyn Fn(NonNull<NSEvent>) -> *mut NSEvent>,
+}
+
+#[cfg(target_os = "macos")]
+unsafe impl Send for ClickWatch {}
+
+#[cfg(target_os = "macos")]
+static CLICK_WATCH: Mutex<Option<ClickWatch>> = Mutex::new(None);
+
+#[cfg(target_os = "macos")]
+fn watch_outside_clicks(app: &AppHandle) {
+    let mut slot = match CLICK_WATCH.lock() {
+        Ok(slot) => slot,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if slot.is_some() {
+        return;
+    }
+    let mask =
+        NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown | NSEventMask::OtherMouseDown;
+    let global_app = app.clone();
+    let global_block: RcBlock<dyn Fn(NonNull<NSEvent>)> =
+        RcBlock::new(move |_event: NonNull<NSEvent>| note_outside_click(&global_app));
+    let local_app = app.clone();
+    let local_block: RcBlock<dyn Fn(NonNull<NSEvent>) -> *mut NSEvent> =
+        RcBlock::new(move |event: NonNull<NSEvent>| {
+            note_outside_click(&local_app);
+            event.as_ptr()
+        });
+    let global_monitor =
+        NSEvent::addGlobalMonitorForEventsMatchingMask_handler(mask, &global_block);
+    let local_monitor =
+        unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &local_block) };
+    if global_monitor.is_none() && local_monitor.is_none() {
+        eprintln!("clipboard panel: outside clicks cannot close the panel");
+        return;
+    }
+    *slot = Some(ClickWatch {
+        global_monitor: global_monitor
+            .map(Retained::into_raw)
+            .unwrap_or(std::ptr::null_mut()),
+        local_monitor: local_monitor
+            .map(Retained::into_raw)
+            .unwrap_or(std::ptr::null_mut()),
+        global_block: RcBlock::into_raw(global_block),
+        local_block: RcBlock::into_raw(local_block),
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn clear_outside_clicks() {
+    let watch = {
+        let mut slot = match CLICK_WATCH.lock() {
+            Ok(slot) => slot,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        slot.take()
+    };
+    let Some(watch) = watch else {
+        return;
+    };
+    unsafe {
+        if !watch.global_monitor.is_null() {
+            let monitor = Retained::from_raw(watch.global_monitor).unwrap();
+            NSEvent::removeMonitor(&monitor);
+        }
+        if !watch.local_monitor.is_null() {
+            let monitor = Retained::from_raw(watch.local_monitor).unwrap();
+            NSEvent::removeMonitor(&monitor);
+        }
+        if !watch.global_block.is_null() {
+            drop(RcBlock::from_raw(watch.global_block));
+        }
+        if !watch.local_block.is_null() {
+            drop(RcBlock::from_raw(watch.local_block));
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn note_outside_click(app: &AppHandle) {
+    let point = NSEvent::mouseLocation();
+    let x = point.x;
+    let y = point.y;
+    let app = app.clone();
+    // The monitor can be running inside the mouse-down that it may remove, so the
+    // hit test and hide happen on the next turn of the main queue.
+    let _ = DispatchQueue::main().exec_async(move || {
+        let Some(window) = app.get_webview_window(PANEL_LABEL) else {
+            return;
+        };
+        if !window.is_visible().unwrap_or(false) {
+            return;
+        }
+        let Some(ns_window) = retained_window(&window) else {
+            return;
+        };
+        let frame = ns_window.frame();
+        let panel = ScreenBox {
+            x: frame.origin.x,
+            y: frame.origin.y,
+            width: frame.size.width,
+            height: frame.size.height,
+        };
+        let status = crate::tray::status_button_frame().map(|(x, y, width, height)| ScreenBox {
+            x,
+            y,
+            width,
+            height,
+        });
+        if outside_click_dismisses(panel, status, x, y) {
+            dismiss(&app);
+        }
+    });
 }
 
 #[cfg(target_os = "macos")]
@@ -240,7 +477,8 @@ fn build_panel(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     .min_inner_size(320.0, 420.0)
     .decorations(false)
     .transparent(true)
-    .shadow(true)
+    // The card paints its own hard offset shadow in the transparent margin.
+    .shadow(false)
     .always_on_top(cfg!(not(target_os = "macos")))
     .skip_taskbar(true)
     .visible_on_all_workspaces(cfg!(not(target_os = "macos")))
@@ -261,6 +499,7 @@ fn reveal(app: &AppHandle, window: &WebviewWindow, placement: Placement) {
     #[cfg(target_os = "macos")]
     if place_panel(app, window, &placement) {
         focus_search(window, true);
+        start_outside_click(app);
         return;
     }
     #[cfg(not(target_os = "macos"))]
@@ -272,6 +511,7 @@ fn reveal(app: &AppHandle, window: &WebviewWindow, placement: Placement) {
     let _ = window.show();
     let _ = window.set_focus();
     focus_search(window, true);
+    start_outside_click(app);
 }
 
 fn focus_search(window: &WebviewWindow, reset: bool) {
@@ -1046,6 +1286,59 @@ mod tests {
         assert!(!super::releases_to_system(10, 20, true, false));
         assert!(!super::releases_to_system(10, 0, true, true));
         assert!(!super::releases_to_system(10, 53, false, false));
+    }
+
+    #[test]
+    fn outside_click_closes_except_on_the_panel_and_status_item() {
+        let panel = super::ScreenBox {
+            x: 100.0,
+            y: 200.0,
+            width: 440.0,
+            height: 560.0,
+        };
+        let status = super::ScreenBox {
+            x: 800.0,
+            y: 900.0,
+            width: 28.0,
+            height: 24.0,
+        };
+        assert!(!super::outside_click_dismisses(
+            panel,
+            Some(status),
+            100.0,
+            200.0
+        ));
+        assert!(!super::outside_click_dismisses(
+            panel,
+            Some(status),
+            320.0,
+            480.0
+        ));
+        assert!(!super::outside_click_dismisses(
+            panel,
+            Some(status),
+            540.0,
+            760.0
+        ));
+        assert!(!super::outside_click_dismisses(
+            panel,
+            Some(status),
+            810.0,
+            910.0
+        ));
+        assert!(super::outside_click_dismisses(
+            panel,
+            Some(status),
+            99.0,
+            400.0
+        ));
+        assert!(super::outside_click_dismisses(
+            panel,
+            Some(status),
+            10.0,
+            10.0
+        ));
+        assert!(super::outside_click_dismisses(panel, None, 810.0, 910.0));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import type { SshSessionEvent } from "@/types/ssh";
 
-export type DockerKind = "local" | "ssh" | "tls" | "tcp";
+export type DockerKind = "local" | "ssh";
 
 export type DockerStatus = {
   enabled: boolean;
@@ -15,10 +15,6 @@ export type DockerEndpoint = {
   remoteSocket: string | null;
   host: string | null;
   port: number | null;
-  caPath: string | null;
-  certPath: string | null;
-  keyPath: string | null;
-  insecure: boolean;
   source: string;
   sortOrder: number;
 };
@@ -32,10 +28,6 @@ export type DockerEndpointDraft = {
   remoteSocket?: string;
   host?: string;
   port?: number;
-  caPath?: string;
-  certPath?: string;
-  keyPath?: string;
-  insecure?: boolean;
 };
 
 export type DockerSocket = {

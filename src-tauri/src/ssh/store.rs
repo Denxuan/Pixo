@@ -46,6 +46,18 @@ CREATE TABLE IF NOT EXISTS ssh_snippets (
 );
 ";
 
+const FORWARDS: &str = "
+CREATE TABLE IF NOT EXISTS ssh_forwards (
+  id INTEGER PRIMARY KEY,
+  host_id INTEGER NOT NULL REFERENCES ssh_hosts(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('local', 'remote', 'dynamic')),
+  listen_port INTEGER NOT NULL,
+  target_host TEXT NOT NULL,
+  target_port INTEGER NOT NULL,
+  UNIQUE (host_id, kind, listen_port)
+);
+";
+
 pub struct Store {
     conn: Connection,
 }
@@ -82,6 +94,7 @@ impl Store {
             }
         }
         conn.execute_batch(SNIPPETS).map_err(storage)?;
+        conn.execute_batch(FORWARDS).map_err(storage)?;
         conn.pragma_update(None, "user_version", 5)
             .map_err(storage)?;
         Ok(Self { conn })
@@ -486,6 +499,73 @@ impl Store {
         }
         Ok(())
     }
+
+    pub fn forwards(&self, host_id: i64) -> Result<Vec<SavedForward>, SshError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT id, kind, listen_port, target_host, target_port
+                 FROM ssh_forwards WHERE host_id = ?1 ORDER BY id",
+            )
+            .map_err(storage)?;
+        let rows = statement
+            .query_map(params![host_id], |row| {
+                Ok(SavedForward {
+                    id: row.get(0)?,
+                    kind: row.get(1)?,
+                    listen_port: row.get(2)?,
+                    target_host: row.get(3)?,
+                    target_port: row.get(4)?,
+                })
+            })
+            .map_err(storage)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(storage)
+    }
+
+    pub fn save_forward(
+        &self,
+        host_id: i64,
+        kind: &str,
+        listen_port: u16,
+        target_host: &str,
+        target_port: u16,
+    ) -> Result<i64, SshError> {
+        let existing: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM ssh_forwards WHERE host_id = ?1 AND kind = ?2 AND listen_port = ?3",
+                params![host_id, kind, listen_port],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage)?;
+        if existing.is_some() {
+            return Err(SshError::new("port_in_use"));
+        }
+        self.conn
+            .execute(
+                "INSERT INTO ssh_forwards (host_id, kind, listen_port, target_host, target_port)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![host_id, kind, listen_port, target_host, target_port],
+            )
+            .map_err(storage)?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn delete_forward(&self, id: i64) -> Result<(), SshError> {
+        self.conn
+            .execute("DELETE FROM ssh_forwards WHERE id = ?1", params![id])
+            .map(|_| ())
+            .map_err(storage)
+    }
+}
+
+pub struct SavedForward {
+    pub id: i64,
+    pub kind: String,
+    pub listen_port: u16,
+    pub target_host: String,
+    pub target_port: u16,
 }
 
 fn row_to_host(row: &rusqlite::Row<'_>) -> rusqlite::Result<Host> {

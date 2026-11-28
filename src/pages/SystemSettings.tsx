@@ -1,15 +1,26 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { clipboardSetEnabled, clipboardStatus } from "@/api/clipboard";
-import { screenshotGetSettings, screenshotSetEnabled } from "@/api/screenshot";
+import { screenshotGetSettings, screenshotSetEnabled, screenshotStatus } from "@/api/screenshot";
 import { dockerSetEnabled, dockerStatus } from "@/api/docker";
 import { sshSetEnabled, sshStatus } from "@/api/ssh";
-import { getAutostart, setAutostart, setBackground, setTrayIcon } from "@/api/system";
+import { getAutostart, setAutostart, setBackground, setLauncherShortcut, setTrayIcon } from "@/api/system";
+import ShortcutField from "@/components/clipboard/ShortcutField";
+import type { ClipboardStatus } from "@/types/clipboard";
+import type { ShotStatus } from "@/types/screenshot";
+import type { SshStatus } from "@/types/ssh";
+import { clipboardReasonText } from "@/utils/clipboardMessage";
+import { screenshotReasonText } from "@/utils/screenshotMessage";
+import { isApplePlatform } from "@/utils/shortcut";
+import { inkFrameStyle } from "@/utils/theme";
 import { TRAY_ICONS, TrayMarkGlyph, type TrayIconId } from "@/components/icons/TrayMark";
 import Page from "@/components/Page";
 import { SettingGroup, SettingRow } from "@/components/SettingGroup";
 import ClipboardSettingsPage from "@/pages/ClipboardSettings";
+import DataSettingsPage from "@/pages/DataSettings";
+import DockerSettingsPage from "@/pages/DockerSettings";
 import ScreenshotSettingsPage from "@/pages/ScreenshotSettings";
+import SshSettingsPage from "@/pages/SshSettings";
 import { useSettingsStore, useTrayIcon, type Language, type ThemeMode } from "@/stores/settings";
 import { useUpdateStore } from "@/stores/update";
 import { isDesktop } from "@/utils/desktop";
@@ -39,6 +50,78 @@ function VersionCheck({ desktop }: { desktop: boolean }) {
         {update?.updateAvailable && <Button type="primary" onClick={() => void openUrl(update.url)}>{t("zdx.label.system.install")}</Button>}
       </Space>
     </SettingRow>
+  );
+}
+
+function LauncherShortcut() {
+  const { t } = useTranslation();
+  const shortcut = useSettingsStore((state) => state.launcherShortcut);
+  const save = useSettingsStore((state) => state.setLauncherShortcut);
+  const [error, setError] = useState("");
+  const desktop = isDesktop();
+
+  async function change(next: string) {
+    const previous = shortcut;
+    save(next);
+    if (!desktop) return;
+    setError("");
+    try {
+      await setLauncherShortcut(next);
+    } catch {
+      save(previous);
+      setError(t("zdx.text.system.launcherFailed"));
+    }
+  }
+
+  return (
+    <SettingGroup title={t("zdx.label.launcher.title")}>
+      <SettingRow label={t("zdx.label.system.launcher")} description={error || t("zdx.text.system.launcher")}>
+        <ShortcutField value={shortcut} macos={isApplePlatform()} label={t("zdx.label.system.launcher")} onChange={(next) => void change(next)} />
+      </SettingRow>
+    </SettingGroup>
+  );
+}
+
+function SessionCapabilities({ desktop }: { desktop: boolean }) {
+  const { t } = useTranslation();
+  const [clipboard, setClipboard] = useState<ClipboardStatus | null>(null);
+  const [screenshot, setScreenshot] = useState<ShotStatus | null>(null);
+  const [ssh, setSsh] = useState<SshStatus | null>(null);
+
+  useEffect(() => {
+    if (!desktop) return;
+    let alive = true;
+    void clipboardStatus().then((current) => { if (alive) setClipboard(current); }).catch(() => undefined);
+    void screenshotStatus().then((current) => { if (alive) setScreenshot(current); }).catch(() => undefined);
+    void sshStatus().then((current) => { if (alive) setSsh(current); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [desktop]);
+
+  const pending = t("zdx.text.system.sessionPending");
+  const clipboardLines = clipboard
+    ? [clipboard.canMonitor ? t("zdx.text.system.canListen") : t("zdx.text.system.cannotListen"), clipboard.canGlobalShortcut ? t("zdx.text.system.canShortcut") : t("zdx.text.system.cannotShortcut"), clipboardReasonText(t, clipboard.reason)].filter(Boolean)
+    : [pending];
+  const screenshotLines = screenshot
+    ? [screenshot.canCapture ? t("zdx.text.system.canCapture") : t("zdx.text.system.cannotCapture"), screenshot.canOcr ? t("zdx.text.system.canOcr") : t("zdx.text.system.cannotOcr"), screenshot.canRecord ? t("zdx.text.system.canRecord") : t("zdx.text.system.cannotRecord"), screenshotReasonText(t, screenshot.captureReason)].filter(Boolean)
+    : [pending];
+  const sshLines = ssh
+    ? [ssh.keyringAvailable ? t("zdx.text.system.keyringOn") : t("zdx.text.system.keyringOff"), ssh.agentAvailable ? t("zdx.text.system.agentOn") : t("zdx.text.system.agentOff")]
+    : [pending];
+
+  return (
+    <SettingGroup title={t("zdx.label.system.session")}>
+      <SettingRow label={t("zdx.label.system.clipboardFeature")} description={<CapabilityLines lines={desktop ? clipboardLines : [t("zdx.text.system.desktopOnly")]} />} />
+      <SettingRow label={t("zdx.label.system.screenshotFeature")} description={<CapabilityLines lines={desktop ? screenshotLines : [t("zdx.text.system.desktopOnly")]} />} />
+      <SettingRow label={t("zdx.label.system.sshFeature")} description={<CapabilityLines lines={desktop ? sshLines : [t("zdx.text.system.desktopOnly")]} />} />
+    </SettingGroup>
+  );
+}
+
+function CapabilityLines({ lines }: { lines: string[] }) {
+  return (
+    <>
+      {lines.map((line) => <div key={line}>{line}</div>)}
+    </>
   );
 }
 
@@ -137,10 +220,10 @@ function TrayIconPicker() {
                 minWidth: 72,
                 height: 68,
                 padding: "0 8px",
-                borderRadius: token.borderRadius,
-                border: `1px solid ${selected ? token.colorPrimary : token.colorBorderSecondary}`,
                 background: selected ? token.colorPrimaryBg : token.colorFillQuaternary,
                 color: selected ? token.colorPrimary : token.colorText,
+                ...inkFrameStyle(token, token.borderRadius, 2),
+                borderColor: selected ? token.colorPrimary : token.colorBorder,
               }}
             >
               <TrayMarkGlyph id={icon.id} />
@@ -159,18 +242,31 @@ export default function SystemSettingsPage() {
   const background = useSettingsStore((state) => state.background);
   const saveBackground = useSettingsStore((state) => state.setBackground);
   const [autostart, setAutostartState] = useState(false);
-  const [clipboardOn, setClipboardOn] = useState(false);
-  const [screenshotOn, setScreenshotOn] = useState(true);
-  const [sshOn, setSshOn] = useState(false);
-  const [dockerOn, setDockerOn] = useState(false);
+  const [clipboardOn, setClipboardOn] = useState<boolean | null>(null);
+  const [screenshotOn, setScreenshotOn] = useState<boolean | null>(null);
+  const [sshOn, setSshOn] = useState<boolean | null>(null);
+  const [dockerOn, setDockerOn] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const desktop = isDesktop();
-  const screenshotSettingsOpen = screenshotOn && location.pathname === "/settings/screenshot";
-  const section = location.pathname === "/settings/clipboard" ? "clipboard" : screenshotSettingsOpen ? "screenshot" : "general";
+  const showClipboardSettings = !desktop || clipboardOn !== false;
+  const showScreenshotSettings = !desktop || screenshotOn !== false;
+  const showSshSettings = !desktop || sshOn !== false;
+  const showDockerSettings = !desktop || dockerOn !== false;
+  const section = location.pathname === "/settings/clipboard" && showClipboardSettings
+    ? "clipboard"
+    : location.pathname === "/settings/screenshot" && showScreenshotSettings
+      ? "screenshot"
+      : location.pathname === "/settings/ssh" && showSshSettings
+        ? "ssh"
+        : location.pathname === "/settings/docker" && showDockerSettings
+          ? "docker"
+          : location.pathname === "/settings/data"
+            ? "data"
+            : "general";
 
   useEffect(() => {
     if (!desktop) { setLoading(false); return; }
@@ -188,9 +284,14 @@ export default function SystemSettingsPage() {
   }, [desktop]);
 
   useEffect(() => {
-    if (!desktop || loading || screenshotOn || location.pathname !== "/settings/screenshot") return;
-    navigate("/settings", { replace: true });
-  }, [desktop, loading, location.pathname, navigate, screenshotOn]);
+    if (!desktop || loading) return;
+    const blocked =
+      (location.pathname === "/settings/clipboard" && clipboardOn === false)
+      || (location.pathname === "/settings/screenshot" && screenshotOn === false)
+      || (location.pathname === "/settings/ssh" && sshOn === false)
+      || (location.pathname === "/settings/docker" && dockerOn === false);
+    if (blocked) navigate("/settings", { replace: true });
+  }, [clipboardOn, desktop, dockerOn, loading, location.pathname, navigate, screenshotOn, sshOn]);
 
   async function update(kind: "autostart" | "background" | "clipboard" | "screenshot" | "ssh" | "docker", enabled: boolean) {
     setBusy(true);
@@ -202,7 +303,7 @@ export default function SystemSettingsPage() {
       else if (kind === "screenshot") {
         const next = await screenshotSetEnabled(enabled);
         setScreenshotOn(next.enabled);
-        if (!next.enabled && location.pathname === "/settings/screenshot") navigate("/settings", { replace: true });
+        if (next.enabled === false && location.pathname === "/settings/screenshot") navigate("/settings", { replace: true });
       } else if (kind === "ssh") {
         setSshOn((await sshSetEnabled(enabled)).enabled);
       } else {
@@ -249,7 +350,7 @@ export default function SystemSettingsPage() {
   return <Page title={t("zdx.label.system.title")}>
     <Tabs
       activeKey={section}
-      onChange={(key) => navigate(key === "clipboard" ? "/settings/clipboard" : key === "screenshot" ? "/settings/screenshot" : "/settings")}
+      onChange={(key) => navigate(key === "general" ? "/settings" : `/settings/${key}`)}
       destroyOnHidden
       items={[
         {
@@ -262,16 +363,16 @@ export default function SystemSettingsPage() {
               <AppearanceSettings />
               <SettingGroup title={t("zdx.label.system.features")}>
                 <SettingRow label={t("zdx.label.system.clipboardFeature")} description={t("zdx.text.system.clipboardFeature")}>
-                  <Switch aria-label={t("zdx.label.system.clipboardFeature")} checked={clipboardOn} disabled={!desktop || loading || busy} onChange={changeClipboard} />
+                  <Switch aria-label={t("zdx.label.system.clipboardFeature")} checked={clipboardOn === true} disabled={!desktop || clipboardOn === null || busy} onChange={changeClipboard} />
                 </SettingRow>
                 <SettingRow label={t("zdx.label.system.screenshotFeature")} description={t("zdx.text.system.screenshotFeature")}>
-                  <Switch aria-label={t("zdx.label.system.screenshotFeature")} checked={screenshotOn} disabled={!desktop || loading || busy} onChange={(enabled) => void update("screenshot", enabled)} />
+                  <Switch aria-label={t("zdx.label.system.screenshotFeature")} checked={screenshotOn === true} disabled={!desktop || screenshotOn === null || busy} onChange={(enabled) => void update("screenshot", enabled)} />
                 </SettingRow>
                 <SettingRow label={t("zdx.label.system.sshFeature")} description={t("zdx.text.system.sshFeature")}>
-                  <Switch aria-label={t("zdx.label.system.sshFeature")} checked={sshOn} disabled={!desktop || loading || busy} onChange={changeSsh} />
+                  <Switch aria-label={t("zdx.label.system.sshFeature")} checked={sshOn === true} disabled={!desktop || sshOn === null || busy} onChange={changeSsh} />
                 </SettingRow>
                 <SettingRow label={t("zdx.label.system.dockerFeature")} description={t("zdx.text.system.dockerFeature")}>
-                  <Switch aria-label={t("zdx.label.system.dockerFeature")} checked={dockerOn} disabled={!desktop || loading || busy} onChange={changeDocker} />
+                  <Switch aria-label={t("zdx.label.system.dockerFeature")} checked={dockerOn === true} disabled={!desktop || dockerOn === null || busy} onChange={changeDocker} />
                 </SettingRow>
               </SettingGroup>
               <SettingGroup title={t("zdx.label.system.startup")}>
@@ -283,6 +384,8 @@ export default function SystemSettingsPage() {
                 </SettingRow>
                 <TrayIconPicker />
               </SettingGroup>
+              <LauncherShortcut />
+              <SessionCapabilities desktop={desktop} />
               <SettingGroup title={t("zdx.label.system.about")}>
                 <VersionCheck desktop={desktop} />
               </SettingGroup>
@@ -290,14 +393,29 @@ export default function SystemSettingsPage() {
           ),
         },
         {
+          key: "data",
+          label: t("zdx.label.system.data"),
+          children: <DataSettingsPage />,
+        },
+        ...(showClipboardSettings ? [{
           key: "clipboard",
           label: t("zdx.label.system.clipboard"),
           children: <ClipboardSettingsPage />,
-        },
-        ...(screenshotOn ? [{
+        }] : []),
+        ...(showScreenshotSettings ? [{
           key: "screenshot",
           label: t("zdx.label.system.screenshot"),
           children: <ScreenshotSettingsPage />,
+        }] : []),
+        ...(showSshSettings ? [{
+          key: "ssh",
+          label: t("zdx.label.system.ssh"),
+          children: <SshSettingsPage />,
+        }] : []),
+        ...(showDockerSettings ? [{
+          key: "docker",
+          label: t("zdx.label.system.docker"),
+          children: <DockerSettingsPage />,
         }] : []),
       ]}
     />

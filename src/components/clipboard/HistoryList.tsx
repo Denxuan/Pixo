@@ -2,6 +2,7 @@ import { clipboardGet, clipboardImage, clipboardSourceIcon } from "@/api/clipboa
 import Kbd from "@/components/Kbd";
 import type { ClipSummary } from "@/types/clipboard";
 import { formatBytes, formatRelativeTime } from "@/utils/time";
+import { inkShadow } from "@/utils/theme";
 
 type LoadedSource = { name: string; url: string };
 
@@ -188,6 +189,8 @@ export default function HistoryList({
   onActive,
   onCopy,
   onPin,
+  onStick,
+  stickingId,
   onDelete,
   numberShortcuts,
 }: {
@@ -196,6 +199,8 @@ export default function HistoryList({
   onActive: (id: number, pointer?: { altKey: boolean; shiftKey: boolean }) => void;
   onCopy: (id: number) => void;
   onPin: (id: number, pinned: boolean) => void;
+  onStick?: (id: number) => void;
+  stickingId?: number | null;
   onDelete: (id: number) => void;
   numberShortcuts?: Array<{ copy: string; paste: string }>;
 }) {
@@ -232,13 +237,14 @@ export default function HistoryList({
               if (event.target instanceof Element && event.target.closest("button")) return;
               onActive(item.id);
             }}
-            className="group outline-none hover:bg-black/[0.035] focus-visible:ring-2 dark:hover:bg-white/[0.05]"
+            className={active ? "group outline-none" : "group outline-none hover:bg-black/[0.035] focus-visible:ring-2 dark:hover:bg-white/[0.05]"}
             style={{
               display: "block",
-              background: active ? token.colorFillSecondary : undefined,
-              border: 0,
+              background: active ? token.colorPrimaryBg : undefined,
+              border: `2px solid ${active ? token.colorBorder : "transparent"}`,
               borderRadius: token.borderRadius,
-              marginBottom: 2,
+              boxShadow: active ? inkShadow(token.colorBorder, 2) : undefined,
+              marginBottom: 8,
               padding: "8px 10px",
               cursor: "pointer",
             }}
@@ -263,6 +269,7 @@ export default function HistoryList({
               <div className="flex shrink-0 items-center gap-1.5">
                 <div className={active ? "flex items-center" : "flex items-center opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"}>
                   <Button type="text" size="small" aria-label={item.pinned ? t("zdx.label.clipboard.unpin") : t("zdx.label.clipboard.pin")} aria-pressed={item.pinned} icon={item.pinned ? <PushpinFilled /> : <PushpinOutlined />} style={item.pinned ? { color: token.colorWarning } : { color: token.colorTextSecondary }} onClick={(event) => { event.stopPropagation(); onPin(item.id, !item.pinned); }} />
+                  {item.kind === "image" && onStick && <Button type="text" size="small" loading={stickingId === item.id} aria-label={t("zdx.label.clipboard.stick")} icon={<BorderOuterOutlined />} style={{ color: token.colorTextSecondary }} onClick={(event) => { event.stopPropagation(); onStick(item.id); }} />}
                   <Button type="text" size="small" aria-label={t("zdx.label.clipboard.copy")} icon={<CopyOutlined />} style={{ color: token.colorTextSecondary }} onClick={(event) => { event.stopPropagation(); onCopy(item.id); }} />
                   <Button type="text" size="small" danger aria-label={t("zdx.label.clipboard.delete")} icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); onDelete(item.id); }} />
                 </div>

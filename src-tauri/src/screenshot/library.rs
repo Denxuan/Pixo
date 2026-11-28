@@ -105,34 +105,36 @@ impl Library {
         query: Option<&str>,
         limit: u32,
     ) -> Result<Vec<LibraryItem>, ScreenshotError> {
-        let limit = limit.clamp(1, 200);
-        let pattern = query
-            .map(str::trim)
-            .filter(|query| !query.is_empty())
-            .map(like_pattern);
+        let limit = limit.clamp(1, 200) as usize;
         let mut statement = self
             .conn
             .prepare(
                 "SELECT id, kind, path, bytes, created_at, text FROM shot_files
-                 WHERE (?1 IS NULL OR path LIKE ?1 ESCAPE '\\' OR IFNULL(text, '') LIKE ?1 ESCAPE '\\')
-                 ORDER BY created_at DESC, id DESC
-                 LIMIT ?2",
+                 ORDER BY created_at DESC, id DESC",
             )
             .map_err(storage)?;
-        let rows = statement
-            .query_map(params![pattern, i64::from(limit)], map_item)
-            .map_err(storage)?;
+        let rows = statement.query_map([], map_item).map_err(storage)?;
         let mut items = Vec::new();
-        let mut missing = Vec::new();
+        let mut gone = Vec::new();
         for row in rows {
             let item = row.map_err(storage)?;
-            if Path::new(&item.path).is_file() {
-                items.push(item);
-            } else {
-                missing.push(item.id);
+            if !matches_shot(&item.path, item.text.as_deref(), query) {
+                continue;
+            }
+            let path = Path::new(&item.path);
+            if path.is_file() {
+                if items.len() < limit {
+                    items.push(item);
+                }
+                continue;
+            }
+            // A missing parent means the folder or disk is unavailable. Keep the row.
+            if path.parent().is_some_and(|dir| dir.is_dir()) {
+                gone.push(item.id);
             }
         }
-        for id in missing {
+        drop(statement);
+        for id in gone {
             let _ = self
                 .conn
                 .execute("DELETE FROM shot_files WHERE id = ?1", params![id]);
@@ -151,6 +153,21 @@ impl Library {
             .map_err(storage)?
             .filter(|item| Path::new(&item.path).is_file())
             .ok_or_else(|| ScreenshotError::new("not_found"))
+    }
+
+    pub fn set_text(&self, id: i64, text: &str) -> Result<(), ScreenshotError> {
+        let stored = clip_text(Some(text)).ok_or_else(|| ScreenshotError::new("invalid_input"))?;
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE shot_files SET text = ?1 WHERE id = ?2 AND kind = 'image'",
+                params![stored, id],
+            )
+            .map_err(storage)?;
+        if changed == 0 {
+            return Err(ScreenshotError::new("not_found"));
+        }
+        Ok(())
     }
 
     pub fn delete(&self, id: i64, save_dir: &Path) -> Result<(), ScreenshotError> {
@@ -270,15 +287,13 @@ fn clip_text(text: Option<&str>) -> Option<String> {
     Some(trimmed.chars().take(8_000).collect())
 }
 
-fn like_pattern(query: &str) -> String {
-    let mut escaped = String::new();
-    for ch in query.chars().take(200) {
-        if ch == '\\' || ch == '%' || ch == '_' {
-            escaped.push('\\');
-        }
-        escaped.push(ch);
-    }
-    format!("%{escaped}%")
+fn matches_shot(path: &str, text: Option<&str>, query: Option<&str>) -> bool {
+    let Some(query) = query.map(str::trim).filter(|value| !value.is_empty()) else {
+        return true;
+    };
+    let needle: String = query.chars().take(200).collect::<String>().to_lowercase();
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_lowercase();
+    name.contains(&needle) || text.is_some_and(|value| value.to_lowercase().contains(&needle))
 }
 
 fn inside_dir(root: &Path, file: &Path) -> bool {
@@ -328,6 +343,65 @@ mod tests {
         library.delete(found[0].id, &save).unwrap();
         assert!(!picture.exists());
         assert!(library.list(None, 20).unwrap().is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn search_uses_the_file_name_and_keeps_rows_while_the_folder_is_away() {
+        assert!(!matches_shot(
+            r"C:\Pictures\Pixo\note.png",
+            None,
+            Some("Pictures")
+        ));
+        assert!(matches_shot(
+            r"C:\Pictures\Pixo\note.png",
+            None,
+            Some("Note")
+        ));
+        assert!(matches_shot(
+            "/Users/zdx/Pictures/Pixo/note.png",
+            Some("会议记录"),
+            Some("会议")
+        ));
+        assert!(!matches_shot(
+            "/Users/zdx/Pictures/Pixo/note.png",
+            Some("会议"),
+            Some("Users")
+        ));
+
+        let root = std::env::temp_dir().join(format!(
+            "pixo-shots-search-{}-{}",
+            std::process::id(),
+            now_millis()
+        ));
+        let save = root.join("Pictures").join("Pixo");
+        fs::create_dir_all(&save).unwrap();
+        let picture = save.join("note.png");
+        fs::write(&picture, b"png").unwrap();
+        let library = Library::open(&root.join("library.db"), &save).unwrap();
+        library.remember(&picture, Some("hello")).unwrap();
+        assert!(library.list(Some("Pictures"), 20).unwrap().is_empty());
+        assert_eq!(library.list(Some("note"), 20).unwrap().len(), 1);
+        assert_eq!(library.list(Some("HELLO"), 20).unwrap().len(), 1);
+
+        let away = root.join("volume").join("Pixo");
+        fs::create_dir_all(&away).unwrap();
+        let kept = away.join("kept.png");
+        fs::write(&kept, b"png").unwrap();
+        library.remember(&kept, None).unwrap();
+        fs::remove_dir_all(root.join("volume")).unwrap();
+        assert_eq!(library.list(Some("kept"), 20).unwrap().len(), 0);
+        fs::create_dir_all(&away).unwrap();
+        fs::write(&kept, b"png").unwrap();
+        assert_eq!(library.list(Some("kept"), 20).unwrap().len(), 1);
+
+        fs::remove_file(&picture).unwrap();
+        assert!(library.list(Some("note"), 20).unwrap().is_empty());
+        fs::write(&picture, b"png").unwrap();
+        assert!(
+            library.list(Some("note"), 20).unwrap().is_empty(),
+            "deleting the file while its folder remains drops the library row"
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

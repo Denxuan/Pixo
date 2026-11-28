@@ -7,8 +7,6 @@ use super::error::DockerError;
 pub enum EndpointKind {
     Local,
     Ssh,
-    Tls,
-    Tcp,
 }
 
 impl EndpointKind {
@@ -16,8 +14,6 @@ impl EndpointKind {
         match self {
             Self::Local => "local",
             Self::Ssh => "ssh",
-            Self::Tls => "tls",
-            Self::Tcp => "tcp",
         }
     }
 
@@ -25,8 +21,6 @@ impl EndpointKind {
         match value {
             "local" => Some(Self::Local),
             "ssh" => Some(Self::Ssh),
-            "tls" => Some(Self::Tls),
-            "tcp" => Some(Self::Tcp),
             _ => None,
         }
     }
@@ -43,10 +37,6 @@ pub struct Endpoint {
     pub remote_socket: Option<String>,
     pub host: Option<String>,
     pub port: Option<u16>,
-    pub ca_path: Option<String>,
-    pub cert_path: Option<String>,
-    pub key_path: Option<String>,
-    pub insecure: bool,
     pub source: String,
     pub sort_order: i64,
 }
@@ -62,11 +52,6 @@ pub struct EndpointDraft {
     pub remote_socket: Option<String>,
     pub host: Option<String>,
     pub port: Option<u16>,
-    pub ca_path: Option<String>,
-    pub cert_path: Option<String>,
-    pub key_path: Option<String>,
-    #[serde(default)]
-    pub insecure: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -79,10 +64,6 @@ pub struct NormalizedEndpoint {
     pub remote_socket: Option<String>,
     pub host: Option<String>,
     pub port: Option<u16>,
-    pub ca_path: Option<String>,
-    pub cert_path: Option<String>,
-    pub key_path: Option<String>,
-    pub insecure: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -164,10 +145,6 @@ pub fn normalize(draft: EndpointDraft) -> Result<NormalizedEndpoint, DockerError
                 None,
                 None,
                 None,
-                None,
-                None,
-                None,
-                false,
             ))
         }
         EndpointKind::Ssh => {
@@ -189,60 +166,6 @@ pub fn normalize(draft: EndpointDraft) -> Result<NormalizedEndpoint, DockerError
                 Some(remote),
                 None,
                 None,
-                None,
-                None,
-                None,
-                false,
-            ))
-        }
-        EndpointKind::Tls => {
-            let host = required_host(draft.host)?;
-            let port = draft.port.unwrap_or(2376);
-            if port == 0 {
-                return Err(DockerError::new("invalid_input"));
-            }
-            let ca_path = required_path(draft.ca_path)?;
-            let cert_path = required_path(draft.cert_path)?;
-            let key_path = required_path(draft.key_path)?;
-            let name = name.unwrap_or_else(|| host.clone());
-            Ok(blank(
-                draft.id,
-                name,
-                EndpointKind::Tls,
-                None,
-                None,
-                None,
-                Some(host),
-                Some(port),
-                Some(ca_path),
-                Some(cert_path),
-                Some(key_path),
-                false,
-            ))
-        }
-        EndpointKind::Tcp => {
-            if !draft.insecure {
-                return Err(DockerError::new("insecure_required"));
-            }
-            let host = required_host(draft.host)?;
-            let port = draft.port.unwrap_or(2375);
-            if port == 0 {
-                return Err(DockerError::new("invalid_input"));
-            }
-            let name = name.unwrap_or_else(|| host.clone());
-            Ok(blank(
-                draft.id,
-                name,
-                EndpointKind::Tcp,
-                None,
-                None,
-                None,
-                Some(host),
-                Some(port),
-                None,
-                None,
-                None,
-                true,
             ))
         }
     }
@@ -278,10 +201,6 @@ fn blank(
     remote_socket: Option<String>,
     host: Option<String>,
     port: Option<u16>,
-    ca_path: Option<String>,
-    cert_path: Option<String>,
-    key_path: Option<String>,
-    insecure: bool,
 ) -> NormalizedEndpoint {
     NormalizedEndpoint {
         id,
@@ -292,10 +211,6 @@ fn blank(
         remote_socket,
         host,
         port,
-        ca_path,
-        cert_path,
-        key_path,
-        insecure,
     }
 }
 
@@ -321,32 +236,6 @@ fn optional_text(value: Option<String>) -> Option<String> {
     })
 }
 
-fn required_host(value: Option<String>) -> Result<String, DockerError> {
-    let Some(host) = optional_text(value) else {
-        return Err(DockerError::new("invalid_input"));
-    };
-    if host.len() > 255
-        || host
-            .chars()
-            .any(|char| char.is_whitespace() || matches!(char, '/' | ',' | '@' | '#' | '\\'))
-    {
-        return Err(DockerError::new("invalid_input"));
-    }
-    Ok(host
-        .trim_matches(|char| char == '[' || char == ']')
-        .to_string())
-}
-
-fn required_path(value: Option<String>) -> Result<String, DockerError> {
-    let Some(path) = optional_text(value) else {
-        return Err(DockerError::new("invalid_input"));
-    };
-    if path.len() > 1024 || path.chars().any(|char| char == '\0' || char.is_control()) {
-        return Err(DockerError::new("invalid_input"));
-    }
-    Ok(path)
-}
-
 pub fn valid_socket_path(path: &str, windows: bool) -> bool {
     if path.is_empty()
         || path.len() > 1024
@@ -368,9 +257,134 @@ pub fn valid_remote_socket(path: &str) -> bool {
     valid_socket_path(path, false) && !path.contains('\0')
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PublishedPort {
+    pub host: u16,
+    pub container: u16,
+    pub udp: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerUsage {
+    pub cpu_percent: Option<f64>,
+    pub memory_bytes: u64,
+    pub memory_limit: Option<u64>,
+}
+
+pub fn valid_container_name(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (1..=128).contains(&value.len())
+        && first.is_ascii_alphanumeric()
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'))
+}
+
+pub fn split_command(value: &str) -> Result<Vec<String>, DockerError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    if value.len() > 512 || value.chars().any(|ch| ch.is_control()) {
+        return Err(DockerError::new("invalid_input"));
+    }
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    for ch in value.chars() {
+        match quote {
+            Some(mark) if ch == mark => quote = None,
+            Some(_) => current.push(ch),
+            None if ch == '"' || ch == '\'' => quote = Some(ch),
+            None if ch.is_whitespace() => {
+                if !current.is_empty() {
+                    push_arg(&mut args, &mut current)?;
+                }
+            }
+            None => current.push(ch),
+        }
+    }
+    if quote.is_some() || (!current.is_empty() && push_arg(&mut args, &mut current).is_err()) {
+        return Err(DockerError::new("invalid_input"));
+    }
+    if args.len() > 32 {
+        return Err(DockerError::new("invalid_input"));
+    }
+    Ok(args)
+}
+
+fn push_arg(args: &mut Vec<String>, current: &mut String) -> Result<(), DockerError> {
+    if current.chars().count() > 256 {
+        return Err(DockerError::new("invalid_input"));
+    }
+    args.push(std::mem::take(current));
+    Ok(())
+}
+
+pub fn parse_publish_list(value: &str) -> Result<Vec<PublishedPort>, DockerError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    if value.len() > 800 {
+        return Err(DockerError::new("invalid_input"));
+    }
+    let mut ports = Vec::new();
+    for part in value.split([',', ' ', '\n', '\t']) {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if ports.len() == 20 {
+            return Err(DockerError::new("invalid_input"));
+        }
+        ports.push(parse_publish(part)?);
+    }
+    Ok(ports)
+}
+
+fn parse_publish(part: &str) -> Result<PublishedPort, DockerError> {
+    let (body, udp) = if let Some(body) = part.strip_suffix("/udp") {
+        (body, true)
+    } else if let Some(body) = part.strip_suffix("/tcp") {
+        (body, false)
+    } else {
+        (part, false)
+    };
+    let (host, container) = if let Some((host, container)) = body.rsplit_once(':') {
+        (parse_port(host)?, parse_port(container)?)
+    } else {
+        let port = parse_port(body)?;
+        (port, port)
+    };
+    Ok(PublishedPort {
+        host,
+        container,
+        udp,
+    })
+}
+
+fn parse_port(value: &str) -> Result<u16, DockerError> {
+    if value.is_empty() || value.len() > 5 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(DockerError::new("invalid_input"));
+    }
+    let port = value
+        .parse::<u16>()
+        .map_err(|_| DockerError::new("invalid_input"))?;
+    if port == 0 {
+        return Err(DockerError::new("invalid_input"));
+    }
+    Ok(port)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{EndpointDraft, EndpointKind, normalize, valid_image_ref, valid_socket_path};
+    use super::{
+        EndpointDraft, EndpointKind, normalize, parse_publish_list, split_command, valid_image_ref,
+        valid_socket_path,
+    };
 
     fn draft(kind: EndpointKind) -> EndpointDraft {
         EndpointDraft {
@@ -382,30 +396,7 @@ mod tests {
             remote_socket: None,
             host: None,
             port: None,
-            ca_path: None,
-            cert_path: None,
-            key_path: None,
-            insecure: false,
         }
-    }
-
-    #[test]
-    fn plain_tcp_requires_an_explicit_warning() {
-        let mut input = draft(EndpointKind::Tcp);
-        input.host = Some("10.0.0.8".into());
-        assert_eq!(normalize(input).unwrap_err().code, "insecure_required");
-    }
-
-    #[test]
-    fn plain_tcp_keeps_the_warning_when_confirmed() {
-        let mut input = draft(EndpointKind::Tcp);
-        input.host = Some(" [10.0.0.8] ".into());
-        input.insecure = true;
-        let endpoint = normalize(input).unwrap();
-        assert_eq!(endpoint.host.as_deref(), Some("10.0.0.8"));
-        assert_eq!(endpoint.port, Some(2375));
-        assert!(endpoint.insecure);
-        assert_eq!(endpoint.name, "10.0.0.8");
     }
 
     #[test]
@@ -437,5 +428,24 @@ mod tests {
         assert!(valid_socket_path(r"\\.\pipe\docker_engine", true));
         assert!(valid_socket_path("//./pipe/docker_engine", true));
         assert!(!valid_socket_path("/var/run/docker.sock", true));
+    }
+
+    #[test]
+    fn publish_list_and_command_split() {
+        let ports = parse_publish_list("8080:80, 53:53/udp 443").unwrap();
+        assert_eq!(ports.len(), 3);
+        assert_eq!(ports[0].host, 8080);
+        assert_eq!(ports[0].container, 80);
+        assert!(!ports[0].udp);
+        assert!(ports[1].udp);
+        assert_eq!(ports[2].host, 443);
+        assert_eq!(ports[2].container, 443);
+        assert!(parse_publish_list("0:80").is_err());
+        assert_eq!(
+            split_command(r#"sh -c "echo hi""#).unwrap(),
+            vec!["sh".to_string(), "-c".to_string(), "echo hi".to_string()]
+        );
+        assert!(split_command("\"unterminated").is_err());
+        assert!(split_command("").unwrap().is_empty());
     }
 }

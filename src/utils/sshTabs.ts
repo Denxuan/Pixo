@@ -23,5 +23,5 @@ export function focusExistingSession(
 ): { key: string; reconnect: boolean } | null {
   const existing = tabs.find((tab) => tab.hostId === hostId);
   if (!existing) return null;
-  return { key: existing.key, reconnect: existing.phase === "closed" };
+  return { key: existing.key, reconnect: existing.phase === "closed" || existing.phase === "idle" };
 }

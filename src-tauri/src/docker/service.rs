@@ -7,10 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bollard::Docker;
+use bollard::models::{ContainerCreateBody, ContainerStatsResponse, HostConfig, PortBinding};
 use bollard::query_parameters::{
-    CreateImageOptionsBuilder, ListContainersOptionsBuilder, ListImagesOptionsBuilder,
-    LogsOptionsBuilder, RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder,
-    RestartContainerOptionsBuilder, StopContainerOptionsBuilder,
+    CreateContainerOptions, CreateImageOptionsBuilder, ListContainersOptionsBuilder,
+    ListImagesOptionsBuilder, LogsOptionsBuilder, RemoveContainerOptionsBuilder,
+    RemoveImageOptionsBuilder, RestartContainerOptionsBuilder, StatsOptionsBuilder,
+    StopContainerOptionsBuilder,
 };
 use futures_util::StreamExt;
 use russh::client;
@@ -18,12 +20,12 @@ use russh::{ChannelMsg, Disconnect};
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::{FileType, OpenFlags, StatusCode};
 use serde_json::{Value, json};
-use tauri::ipc::Channel;
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 use crate::ssh::SshState;
 use crate::ssh::dial::{self, ClientHandler};
@@ -32,8 +34,9 @@ use super::compose::{self, ComposePreview, ComposeProject, LabeledContainer};
 use super::context::{self, ContextPreview};
 use super::error::{DockerError, log_docker};
 use super::model::{
-    ContainerRow, DockerStatus, Endpoint, EndpointDraft, EndpointKind, EngineSummary, ImageRow,
-    NetworkRow, NormalizedEndpoint, VolumeRow, normalize, valid_image_ref, valid_resource_name,
+    ContainerRow, ContainerUsage, DockerStatus, Endpoint, EndpointDraft, EndpointKind,
+    EngineSummary, ImageRow, NetworkRow, NormalizedEndpoint, VolumeRow, normalize,
+    parse_publish_list, split_command, valid_container_name, valid_image_ref, valid_resource_name,
 };
 use super::sockets::{self, SocketCandidate};
 use super::store::Store;
@@ -98,7 +101,23 @@ struct Inner {
     links: Mutex<HashMap<u64, LinkControl>>,
     clients: Mutex<HashMap<i64, ClientSlot>>,
     tasks: Mutex<HashMap<u64, RunningTask>>,
+    execs: Mutex<HashMap<u64, ExecSlot>>,
     next_id: AtomicU64,
+}
+
+struct ExecSlot {
+    endpoint_id: i64,
+    cancel: watch::Sender<bool>,
+    input: mpsc::UnboundedSender<Vec<u8>>,
+    resize: mpsc::UnboundedSender<(u16, u16)>,
+    task: tauri::async_runtime::JoinHandle<()>,
+}
+
+impl Drop for ExecSlot {
+    fn drop(&mut self) {
+        let _ = self.cancel.send(true);
+        self.task.abort();
+    }
 }
 
 pub struct DockerState {
@@ -122,6 +141,7 @@ pub fn initialize(app: AppHandle) -> Result<DockerState, DockerError> {
             links: Mutex::new(HashMap::new()),
             clients: Mutex::new(HashMap::new()),
             tasks: Mutex::new(HashMap::new()),
+            execs: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
         }),
     })
@@ -132,6 +152,23 @@ impl DockerState {
         Ok(DockerStatus {
             enabled: lock(&self.inner.store).enabled()?,
         })
+    }
+
+    pub fn link_count(&self) -> usize {
+        lock(&self.inner.links).len()
+    }
+
+    pub fn stored(&self) -> Result<Vec<Endpoint>, DockerError> {
+        lock(&self.inner.store).list()
+    }
+
+    pub fn endpoint_names_for_host(&self, host_id: i64) -> Vec<String> {
+        self.stored()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|endpoint| endpoint.ssh_host_id == Some(host_id))
+            .map(|endpoint| endpoint.name)
+            .collect()
     }
 
     pub fn set_enabled(&self, enabled: bool) -> Result<DockerStatus, DockerError> {
@@ -218,10 +255,12 @@ impl DockerState {
                 bridge: Arc::clone(&bridge),
             },
         );
+        self.note_links();
         let inner = Arc::clone(&self.inner);
         tauri::async_runtime::spawn(async move {
             let result = open_and_store(&inner, &endpoint, &bridge, &events).await;
             lock(&inner.links).remove(&id);
+            let _ = inner.app.emit("docker://links", ());
             if let Err(error) = result {
                 log_docker("connect", error.code);
                 emit(
@@ -445,18 +484,106 @@ impl DockerState {
             .map_err(|error| map_bollard(error, true))
     }
 
+    pub async fn image_run(
+        &self,
+        endpoint_id: i64,
+        image: &str,
+        name: &str,
+        ports: &str,
+        command: &str,
+    ) -> Result<String, DockerError> {
+        self.require()?;
+        let image = image_name(image)?.to_string();
+        let name = optional_container_name(name)?;
+        let published = parse_publish_list(ports)?;
+        let command = split_command(command)?;
+        let (docker, _) = self.client(endpoint_id)?;
+        let (exposed, bindings) = port_config(&published)?;
+        let created = docker
+            .create_container(
+                Some(CreateContainerOptions {
+                    name,
+                    platform: String::new(),
+                }),
+                ContainerCreateBody {
+                    image: Some(image),
+                    cmd: (!command.is_empty()).then_some(command),
+                    exposed_ports: exposed,
+                    host_config: bindings.map(|port_bindings| HostConfig {
+                        port_bindings: Some(port_bindings),
+                        ..HostConfig::default()
+                    }),
+                    ..ContainerCreateBody::default()
+                },
+            )
+            .await
+            .map_err(map_create_error)?;
+        if let Err(error) = docker
+            .start_container(
+                &created.id,
+                None::<bollard::query_parameters::StartContainerOptions>,
+            )
+            .await
+        {
+            let _ = docker
+                .remove_container(
+                    &created.id,
+                    Some(RemoveContainerOptionsBuilder::new().force(true).build()),
+                )
+                .await;
+            return Err(map_run_error(error));
+        }
+        Ok(created.id)
+    }
+
+    pub async fn container_stats(
+        &self,
+        endpoint_id: i64,
+        id: &str,
+    ) -> Result<ContainerUsage, DockerError> {
+        self.require()?;
+        let id = resource_name(id)?;
+        let (docker, _) = self.client(endpoint_id)?;
+        let options = StatsOptionsBuilder::new().stream(false).build();
+        let sample = docker
+            .stats(id, Some(options))
+            .next()
+            .await
+            .ok_or_else(|| DockerError::new("not_found"))?
+            .map_err(|error| map_bollard(error, false))?;
+        Ok(usage_of(&sample))
+    }
+
     pub fn image_pull(
         &self,
         endpoint_id: i64,
         reference: &str,
+        username: Option<String>,
+        password: Option<String>,
+        remember: bool,
         events: Channel<Value>,
     ) -> Result<u64, DockerError> {
         self.require()?;
         let reference = image_name(reference)?.to_string();
+        let username = username
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let password = password.filter(|value| !value.is_empty());
+        if remember {
+            if let (Some(username), Some(password)) = (username, password.as_deref()) {
+                super::registry::save(
+                    &super::registry::registry_host(&reference),
+                    username,
+                    password,
+                )?;
+            }
+        }
+        let credentials = super::registry::credentials(&reference, username, password.as_deref())?;
         let (docker, _) = self.client(endpoint_id)?;
         self.spawn_task(endpoint_id, events, move |events, mut cancel| async move {
             let options = CreateImageOptionsBuilder::new().from_image(&reference).build();
-            let mut stream = docker.create_image(Some(options), None, None);
+            let mut stream = docker.create_image(Some(options), None, credentials);
             loop {
                 tokio::select! {
                     _ = cancel.wait_for(|stopped| *stopped) => break,
@@ -483,6 +610,124 @@ impl DockerState {
             }
             emit(&events, json!({"type": "closed", "code": "ok", "params": {}}));
         })
+    }
+
+    pub async fn exec_open(
+        &self,
+        endpoint_id: i64,
+        container_id: &str,
+        cols: u32,
+        rows: u32,
+        command: &str,
+        output: Channel<InvokeResponseBody>,
+        events: Channel<Value>,
+    ) -> Result<u64, DockerError> {
+        self.require()?;
+        let container_id = resource_name(container_id)?.to_string();
+        let command = exec_command(command)?;
+        if lock(&self.inner.execs).len() >= 4 {
+            return Err(DockerError::new("exec_limit"));
+        }
+        let (docker, _) = self.client(endpoint_id)?;
+        let (cols, rows) = (cols.clamp(1, 1000) as u16, rows.clamp(1, 400) as u16);
+        let created = docker
+            .create_exec(
+                &container_id,
+                bollard::exec::CreateExecOptions {
+                    attach_stdin: Some(true),
+                    attach_stdout: Some(true),
+                    attach_stderr: Some(true),
+                    tty: Some(true),
+                    cmd: Some(command),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|error| map_bollard(error, false))?;
+        let started = docker
+            .start_exec(
+                &created.id,
+                Some(bollard::exec::StartExecOptions {
+                    detach: false,
+                    tty: true,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .map_err(|error| map_bollard(error, false))?;
+        let bollard::exec::StartExecResults::Attached {
+            output: stream,
+            input,
+        } = started
+        else {
+            return Err(DockerError::new("exec_failed"));
+        };
+        let exec_id = created.id;
+        let (cancel, cancel_rx) = watch::channel(false);
+        let (input_tx, input_rx) = mpsc::unbounded_channel();
+        let (resize_tx, resize_rx) = mpsc::unbounded_channel();
+        let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
+        let docker_for_task = docker.clone();
+        let task = tauri::async_runtime::spawn(async move {
+            run_exec(
+                docker_for_task,
+                exec_id,
+                (cols, rows),
+                stream,
+                input,
+                output,
+                events,
+                input_rx,
+                resize_rx,
+                cancel_rx,
+            )
+            .await;
+        });
+        lock(&self.inner.execs).insert(
+            id,
+            ExecSlot {
+                endpoint_id,
+                cancel,
+                input: input_tx,
+                resize: resize_tx,
+                task,
+            },
+        );
+        Ok(id)
+    }
+
+    pub fn exec_write(&self, id: u64, data: Vec<u8>) -> Result<(), DockerError> {
+        self.require()?;
+        if data.len() > 1024 * 1024 {
+            return Err(DockerError::new("invalid_input"));
+        }
+        let execs = lock(&self.inner.execs);
+        let slot = execs
+            .get(&id)
+            .ok_or_else(|| DockerError::new("not_found"))?;
+        slot.input
+            .send(data)
+            .map_err(|_| DockerError::new("disconnected"))
+    }
+
+    pub fn exec_resize(&self, id: u64, cols: u32, rows: u32) -> Result<(), DockerError> {
+        self.require()?;
+        let execs = lock(&self.inner.execs);
+        let slot = execs
+            .get(&id)
+            .ok_or_else(|| DockerError::new("not_found"))?;
+        let size = (cols.clamp(1, 1000) as u16, rows.clamp(1, 400) as u16);
+        slot.resize
+            .send(size)
+            .map_err(|_| DockerError::new("disconnected"))
+    }
+
+    pub fn exec_close(&self, id: u64) -> Result<(), DockerError> {
+        self.require()?;
+        lock(&self.inner.execs)
+            .remove(&id)
+            .map(|_| ())
+            .ok_or_else(|| DockerError::new("not_found"))
     }
 
     pub async fn networks(&self, endpoint_id: i64) -> Result<Vec<NetworkRow>, DockerError> {
@@ -609,9 +854,6 @@ impl DockerState {
                 let session = self.ssh_session(endpoint_id)?;
                 write_remote_compose(&session, &directory, &text).await?
             }
-            EndpointKind::Tcp | EndpointKind::Tls => {
-                return Err(DockerError::new("compose_path_unsupported"));
-            }
         };
         let preview = compose::parse_compose(&text, Path::new("docker-compose.yml"))?;
         lock(&self.inner.store).upsert_compose(
@@ -628,9 +870,6 @@ impl DockerState {
                 EndpointKind::Ssh => {
                     let session = self.ssh_session(endpoint_id)?;
                     start_remote_compose(&session, name, &directory, &config_path).await?;
-                }
-                EndpointKind::Tcp | EndpointKind::Tls => {
-                    return Err(DockerError::new("compose_path_unsupported"));
                 }
             }
         }
@@ -742,9 +981,6 @@ impl DockerState {
                 let session = self.ssh_session(endpoint_id)?;
                 read_remote_compose(&session, &location.file).await
             }
-            EndpointKind::Tcp | EndpointKind::Tls => {
-                Err(DockerError::new("compose_path_unsupported"))
-            }
         }
     }
 
@@ -771,9 +1007,6 @@ impl DockerState {
                 self.spawn_task(endpoint_id, events, move |events, cancel| async move {
                     stream_remote_compose_logs(session, command, events, cancel).await;
                 })
-            }
-            EndpointKind::Tcp | EndpointKind::Tls => {
-                Err(DockerError::new("compose_path_unsupported"))
             }
         }
     }
@@ -819,9 +1052,6 @@ impl DockerState {
                 let session = self.ssh_session(endpoint_id)?;
                 let command = compose::compose_remote_command(action, project, location)?;
                 run_remote_compose(&session, command, action.failure_code()).await
-            }
-            EndpointKind::Tcp | EndpointKind::Tls => {
-                Err(DockerError::new("compose_path_unsupported"))
             }
         }
     }
@@ -924,6 +1154,7 @@ impl DockerState {
     fn drop_client(&self, endpoint_id: i64) {
         self.cancel_links(endpoint_id);
         lock(&self.inner.tasks).retain(|_, task| task.endpoint_id != endpoint_id);
+        lock(&self.inner.execs).retain(|_, exec| exec.endpoint_id != endpoint_id);
         lock(&self.inner.clients).remove(&endpoint_id);
     }
 
@@ -949,7 +1180,9 @@ impl DockerState {
             dial::cancel_prompts(&bridge);
         }
         lock(&self.inner.links).clear();
+        self.note_links();
         lock(&self.inner.tasks).clear();
+        lock(&self.inner.execs).clear();
         lock(&self.inner.clients).clear();
     }
 
@@ -964,6 +1197,10 @@ impl DockerState {
 
     fn touch_menu(&self) {
         let _ = self.inner.app.emit("docker://endpoints", ());
+    }
+
+    fn note_links(&self) {
+        let _ = self.inner.app.emit("docker://links", ());
     }
 
     fn require(&self) -> Result<(), DockerError> {
@@ -1014,16 +1251,6 @@ async fn open_and_store(
         EndpointKind::Ssh => {
             let (docker, proxy) = open_ssh(inner, endpoint, bridge, events).await?;
             (docker, Some(proxy), None)
-        }
-        EndpointKind::Tls => {
-            let docker = connect_tls(endpoint)?;
-            let docker = negotiate(docker).await?;
-            (docker, None, None)
-        }
-        EndpointKind::Tcp => {
-            let docker = connect_tcp(endpoint)?;
-            let docker = negotiate(docker).await?;
-            (docker, None, None)
         }
     };
     let summary = read_summary(&docker, socket.clone()).await?;
@@ -1174,57 +1401,6 @@ fn connect_local(path: &str) -> Result<Docker, DockerError> {
     }
 }
 
-fn connect_tls(endpoint: &Endpoint) -> Result<Docker, DockerError> {
-    ensure_tls();
-    let host = endpoint
-        .host
-        .as_deref()
-        .ok_or_else(|| DockerError::new("invalid_input"))?;
-    let port = endpoint
-        .port
-        .ok_or_else(|| DockerError::new("invalid_input"))?;
-    let key = endpoint
-        .key_path
-        .as_deref()
-        .ok_or_else(|| DockerError::new("invalid_input"))?;
-    let cert = endpoint
-        .cert_path
-        .as_deref()
-        .ok_or_else(|| DockerError::new("invalid_input"))?;
-    let ca = endpoint
-        .ca_path
-        .as_deref()
-        .ok_or_else(|| DockerError::new("invalid_input"))?;
-    Docker::connect_with_ssl(
-        &format!("tcp://{}", host_port(host, port)),
-        Path::new(key),
-        Path::new(cert),
-        Path::new(ca),
-        API_TIMEOUT,
-        bollard::API_DEFAULT_VERSION,
-    )
-    .map_err(|error| map_bollard(error, false))
-}
-
-fn connect_tcp(endpoint: &Endpoint) -> Result<Docker, DockerError> {
-    if !endpoint.insecure {
-        return Err(DockerError::new("insecure_required"));
-    }
-    let host = endpoint
-        .host
-        .as_deref()
-        .ok_or_else(|| DockerError::new("invalid_input"))?;
-    let port = endpoint
-        .port
-        .ok_or_else(|| DockerError::new("invalid_input"))?;
-    Docker::connect_with_http(
-        &format!("http://{}", host_port(host, port)),
-        API_TIMEOUT,
-        bollard::API_DEFAULT_VERSION,
-    )
-    .map_err(|error| map_bollard(error, false))
-}
-
 async fn negotiate(docker: Docker) -> Result<Docker, DockerError> {
     docker
         .negotiate_version()
@@ -1299,14 +1475,6 @@ fn port_label(port: bollard::models::PortSummary) -> String {
     }
 }
 
-fn host_port(host: &str, port: u16) -> String {
-    if host.contains(':') {
-        format!("[{host}]:{port}")
-    } else {
-        format!("{host}:{port}")
-    }
-}
-
 fn resource_name(value: &str) -> Result<&str, DockerError> {
     let value = value.trim();
     if valid_resource_name(value) {
@@ -1314,6 +1482,143 @@ fn resource_name(value: &str) -> Result<&str, DockerError> {
     } else {
         Err(DockerError::new("invalid_input"))
     }
+}
+
+fn optional_container_name(value: &str) -> Result<Option<String>, DockerError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if valid_container_name(value) {
+        Ok(Some(value.to_string()))
+    } else {
+        Err(DockerError::new("invalid_input"))
+    }
+}
+
+fn exec_command(value: &str) -> Result<Vec<String>, DockerError> {
+    let command = if value.trim().is_empty() {
+        "/bin/sh"
+    } else {
+        value
+    };
+    let args = split_command(command)?;
+    if args.is_empty() {
+        return Err(DockerError::new("invalid_input"));
+    }
+    Ok(args)
+}
+
+fn port_config(
+    ports: &[super::model::PublishedPort],
+) -> Result<
+    (
+        Option<Vec<String>>,
+        Option<HashMap<String, Option<Vec<PortBinding>>>>,
+    ),
+    DockerError,
+> {
+    if ports.is_empty() {
+        return Ok((None, None));
+    }
+    let mut exposed = Vec::new();
+    let mut host_ports = Vec::new();
+    let mut bindings = HashMap::new();
+    for port in ports {
+        let protocol = if port.udp { "udp" } else { "tcp" };
+        let key = format!("{}/{}", port.container, protocol);
+        let host_key = format!("{}:{protocol}", port.host);
+        if exposed.contains(&key) || host_ports.contains(&host_key) {
+            return Err(DockerError::new("invalid_input"));
+        }
+        exposed.push(key.clone());
+        host_ports.push(host_key);
+        bindings.insert(
+            key,
+            Some(vec![PortBinding {
+                host_ip: Some("0.0.0.0".to_string()),
+                host_port: Some(port.host.to_string()),
+            }]),
+        );
+    }
+    Ok((Some(exposed), Some(bindings)))
+}
+
+fn map_create_error(error: bollard::errors::Error) -> DockerError {
+    let text = error.to_string().to_ascii_lowercase();
+    if text.contains("already in use") {
+        return DockerError::new("name_taken");
+    }
+    map_bollard(error, false)
+}
+
+fn map_run_error(error: bollard::errors::Error) -> DockerError {
+    let text = error.to_string().to_ascii_lowercase();
+    if text.contains("port is already allocated") || text.contains("address already in use") {
+        return DockerError::new("port_in_use");
+    }
+    map_bollard(error, false)
+}
+
+fn usage_of(sample: &ContainerStatsResponse) -> ContainerUsage {
+    ContainerUsage {
+        cpu_percent: cpu_percent(sample),
+        memory_bytes: memory_used(sample),
+        memory_limit: memory_limit(sample),
+    }
+}
+
+fn cpu_percent(sample: &ContainerStatsResponse) -> Option<f64> {
+    let cpu = sample.cpu_stats.as_ref()?;
+    let previous = sample.precpu_stats.as_ref()?;
+    let total = cpu.cpu_usage.as_ref()?.total_usage?;
+    let previous_total = previous.cpu_usage.as_ref()?.total_usage?;
+    let system = cpu.system_cpu_usage?;
+    let previous_system = previous.system_cpu_usage?;
+    let cpu_delta = total.saturating_sub(previous_total) as f64;
+    let system_delta = system.saturating_sub(previous_system) as f64;
+    if system_delta <= 0.0 {
+        return None;
+    }
+    let online = cpu
+        .online_cpus
+        .unwrap_or_else(|| {
+            cpu.cpu_usage
+                .as_ref()
+                .and_then(|usage| usage.percpu_usage.as_ref().map(|cores| cores.len() as u32))
+                .unwrap_or(1)
+        })
+        .max(1) as f64;
+    let percent = (cpu_delta / system_delta) * online * 100.0;
+    percent
+        .is_finite()
+        .then(|| (percent.max(0.0) * 10.0).round() / 10.0)
+}
+
+fn memory_used(sample: &ContainerStatsResponse) -> u64 {
+    let Some(memory) = sample.memory_stats.as_ref() else {
+        return 0;
+    };
+    if let Some(usage) = memory.usage {
+        let cache = memory
+            .stats
+            .as_ref()
+            .and_then(|stats| {
+                stats
+                    .get("inactive_file")
+                    .copied()
+                    .or_else(|| stats.get("cache").copied())
+            })
+            .unwrap_or(0);
+        return usage.saturating_sub(cache.min(usage));
+    }
+    memory.privateworkingset.unwrap_or(0)
+}
+
+fn memory_limit(sample: &ContainerStatsResponse) -> Option<u64> {
+    let memory = sample.memory_stats.as_ref()?;
+    let limit = memory.limit?;
+    (limit > 0 && limit < 1 << 60).then_some(limit)
 }
 
 fn image_name(value: &str) -> Result<&str, DockerError> {
@@ -1331,9 +1636,6 @@ fn signature_saved(endpoint: &Endpoint) -> String {
         endpoint.socket_path.as_deref(),
         endpoint.ssh_host_id,
         endpoint.remote_socket.as_deref(),
-        endpoint.host.as_deref(),
-        endpoint.port,
-        endpoint.ca_path.as_deref(),
     )
 }
 
@@ -1343,9 +1645,6 @@ fn signature_new(endpoint: &NormalizedEndpoint) -> String {
         endpoint.socket_path.as_deref(),
         endpoint.ssh_host_id,
         endpoint.remote_socket.as_deref(),
-        endpoint.host.as_deref(),
-        endpoint.port,
-        endpoint.ca_path.as_deref(),
     )
 }
 
@@ -1354,20 +1653,10 @@ fn signature(
     socket: Option<&str>,
     ssh_host: Option<i64>,
     remote: Option<&str>,
-    host: Option<&str>,
-    port: Option<u16>,
-    ca: Option<&str>,
 ) -> String {
     match kind {
         EndpointKind::Local => format!("local:{}", socket.unwrap_or("")),
         EndpointKind::Ssh => format!("ssh:{}:{}", ssh_host.unwrap_or(0), remote.unwrap_or("")),
-        EndpointKind::Tls => format!(
-            "tls:{}:{}:{}",
-            host.unwrap_or(""),
-            port.unwrap_or(0),
-            ca.unwrap_or("")
-        ),
-        EndpointKind::Tcp => format!("tcp:{}:{}", host.unwrap_or(""), port.unwrap_or(0)),
     }
 }
 
@@ -1381,11 +1670,6 @@ fn map_bollard(error: bollard::errors::Error, in_use: bool) -> DockerError {
         Error::DockerStreamError { error } => map_status(0, &error, in_use),
         Error::RequestTimeoutError => DockerError::new("timeout"),
         Error::SocketNotFoundError(_) => DockerError::new("unreachable"),
-        Error::CertPathError { .. }
-        | Error::CertParseError { .. }
-        | Error::CertMultipleKeys { .. }
-        | Error::NoNativeCertsError { .. }
-        | Error::LoadNativeCertsErrors { .. } => DockerError::new("tls"),
         Error::IOError { err } => classify_io(&err),
         Error::HyperLegacyError { err } => classify_text(&err.to_string()),
         Error::HyperResponseError { err } => classify_text(&err.to_string()),
@@ -1442,8 +1726,68 @@ fn classify_text(text: &str) -> DockerError {
     }
 }
 
-fn ensure_tls() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+async fn run_exec<S, W>(
+    docker: Docker,
+    exec_id: String,
+    size: (u16, u16),
+    mut stream: S,
+    mut input: W,
+    output: Channel<InvokeResponseBody>,
+    events: Channel<Value>,
+    mut input_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    mut resize_rx: mpsc::UnboundedReceiver<(u16, u16)>,
+    mut cancel: watch::Receiver<bool>,
+) where
+    S: futures_util::Stream<Item = Result<bollard::container::LogOutput, bollard::errors::Error>>
+        + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let _ = docker
+        .resize_exec(
+            &exec_id,
+            bollard::exec::ResizeExecOptions {
+                width: size.0,
+                height: size.1,
+            },
+        )
+        .await;
+    emit(&events, json!({"type": "state", "state": "ready"}));
+    loop {
+        tokio::select! {
+            changed = cancel.changed() => {
+                if changed.is_err() || *cancel.borrow() {
+                    break;
+                }
+            }
+            size = resize_rx.recv() => {
+                let Some((width, height)) = size else { break };
+                let _ = docker
+                    .resize_exec(&exec_id, bollard::exec::ResizeExecOptions { width, height })
+                    .await;
+            }
+            data = input_rx.recv() => {
+                let Some(data) = data else { break };
+                if input.write_all(&data).await.is_err() || input.flush().await.is_err() {
+                    break;
+                }
+            }
+            item = stream.next() => {
+                match item {
+                    Some(Ok(chunk)) => {
+                        let bytes = chunk.as_ref();
+                        if !bytes.is_empty() && output.send(InvokeResponseBody::Raw(bytes.to_vec())).is_err() {
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        }
+    }
+    emit(
+        &events,
+        json!({"type": "closed", "code": "disconnected", "params": {}}),
+    );
 }
 
 fn emit(events: &Channel<Value>, value: Value) {
@@ -1504,7 +1848,6 @@ fn host_directory_for(endpoint: &Endpoint, value: &str) -> Result<String, Docker
             }
         }
         EndpointKind::Ssh => compose::host_directory(value, compose::HostPathStyle::Unix),
-        EndpointKind::Tcp | EndpointKind::Tls => Err(DockerError::new("compose_path_unsupported")),
     }
 }
 
@@ -1764,8 +2107,7 @@ fn run_local_compose(
     action: compose::ComposeAction,
     failure: &'static str,
 ) -> Result<(), DockerError> {
-    let certs = local_compose_certs(endpoint)?;
-    let mut command = local_compose_command(endpoint, &certs, location, project, action)?;
+    let mut command = local_compose_command(endpoint, location, project, action)?;
     command
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped());
@@ -1784,17 +2126,8 @@ fn run_local_compose(
     }
 }
 
-fn local_compose_certs(endpoint: &Endpoint) -> Result<TempCerts, DockerError> {
-    Ok(TempCerts(if endpoint.kind == EndpointKind::Tls {
-        Some(tls_cert_dir(endpoint)?)
-    } else {
-        None
-    }))
-}
-
 fn local_compose_command(
     endpoint: &Endpoint,
-    certs: &TempCerts,
     location: &compose::ComposeLocation,
     project: &str,
     action: compose::ComposeAction,
@@ -1802,29 +2135,6 @@ fn local_compose_command(
     let kind = endpoint.kind.as_str();
     let address = match endpoint.kind {
         EndpointKind::Local => resolve_local(endpoint.socket_path.as_deref())?,
-        EndpointKind::Tcp => {
-            if !endpoint.insecure {
-                return Err(DockerError::new("insecure_required"));
-            }
-            host_port(
-                endpoint
-                    .host
-                    .as_deref()
-                    .ok_or_else(|| DockerError::new("invalid_input"))?,
-                endpoint
-                    .port
-                    .ok_or_else(|| DockerError::new("invalid_input"))?,
-            )
-        }
-        EndpointKind::Tls => host_port(
-            endpoint
-                .host
-                .as_deref()
-                .ok_or_else(|| DockerError::new("invalid_input"))?,
-            endpoint
-                .port
-                .ok_or_else(|| DockerError::new("invalid_input"))?,
-        ),
         EndpointKind::Ssh => return Err(DockerError::new("compose_path_unsupported")),
     };
     let docker_host = compose::docker_host_value(kind, &address)?;
@@ -1845,16 +2155,9 @@ fn local_compose_command(
         })
         .current_dir(&location.directory)
         .env("DOCKER_HOST", docker_host)
+        .env_remove("DOCKER_TLS_VERIFY")
+        .env_remove("DOCKER_CERT_PATH")
         .stdin(std::process::Stdio::null());
-    if let Some(dir) = &certs.0 {
-        command
-            .env("DOCKER_TLS_VERIFY", "1")
-            .env("DOCKER_CERT_PATH", dir);
-    } else {
-        command
-            .env_remove("DOCKER_TLS_VERIFY")
-            .env_remove("DOCKER_CERT_PATH");
-    }
     Ok(command)
 }
 
@@ -1876,19 +2179,8 @@ async fn stream_local_compose_logs(
     events: Channel<Value>,
     mut cancel: watch::Receiver<bool>,
 ) {
-    let certs = match local_compose_certs(&endpoint) {
-        Ok(certs) => certs,
-        Err(error) => {
-            emit(
-                &events,
-                json!({"type": "closed", "code": error.code, "params": error.params}),
-            );
-            return;
-        }
-    };
     let mut command = match local_compose_command(
         &endpoint,
-        &certs,
         &location,
         &project,
         compose::ComposeAction::Logs,
@@ -2122,49 +2414,8 @@ fn path_style(endpoint: &Endpoint) -> compose::HostPathStyle {
                 compose::HostPathStyle::Unix
             }
         }
-        EndpointKind::Ssh | EndpointKind::Tcp | EndpointKind::Tls => compose::HostPathStyle::Unix,
+        EndpointKind::Ssh => compose::HostPathStyle::Unix,
     }
-}
-
-struct TempCerts(Option<std::path::PathBuf>);
-
-impl Drop for TempCerts {
-    fn drop(&mut self) {
-        if let Some(dir) = &self.0 {
-            let _ = std::fs::remove_dir_all(dir);
-        }
-    }
-}
-
-fn tls_cert_dir(endpoint: &Endpoint) -> Result<std::path::PathBuf, DockerError> {
-    let ca = endpoint
-        .ca_path
-        .as_deref()
-        .ok_or_else(|| DockerError::new("tls"))?;
-    let cert = endpoint
-        .cert_path
-        .as_deref()
-        .ok_or_else(|| DockerError::new("tls"))?;
-    let key = endpoint
-        .key_path
-        .as_deref()
-        .ok_or_else(|| DockerError::new("tls"))?;
-    let dir = std::env::temp_dir().join(format!(
-        "pixo-docker-certs-{}-{}",
-        std::process::id(),
-        endpoint.id
-    ));
-    std::fs::create_dir_all(&dir).map_err(|_| DockerError::new("tls"))?;
-    std::fs::copy(ca, dir.join("ca.pem")).map_err(|_| DockerError::new("tls"))?;
-    std::fs::copy(cert, dir.join("cert.pem")).map_err(|_| DockerError::new("tls"))?;
-    std::fs::copy(key, dir.join("key.pem")).map_err(|_| DockerError::new("tls"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ =
-            std::fs::set_permissions(dir.join("key.pem"), std::fs::Permissions::from_mode(0o600));
-    }
-    Ok(dir)
 }
 
 fn compose_path(path: &str) -> Result<(), DockerError> {

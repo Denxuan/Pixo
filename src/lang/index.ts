@@ -32,6 +32,9 @@ function pushTrayLabels() {
       tooltipRecording: i18n.t("zdx.text.clipboard.trayRecording"),
       tooltipPaused: i18n.t("zdx.text.clipboard.trayPaused"),
       tooltipDisabled: i18n.t("zdx.text.clipboard.trayDisabled"),
+      tooltipCapture: i18n.t("zdx.text.clipboard.trayCapture"),
+      tooltipSsh: i18n.t("zdx.text.clipboard.traySsh"),
+      tooltipDocker: i18n.t("zdx.text.clipboard.trayDocker"),
     },
   });
 }

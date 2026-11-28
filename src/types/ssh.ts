@@ -39,12 +39,15 @@ export type SshSnippet = {
   body: string;
 };
 
+export type SshForwardKind = "local" | "remote" | "dynamic";
+
 export type SshForward = {
   id: number;
   sessionId: number;
-  localPort: number;
-  remoteHost: string;
-  remotePort: number;
+  kind: SshForwardKind | string;
+  listenPort: number;
+  targetHost: string;
+  targetPort: number;
 };
 
 export type SshStatus = {
@@ -106,6 +109,13 @@ export type SshSessionEvent =
   | { type: "notice"; code: string; params?: Record<string, unknown> }
   | { type: "cwd"; path: string }
   | { type: "closed"; code: string; params?: Record<string, unknown> };
+
+export type TrustedHost = {
+  host: string;
+  port: number;
+  algorithm: string;
+  fingerprint: string;
+};
 
 export function isSshAuth(value: string): value is SshAuth {
   return value === "password" || value === "key" || value === "agent";

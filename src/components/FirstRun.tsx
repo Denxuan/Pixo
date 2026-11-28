@@ -1,101 +1,172 @@
-import { clipboardGetSettings, clipboardSetEnabled, clipboardShowPanel } from "@/api/clipboard";
-import { permissionsOpen, permissionsStatus } from "@/api/permissions";
-import { ScreenshotRequestError, openScreenRecordingSettings, screenshotRequestAccess, screenshotStart, screenshotStatus } from "@/api/screenshot";
+import { clipboardSetEnabled, clipboardStatus } from "@/api/clipboard";
+import { dockerSetEnabled, dockerStatus } from "@/api/docker";
+import { permissionsOpen, permissionsPrepare, permissionsStatus, type SystemPermission } from "@/api/permissions";
+import { ScreenshotRequestError, openScreenRecordingSettings, screenshotGetSettings, screenshotRequestAccess, screenshotSetEnabled, screenshotStatus } from "@/api/screenshot";
+import { sshSetEnabled, sshStatus } from "@/api/ssh";
 import { useSettingsStore } from "@/stores/settings";
 import { isDesktop } from "@/utils/desktop";
+import { holdPermissionPrompt } from "@/utils/permissionGate";
 import { screenshotErrorText } from "@/utils/screenshotMessage";
 import { formatShortcut, isApplePlatform } from "@/utils/shortcut";
 
-type Block = "" | "accessibility" | "screen" | "error";
+type ToolId = "clipboard" | "screenshot" | "ssh" | "docker";
+type Step = "tools" | "access" | "ready";
+
+const TOOLS: ToolId[] = ["clipboard", "screenshot", "ssh", "docker"];
 
 export default function FirstRun() {
   const { t } = useTranslation();
   const introduced = useSettingsStore((state) => state.introduced);
   const setIntroduced = useSettingsStore((state) => state.setIntroduced);
+  const shortcut = useSettingsStore((state) => state.launcherShortcut);
   const hydrated = useSyncExternalStore(
     (onChange) => useSettingsStore.persist.onFinishHydration(onChange),
     () => useSettingsStore.persist.hasHydrated(),
     () => true,
   );
-  const [shortcut, setShortcut] = useState("CommandOrControl+Shift+V");
-  const [enabled, setEnabled] = useState(true);
-  const [block, setBlock] = useState<Block>("");
+  const [step, setStep] = useState<Step>("tools");
+  const [picked, setPicked] = useState<Record<ToolId, boolean>>({ clipboard: false, screenshot: false, ssh: false, docker: false });
+  const [known, setKnown] = useState(false);
+  const [missing, setMissing] = useState<SystemPermission["id"][]>([]);
+  const [screenMissing, setScreenMissing] = useState(false);
   const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
   const desktop = isDesktop();
+  const open = desktop && hydrated && !introduced;
 
   useEffect(() => {
-    if (!desktop || !hydrated || introduced) return;
-    void clipboardGetSettings().then((settings) => {
-      setShortcut(settings.shortcut);
-      setEnabled(settings.enabled);
-    }).catch(() => undefined);
-  }, [desktop, hydrated, introduced]);
+    if (!open) return;
+    let alive = true;
+    setKnown(false);
+    void Promise.all([clipboardStatus(), screenshotGetSettings(), sshStatus(), dockerStatus()])
+      .then(([clipboard, screenshot, ssh, docker]) => {
+        if (!alive) return;
+        setPicked({
+          clipboard: clipboard.enabled,
+          screenshot: screenshot.enabled,
+          ssh: ssh.enabled,
+          docker: docker.enabled,
+        });
+        setKnown(true);
+      })
+      .catch(() => {
+        if (alive) setNotice(t("zdx.text.intro.actionFailed"));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open]);
 
-  function fail(next: Block, text: string) {
-    setBlock(next);
-    setNotice(text);
+  function finish() {
+    holdPermissionPrompt();
+    setIntroduced(true);
   }
 
-  async function openClipboard() {
-    setNotice("");
-    setBlock("");
-    try {
-      if (!enabled) {
-        await clipboardSetEnabled(true);
-        setEnabled(true);
-      }
+  function toggle(id: ToolId, checked: boolean) {
+    setPicked((current) => ({ ...current, [id]: checked }));
+  }
+
+  async function collectAccess() {
+    const next: SystemPermission["id"][] = [];
+    let screen = false;
+    if (picked.clipboard) {
+      await permissionsPrepare().catch(() => undefined);
       const permissions = await permissionsStatus();
-      const access = permissions.find((item) => item.id === "accessibility");
-      if (access && !access.granted) {
-        fail("accessibility", t("zdx.text.intro.needAccessibility"));
-        return;
+      for (const item of permissions) {
+        if (!item.granted) next.push(item.id);
       }
-      await clipboardShowPanel();
-      setIntroduced(true);
-    } catch {
-      fail("error", t("zdx.text.intro.actionFailed"));
     }
-  }
-
-  async function tryShot() {
-    setNotice("");
-    setBlock("");
-    try {
+    if (picked.screenshot) {
       const current = await screenshotStatus();
       if (current.platform === "macos" && !current.screenRecording) {
         const again = await screenshotRequestAccess().catch(() => current);
-        if (!again.screenRecording) {
-          fail("screen", t("zdx.text.intro.needScreen"));
-          return;
-        }
+        screen = !again.screenRecording;
       }
-      await screenshotStart();
-      setIntroduced(true);
+    }
+    setMissing(next);
+    setScreenMissing(screen);
+    return next.length > 0 || screen;
+  }
+
+  async function applyTools() {
+    setBusy(true);
+    setNotice("");
+    try {
+      await clipboardSetEnabled(picked.clipboard);
+      await screenshotSetEnabled(picked.screenshot);
+      await sshSetEnabled(picked.ssh);
+      await dockerSetEnabled(picked.docker);
+      const blocked = await collectAccess();
+      setStep(blocked ? "access" : "ready");
     } catch (error) {
-      if (error instanceof ScreenshotRequestError && (error.code === "permission_denied" || error.params.reason === "relaunch_required")) {
-        fail("screen", screenshotErrorText(t, error));
-        return;
-      }
-      fail("error", error instanceof ScreenshotRequestError ? screenshotErrorText(t, error) : t("zdx.text.intro.actionFailed"));
+      setNotice(error instanceof ScreenshotRequestError ? screenshotErrorText(t, error) : t("zdx.text.intro.actionFailed"));
+    } finally {
+      setBusy(false);
     }
   }
 
+  async function recheck() {
+    setBusy(true);
+    setNotice("");
+    try {
+      const blocked = await collectAccess();
+      if (!blocked) setStep("ready");
+    } catch (error) {
+      setNotice(error instanceof ScreenshotRequestError ? screenshotErrorText(t, error) : t("zdx.text.intro.actionFailed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const title = step === "tools" ? t("zdx.label.intro.tools") : step === "access" ? t("zdx.label.intro.access") : t("zdx.label.intro.ready");
+
   return (
-    <Modal
-      open={desktop && hydrated && !introduced}
-      title={t("zdx.label.intro.title")}
-      footer={null}
-      onCancel={() => setIntroduced(true)}
-    >
-      <Typography.Paragraph>{t("zdx.text.intro.body", { shortcut: formatShortcut(shortcut, isApplePlatform()) })}</Typography.Paragraph>
-      {notice && <Alert className="mb-3" type={block === "error" ? "error" : "warning"} showIcon message={notice} />}
-      <Flex gap={8} wrap>
-        <Button type="primary" onClick={() => void openClipboard()}>{t("zdx.label.intro.openClipboard")}</Button>
-        <Button onClick={() => void tryShot()}>{t("zdx.label.intro.tryShot")}</Button>
-        {block === "accessibility" && <Button onClick={() => void permissionsOpen("accessibility")}>{t("zdx.label.permission.openSettings")}</Button>}
-        {block === "screen" && <Button onClick={() => void openScreenRecordingSettings()}>{t("zdx.label.permission.openSettings")}</Button>}
-        <Button type="text" onClick={() => setIntroduced(true)}>{t("zdx.label.intro.later")}</Button>
-      </Flex>
+    <Modal open={open} title={title} footer={null} onCancel={finish} maskClosable={false}>
+      {notice && <Alert className="mb-3" type="warning" showIcon message={notice} />}
+      {step === "tools" && (
+        <Flex vertical gap={12}>
+          <Typography.Paragraph style={{ margin: 0 }}>{t("zdx.text.intro.tools")}</Typography.Paragraph>
+          {TOOLS.map((id) => (
+            <Checkbox key={id} checked={picked[id]} disabled={!known || busy} onChange={(event) => toggle(id, event.target.checked)}>
+              <span className="inline-flex flex-col">
+                <span>{t(`zdx.label.intro.tool.${id}`)}</span>
+                <Typography.Text type="secondary">{t(`zdx.text.intro.tool.${id}`)}</Typography.Text>
+              </span>
+            </Checkbox>
+          ))}
+          <Flex gap={8} wrap>
+            <Button type="primary" loading={busy} disabled={!known} onClick={() => void applyTools()}>{t("zdx.label.intro.continue")}</Button>
+            <Button type="text" onClick={finish}>{t("zdx.label.intro.later")}</Button>
+          </Flex>
+        </Flex>
+      )}
+      {step === "access" && (
+        <Flex vertical gap={12}>
+          <Typography.Paragraph style={{ margin: 0 }}>{t("zdx.text.intro.access")}</Typography.Paragraph>
+          {missing.map((id) => (
+            <Flex key={id} justify="space-between" align="center" gap={12}>
+              <span>{t(`zdx.label.permission.${id}`)}</span>
+              <Button onClick={() => void permissionsOpen(id)}>{t("zdx.label.permission.openSettings")}</Button>
+            </Flex>
+          ))}
+          {screenMissing && (
+            <Flex justify="space-between" align="center" gap={12}>
+              <span>{t("zdx.text.intro.needScreen")}</span>
+              <Button onClick={() => void openScreenRecordingSettings()}>{t("zdx.label.permission.openSettings")}</Button>
+            </Flex>
+          )}
+          <Flex gap={8} wrap>
+            <Button type="primary" loading={busy} onClick={() => void recheck()}>{t("zdx.label.intro.recheck")}</Button>
+            <Button onClick={() => setStep("ready")}>{t("zdx.label.intro.continue")}</Button>
+          </Flex>
+        </Flex>
+      )}
+      {step === "ready" && (
+        <Flex vertical gap={12}>
+          <Typography.Paragraph style={{ margin: 0 }}>{t("zdx.text.intro.ready", { shortcut: formatShortcut(shortcut, isApplePlatform()) })}</Typography.Paragraph>
+          <Button type="primary" onClick={finish}>{t("zdx.label.intro.finish")}</Button>
+        </Flex>
+      )}
     </Modal>
   );
 }

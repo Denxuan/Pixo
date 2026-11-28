@@ -50,6 +50,7 @@ test("an open host is focused, and a closed one is reconnected", () => {
   ];
   expect(focusExistingSession(open, 1)).toEqual({ key: "a", reconnect: false });
   expect(focusExistingSession(open, 2)).toEqual({ key: "b", reconnect: true });
+  expect(focusExistingSession([{ key: "c", hostId: 4, phase: "idle" }], 4)).toEqual({ key: "c", reconnect: true });
   expect(focusExistingSession(open, 3)).toBeNull();
 });
 

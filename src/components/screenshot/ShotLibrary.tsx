@@ -1,8 +1,9 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
-import { ScreenshotRequestError, screenshotLibrary, screenshotLibraryCopy, screenshotLibraryDelete, screenshotLibraryPath, screenshotLibraryThumb } from "@/api/screenshot";
+import { ScreenshotRequestError, screenshotCopyText, screenshotLibrary, screenshotLibraryCopy, screenshotLibraryDelete, screenshotLibraryPath, screenshotLibraryPin, screenshotLibraryRecognize, screenshotLibraryThumb } from "@/api/screenshot";
 import type { ShotFile } from "@/types/screenshot";
 import { screenshotErrorText } from "@/utils/screenshotMessage";
+import { inkFrameStyle } from "@/utils/theme";
 import { formatBytes, formatRelativeTime } from "@/utils/time";
 
 export default function ShotLibrary() {
@@ -11,6 +12,8 @@ export default function ShotLibrary() {
   const [items, setItems] = useState<ShotFile[]>([]);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [reading, setReading] = useState<number | null>(null);
+  const [recognized, setRecognized] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -29,6 +32,41 @@ export default function ShotLibrary() {
     try {
       await screenshotLibraryCopy(id);
       setNotice(t("zdx.text.clipboard.copied"));
+    } catch (caught) {
+      if (caught instanceof ScreenshotRequestError) setError(screenshotErrorText(t, caught));
+    }
+  }
+
+  async function pin(id: number) {
+    setError("");
+    try {
+      await screenshotLibraryPin(id);
+      setNotice(t("zdx.text.screenshot.pinned"));
+    } catch (caught) {
+      if (caught instanceof ScreenshotRequestError) setError(screenshotErrorText(t, caught));
+    }
+  }
+
+  async function recognize(id: number) {
+    setError("");
+    setReading(id);
+    try {
+      const result = await screenshotLibraryRecognize(id);
+      setRecognized(result.text);
+      setNotice(t("zdx.text.screenshot.ocrSaved"));
+      await load();
+    } catch (caught) {
+      if (caught instanceof ScreenshotRequestError) setError(screenshotErrorText(t, caught));
+    } finally {
+      setReading(null);
+    }
+  }
+
+  async function copyRecognized() {
+    setError("");
+    try {
+      await screenshotCopyText(recognized);
+      setNotice(t("zdx.text.screenshot.ocrCopied"));
     } catch (caught) {
       if (caught instanceof ScreenshotRequestError) setError(screenshotErrorText(t, caught));
     }
@@ -64,7 +102,7 @@ export default function ShotLibrary() {
       {items.length > 0 && (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
           {items.map((item) => (
-            <div key={item.id} className="flex flex-col overflow-hidden" style={{ border: `1px solid ${token.colorBorderSecondary}`, borderRadius: token.borderRadiusLG, background: token.colorBgContainer }}>
+            <div key={item.id} className="flex flex-col overflow-hidden" style={{ background: token.colorBgContainer, ...inkFrameStyle(token, token.borderRadiusLG) }}>
               <ShotPreview item={item} />
               <div className="flex min-w-0 flex-1 flex-col gap-2 p-3">
                 <Typography.Text className="truncate" title={item.text?.trim() || item.name}>{item.text?.trim() || item.name}</Typography.Text>
@@ -77,6 +115,8 @@ export default function ShotLibrary() {
                 </Typography.Text>
                 <div className="mt-auto flex flex-wrap gap-1">
                   <Button size="small" type="link" onClick={() => void copy(item.id)}>{t("zdx.label.screenshot.copyShot")}</Button>
+                  {item.kind === "image" && <Button size="small" type="link" loading={reading === item.id} disabled={reading !== null && reading !== item.id} onClick={() => void recognize(item.id)}>{t("zdx.label.screenshot.libraryOcr")}</Button>}
+                  {item.kind === "image" && <Button size="small" type="link" onClick={() => void pin(item.id)}>{t("zdx.label.screenshot.pin")}</Button>}
                   <Button size="small" type="link" onClick={() => void reveal(item.id)}>{t("zdx.label.screenshot.reveal")}</Button>
                   <Popconfirm
                     title={t("zdx.label.screenshot.deleteShot")}
@@ -93,6 +133,17 @@ export default function ShotLibrary() {
           ))}
         </div>
       )}
+      <Modal
+        title={t("zdx.label.screenshot.ocrResult")}
+        open={recognized.length > 0}
+        okText={t("zdx.label.screenshot.ocrCopy")}
+        cancelText={t("zdx.label.screenshot.cancel")}
+        onOk={() => void copyRecognized()}
+        onCancel={() => setRecognized("")}
+        destroyOnHidden
+      >
+        <Typography.Paragraph className="mb-0 max-h-80 overflow-auto whitespace-pre-wrap">{recognized}</Typography.Paragraph>
+      </Modal>
     </Flex>
   );
 }

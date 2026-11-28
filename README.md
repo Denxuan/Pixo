@@ -1,6 +1,8 @@
-# Tauri + React + Typescript
+# Pixo
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Pixo 是留在本机的桌面工具箱，面向 macOS、Windows 和 Linux。剪贴板、截图、SSH 和 Docker 默认关闭，由你决定留下哪些。主手势是搜索：查找记录、主机和连接，或直接开始截图和录屏。
+
+数据放在本机应用目录，不上传。密码和口令进系统钥匙串。产品边界、数据位置和退出后还留下什么，写在 [docs/product.md](docs/product.md)。Docker 如何借用 SSH 主机，写在 [docs/docker-design.md](docs/docker-design.md)。
 
 ## UI 组件
 

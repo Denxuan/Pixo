@@ -1,12 +1,16 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { ClipboardRequestError, clipboardSetLabel, dismissClipboardPanel } from "@/api/clipboard";
+import { ScreenshotRequestError, screenshotPinClipboard } from "@/api/screenshot";
+import { screenshotErrorText } from "@/utils/screenshotMessage";
 import HistoryList from "@/components/clipboard/HistoryList";
 import Kbd from "@/components/Kbd";
 import { useClipboardHistory } from "@/hooks/useClipboard";
 import { CLIP_FILTERS, isClipFilter } from "@/types/clipboard";
 import { clipboardErrorText } from "@/utils/clipboardMessage";
+import { isDesktop } from "@/utils/desktop";
 import { DEFAULT_DELETE_SHORTCUT, DEFAULT_PIN_SHORTCUT, eventMatchesShortcut, formatShortcut, isApplePlatform } from "@/utils/shortcut";
+import { inkFrameStyle } from "@/utils/theme";
 
 function focusSearch() {
   const field = document.getElementById("clipboard-panel-search");
@@ -23,6 +27,7 @@ export default function ClipboardPanel() {
   const history = useClipboardHistory();
   const [index, setIndex] = useState(0);
   const [message, setMessage] = useState("");
+  const [stickingId, setStickingId] = useState<number | null>(null);
   const [messageTone, setMessageTone] = useState<"success" | "warning">("success");
   const [clearOpen, setClearOpen] = useState(false);
   const [clearAll, setClearAll] = useState(false);
@@ -124,6 +129,7 @@ export default function ClipboardPanel() {
         dismissClipboardPanel();
       }, 200);
     };
+    if (!isDesktop()) return;
     const unlisten = getCurrentWindow().onFocusChanged(({ payload }) => {
       if (payload) onFocus();
     });
@@ -333,23 +339,21 @@ export default function ClipboardPanel() {
   );
 
   return (
+    <div className="box-border h-full" style={{ padding: "8px 12px 12px 8px", background: "transparent" }}>
     <Flex
       vertical
-      className="h-screen overflow-hidden"
+      className="h-full overflow-hidden"
       onKeyDownCapture={onKeyDown}
       aria-label={t("zdx.label.clipboard.title")}
       style={{
-        background: token.colorBgElevated,
+        background: token.colorBgContainer,
         color: token.colorText,
-        borderRadius: 16,
-        border: `1px solid ${token.colorBorderSecondary}`,
+        ...inkFrameStyle(token, token.borderRadiusLG),
       }}
     >
-      <div data-tauri-drag-region className="flex shrink-0 items-center gap-2 px-3 pb-2.5 pt-3" style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
+      <div data-tauri-drag-region className="flex shrink-0 items-center gap-2 px-3 pb-3 pt-3" style={{ borderBottom: `1px solid ${token.colorBorder}` }}>
         <Input
           id="clipboard-panel-search"
-          variant="borderless"
-          size="large"
           allowClear
           prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
           value={history.query}
@@ -357,11 +361,8 @@ export default function ClipboardPanel() {
           placeholder={t("zdx.placeholder.clipboard.search")}
           aria-label={t("zdx.label.clipboard.search")}
           className="min-w-0 flex-1"
-          style={{ paddingInline: 4 }}
         />
         <Select
-          variant="filled"
-          size="small"
           value={history.filter}
           aria-label={t("zdx.label.clipboard.filterKind")}
           popupMatchSelectWidth={false}
@@ -371,7 +372,7 @@ export default function ClipboardPanel() {
           options={CLIP_FILTERS.map((item) => ({ value: item.id, label: t(item.label) }))}
         />
       </div>
-      <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
+      <div className="min-h-0 flex-1 overflow-auto px-3 py-3">
         {history.items.length === 0 && <Empty className="py-10" image={Empty.PRESENTED_IMAGE_SIMPLE} description={history.query ? t("zdx.text.clipboard.noResults") : t("zdx.text.clipboard.empty")} />}
         {history.items.length > 0 && (
           <HistoryList
@@ -386,6 +387,18 @@ export default function ClipboardPanel() {
               if (pinned && active?.id === id) focusTitle.current = true;
               void history.pinItem(id, pinned);
             }}
+            onStick={(id) => {
+              setStickingId(id);
+              setMessage("");
+              void screenshotPinClipboard(id).then(() => {
+                setMessageTone("success");
+                setMessage(t("zdx.text.clipboard.stuck"));
+              }).catch((error: unknown) => {
+                setMessageTone("warning");
+                setMessage(error instanceof ScreenshotRequestError ? screenshotErrorText(t, error) : t("zdx.text.screenshot.error.unknown"));
+              }).finally(() => setStickingId(null));
+            }}
+            stickingId={stickingId}
             onDelete={(id) => void history.deleteItem(id)}
             numberShortcuts={numberShortcuts}
           />
@@ -412,7 +425,7 @@ export default function ClipboardPanel() {
           />
         </div>
       )}
-      <div data-tauri-drag-region className="flex h-10 shrink-0 items-center gap-2 pl-3 pr-1.5" style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, background: token.colorFillQuaternary }}>
+      <div data-tauri-drag-region className="flex h-12 shrink-0 items-center gap-2 pl-3 pr-1.5" style={{ borderTop: `1px solid ${token.colorBorder}`, background: token.colorFillQuaternary }}>
         <div data-tauri-drag-region aria-label={t("zdx.label.clipboard.shortcutHints")} className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
           {keyHints.map((hint) => (
             <span key={hint.label} className="flex shrink-0 items-center gap-1.5 whitespace-nowrap" style={{ fontSize: token.fontSizeSM, color: token.colorTextSecondary }}>
@@ -461,5 +474,6 @@ export default function ClipboardPanel() {
         </Flex>
       </div>
     </Flex>
+    </div>
   );
 }

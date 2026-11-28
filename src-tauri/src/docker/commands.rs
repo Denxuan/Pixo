@@ -1,5 +1,5 @@
 use serde_json::Value;
-use tauri::ipc::Channel;
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -240,13 +240,94 @@ pub async fn docker_image_remove(
 }
 
 #[tauri::command]
+pub async fn docker_exec_open(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    container_id: String,
+    cols: u32,
+    rows: u32,
+    command: String,
+    output: Channel<InvokeResponseBody>,
+    events: Channel<Value>,
+) -> Result<u64, DockerError> {
+    state
+        .exec_open(
+            endpoint_id,
+            &container_id,
+            cols,
+            rows,
+            &command,
+            output,
+            events,
+        )
+        .await
+}
+
+#[tauri::command]
+pub fn docker_exec_write(
+    state: State<'_, DockerState>,
+    id: u64,
+    data: Vec<u8>,
+) -> Result<(), DockerError> {
+    state.exec_write(id, data)
+}
+
+#[tauri::command]
+pub fn docker_exec_resize(
+    state: State<'_, DockerState>,
+    id: u64,
+    cols: u32,
+    rows: u32,
+) -> Result<(), DockerError> {
+    state.exec_resize(id, cols, rows)
+}
+
+#[tauri::command]
+pub fn docker_exec_close(state: State<'_, DockerState>, id: u64) -> Result<(), DockerError> {
+    state.exec_close(id)
+}
+
+#[tauri::command]
+pub async fn docker_image_run(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    image: String,
+    name: String,
+    ports: String,
+    command: String,
+) -> Result<String, DockerError> {
+    state
+        .image_run(endpoint_id, &image, &name, &ports, &command)
+        .await
+}
+
+#[tauri::command]
+pub async fn docker_container_stats(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    id: String,
+) -> Result<super::model::ContainerUsage, DockerError> {
+    state.container_stats(endpoint_id, &id).await
+}
+
+#[tauri::command]
 pub fn docker_image_pull(
     state: State<'_, DockerState>,
     endpoint_id: i64,
     reference: String,
+    username: Option<String>,
+    password: Option<String>,
+    remember: bool,
     events: Channel<Value>,
 ) -> Result<u64, DockerError> {
-    state.image_pull(endpoint_id, &reference, events)
+    state.image_pull(
+        endpoint_id,
+        &reference,
+        username,
+        password,
+        remember,
+        events,
+    )
 }
 
 #[tauri::command]

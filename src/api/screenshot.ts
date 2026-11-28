@@ -96,6 +96,18 @@ export function screenshotLibraryCopy(id: number) {
   return call<void>("screenshot_library_copy", { id });
 }
 
+export function screenshotLibraryPin(id: number) {
+  return call<number>("screenshot_library_pin", { id });
+}
+
+export function screenshotLibraryRecognize(id: number) {
+  return call<{ text: string }>("screenshot_library_recognize", { id });
+}
+
+export function screenshotPinClipboard(id: number) {
+  return call<number>("screenshot_pin_clipboard", { id });
+}
+
 export function screenshotLibraryPath(id: number) {
   return call<string>("screenshot_library_path", { id });
 }

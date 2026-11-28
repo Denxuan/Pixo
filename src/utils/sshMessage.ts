@@ -20,6 +20,8 @@ export function sshPhaseText(t: Translate, phase: string): string {
       return t("zdx.text.ssh.ready");
     case "closed":
       return t("zdx.text.ssh.closed");
+    case "idle":
+      return t("zdx.text.ssh.restored");
     default:
       return "";
   }

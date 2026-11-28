@@ -36,6 +36,7 @@ export default function HostSplit({
   const [paneWidth, setPaneWidth] = useState(() => storedHostPane(storageKey));
   const [containerWidth, setContainerWidth] = useState(0);
   const [hot, setHot] = useState(false);
+  const [focused, setFocused] = useState(false);
   const [resizing, setResizing] = useState(false);
   const savedWidth = useRef(paneWidth);
   const drag = useRef<{ pointerId: number; x: number; width: number } | null>(null);
@@ -129,7 +130,12 @@ export default function HostSplit({
       <aside ref={asideRef} className="flex h-full min-h-0 shrink-0 flex-col overflow-hidden" style={{ width: paneWidth }}>
         {start}
       </aside>
-      <div className="relative z-20 w-px shrink-0" style={{ background: hot || resizing ? token.colorPrimary : token.colorBorderSecondary }}>
+      <div className="relative z-10 w-2 shrink-0">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-y-2 left-1/2 w-0.5 -translate-x-1/2 rounded-full"
+          style={{ background: hot || resizing || focused ? token.colorPrimary : token.colorBorder }}
+        />
         <div
           role="separator"
           aria-orientation="vertical"
@@ -138,7 +144,10 @@ export default function HostSplit({
           aria-valuemax={bounds.max}
           aria-valuenow={paneWidth}
           tabIndex={0}
-          className="absolute -left-1.5 top-0 h-full w-3 cursor-col-resize touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-[#4f5df0]"
+          className="absolute inset-y-0 -left-1 w-4 cursor-col-resize touch-none select-none"
+          style={{ outline: "none" }}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           onPointerEnter={() => setHot(true)}
           onPointerLeave={() => { if (!drag.current) setHot(false); }}
           onPointerDown={onPointerDown}

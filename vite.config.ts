@@ -58,6 +58,7 @@ export default defineConfig(() => ({
             "SendOutlined",
             "ApiOutlined",
             "AppstoreOutlined",
+            "BorderOuterOutlined",
             "CodeOutlined",
             "HistoryOutlined",
             "MenuFoldOutlined",

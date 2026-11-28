@@ -18,7 +18,7 @@ use super::cwd::CwdState;
 use super::dial::{self, Bridge, ClientHandler};
 use super::error::{SshError, log_ssh};
 use super::flow::wait_for_output_room;
-use super::forward::parse_forward;
+use super::forward::{ForwardKind, ForwardSpec, parse_spec};
 use super::grant;
 use super::known_hosts::{KnownStore, user_known_hosts_path};
 use super::model::{
@@ -54,9 +54,11 @@ enum Input {
 }
 
 struct ForwardRun {
-    local_port: u16,
-    remote_host: String,
-    remote_port: u16,
+    saved_id: i64,
+    kind: ForwardKind,
+    listen_port: u16,
+    target_host: String,
+    target_port: u16,
     cancel: watch::Sender<bool>,
     task: tauri::async_runtime::JoinHandle<()>,
 }
@@ -70,6 +72,7 @@ impl Drop for ForwardRun {
 
 #[derive(Clone)]
 struct SessionControl {
+    host_id: i64,
     bridge: Arc<Bridge>,
     input: mpsc::UnboundedSender<Input>,
     handle: Arc<AsyncMutex<Option<client::Handle<ClientHandler>>>>,
@@ -100,6 +103,7 @@ struct SessionGuard {
 impl Drop for SessionGuard {
     fn drop(&mut self) {
         lock(&self.inner.sessions).remove(&self.id);
+        let _ = self.inner.app.emit("ssh://sessions", ());
     }
 }
 
@@ -148,6 +152,18 @@ impl SshState {
         self.status()
     }
 
+    pub fn trusted_hosts(&self) -> Vec<super::known_hosts::TrustedHost> {
+        lock(&self.inner.known).list()
+    }
+
+    pub fn forget_trusted(&self, host: &str, port: u16) -> Result<(), SshError> {
+        let host = host.trim();
+        if port == 0 || !super::known_hosts::acceptable_host(host) {
+            return Err(SshError::new("invalid_input"));
+        }
+        lock(&self.inner.known).forget(host, port)
+    }
+
     fn status_of(&self, enabled: bool, keepalive_secs: u32) -> SshStatus {
         SshStatus {
             enabled,
@@ -159,6 +175,10 @@ impl SshState {
 
     pub fn list(&self) -> Result<Vec<Host>, SshError> {
         lock(&self.inner.store).list()
+    }
+
+    pub fn session_count(&self) -> usize {
+        lock(&self.inner.sessions).len()
     }
 
     pub fn tool_enabled(&self) -> Result<bool, SshError> {
@@ -231,6 +251,13 @@ impl SshState {
 
     pub fn delete(&self, id: i64, detach: bool) -> Result<(), SshError> {
         let host = lock(&self.inner.store).get(id)?;
+        let endpoints = crate::docker::endpoint_names_for_host(&self.inner.app, id);
+        if !endpoints.is_empty() {
+            return Err(SshError::with_params(
+                "endpoint_in_use",
+                serde_json::json!({ "endpoints": endpoints.join("、") }),
+            ));
+        }
         let names = lock(&self.inner.store).dependent_names(id)?;
         if !names.is_empty() && !detach {
             return Err(SshError::with_params(
@@ -347,6 +374,7 @@ impl SshState {
         lock(&self.inner.sessions).insert(
             id,
             SessionControl {
+                host_id,
                 bridge: Arc::clone(&bridge),
                 input,
                 handle: Arc::new(AsyncMutex::new(None)),
@@ -355,6 +383,7 @@ impl SshState {
                 forwards: Arc::new(Mutex::new(HashMap::new())),
             },
         );
+        let _ = self.inner.app.emit("ssh://sessions", ());
         let inner = Arc::clone(&self.inner);
         tauri::async_runtime::spawn(async move {
             let _guard = SessionGuard {
@@ -379,11 +408,35 @@ impl SshState {
     pub async fn open_forward(
         &self,
         session_id: u64,
-        local_port: u32,
-        remote_host: &str,
-        remote_port: u32,
+        kind: &str,
+        listen_port: u32,
+        target_host: &str,
+        target_port: u32,
     ) -> Result<ForwardView, SshError> {
-        let target = parse_forward(local_port, remote_host, remote_port)?;
+        let spec = parse_spec(kind, listen_port, target_host, target_port)?;
+        let control = control(&self.inner, session_id)?;
+        let saved = lock(&self.inner.store).save_forward(
+            control.host_id,
+            spec.kind.as_str(),
+            spec.listen_port,
+            &spec.target_host,
+            spec.target_port,
+        )?;
+        match self.start_forward(session_id, saved, spec).await {
+            Ok(view) => Ok(view),
+            Err(error) => {
+                let _ = lock(&self.inner.store).delete_forward(saved);
+                Err(error)
+            }
+        }
+    }
+
+    async fn start_forward(
+        &self,
+        session_id: u64,
+        saved_id: i64,
+        spec: ForwardSpec,
+    ) -> Result<ForwardView, SshError> {
         let control = control(&self.inner, session_id)?;
         {
             let slot = control.handle.lock().await;
@@ -394,41 +447,87 @@ impl SshState {
         if lock(&control.forwards).len() >= 8 {
             return Err(SshError::new("forward_limit"));
         }
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, target.local_port))
-            .await
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::AddrInUse {
-                    SshError::new("port_in_use")
-                } else {
-                    eprintln!("ssh forward: {error}");
-                    SshError::new("connect_failed")
-                }
-            })?;
-        let (cancel, cancel_rx) = watch::channel(false);
+        if lock(&control.forwards)
+            .values()
+            .any(|run| run.kind == spec.kind && run.listen_port == spec.listen_port)
+        {
+            return Err(SshError::new("port_in_use"));
+        }
+        let (cancel, mut cancel_rx) = watch::channel(false);
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
-        let handle = Arc::clone(&control.handle);
-        let host = target.remote_host.clone();
-        let port = u32::from(target.remote_port);
-        let task = tauri::async_runtime::spawn(async move {
-            accept_forward(listener, handle, host, port, cancel_rx).await;
-        });
+        let task = match spec.kind {
+            ForwardKind::Local => {
+                let listener = bind_local(spec.listen_port).await?;
+                let handle = Arc::clone(&control.handle);
+                let host = spec.target_host.clone();
+                let port = u32::from(spec.target_port);
+                tauri::async_runtime::spawn(async move {
+                    accept_forward(listener, handle, host, port, cancel_rx).await;
+                })
+            }
+            ForwardKind::Dynamic => {
+                let listener = bind_local(spec.listen_port).await?;
+                let handle = Arc::clone(&control.handle);
+                tauri::async_runtime::spawn(async move {
+                    super::socks::serve(listener, handle, cancel_rx).await;
+                })
+            }
+            ForwardKind::Remote => {
+                let bound = {
+                    let slot = control.handle.lock().await;
+                    let Some(handle) = slot.as_ref() else {
+                        return Err(SshError::new("disconnected"));
+                    };
+                    handle
+                        .tcpip_forward("127.0.0.1", u32::from(spec.listen_port))
+                        .await
+                        .map_err(|_| SshError::new("forward_denied"))?
+                };
+                if bound != 0 && bound != u32::from(spec.listen_port) {
+                    let slot = control.handle.lock().await;
+                    if let Some(handle) = slot.as_ref() {
+                        let _ = handle.cancel_tcpip_forward("127.0.0.1", bound).await;
+                    }
+                    return Err(SshError::new("forward_denied"));
+                }
+                lock(&control.bridge.remote_routes).insert(
+                    u32::from(spec.listen_port),
+                    (spec.target_host.clone(), spec.target_port),
+                );
+                let handle = Arc::clone(&control.handle);
+                let bridge = Arc::clone(&control.bridge);
+                let port = u32::from(spec.listen_port);
+                tauri::async_runtime::spawn(async move {
+                    let _ = cancel_rx.wait_for(|stopped| *stopped).await;
+                    lock(&bridge.remote_routes).remove(&port);
+                    let slot = handle.lock().await;
+                    if let Some(session) = slot.as_ref() {
+                        let _ = session.cancel_tcpip_forward("127.0.0.1", port).await;
+                    }
+                })
+            }
+        };
+        let view = ForwardView {
+            id,
+            session_id,
+            kind: spec.kind.as_str().to_string(),
+            listen_port: spec.listen_port,
+            target_host: spec.target_host.clone(),
+            target_port: spec.target_port,
+        };
         lock(&control.forwards).insert(
             id,
             ForwardRun {
-                local_port: target.local_port,
-                remote_host: target.remote_host.clone(),
-                remote_port: target.remote_port,
+                saved_id,
+                kind: spec.kind,
+                listen_port: spec.listen_port,
+                target_host: spec.target_host,
+                target_port: spec.target_port,
                 cancel,
                 task,
             },
         );
-        Ok(ForwardView {
-            id,
-            session_id,
-            local_port: target.local_port,
-            remote_host: target.remote_host,
-            remote_port: target.remote_port,
-        })
+        Ok(view)
     }
 
     pub fn list_forwards(&self, session_id: u64) -> Result<Vec<ForwardView>, SshError> {
@@ -438,21 +537,34 @@ impl SshState {
             .map(|(id, run)| ForwardView {
                 id: *id,
                 session_id,
-                local_port: run.local_port,
-                remote_host: run.remote_host.clone(),
-                remote_port: run.remote_port,
+                kind: run.kind.as_str().to_string(),
+                listen_port: run.listen_port,
+                target_host: run.target_host.clone(),
+                target_port: run.target_port,
             })
             .collect::<Vec<_>>();
-        items.sort_by_key(|item| item.local_port);
+        items.sort_by_key(|item| (item.kind.clone(), item.listen_port));
         Ok(items)
     }
 
     pub fn close_forward(&self, session_id: u64, id: u64) -> Result<(), SshError> {
         let control = control(&self.inner, session_id)?;
-        lock(&control.forwards)
+        let run = lock(&control.forwards)
             .remove(&id)
-            .map(|_| ())
-            .ok_or_else(|| SshError::new("not_found"))
+            .ok_or_else(|| SshError::new("not_found"))?;
+        if run.kind == ForwardKind::Remote {
+            let port = u32::from(run.listen_port);
+            lock(&control.bridge.remote_routes).remove(&port);
+            let handle = Arc::clone(&control.handle);
+            tauri::async_runtime::spawn(async move {
+                let slot = handle.lock().await;
+                if let Some(session) = slot.as_ref() {
+                    let _ = session.cancel_tcpip_forward("127.0.0.1", port).await;
+                }
+            });
+        }
+        let _ = lock(&self.inner.store).delete_forward(run.saved_id);
+        Ok(())
     }
 
     pub fn decide_host_key(&self, session_id: u64, accept: bool) -> Result<(), SshError> {
@@ -815,6 +927,7 @@ async fn run_session(
     let failure = match prepared {
         Ok((input_tx, handle, cwd)) => match open_shell(
             Arc::clone(&inner),
+            session_id,
             &host,
             size,
             &bridge,
@@ -847,6 +960,7 @@ async fn run_session(
 
 async fn open_shell(
     inner: Arc<Inner>,
+    session_id: u64,
     host: &Host,
     size: (u32, u32),
     bridge: &Arc<Bridge>,
@@ -924,6 +1038,12 @@ async fn open_shell(
         }
     }
     emit(events, json!({"type": "state", "state": "ready"}));
+    let restore_inner = Arc::clone(&inner);
+    let restore_events = events.clone();
+    let host_id = host.id;
+    tauri::async_runtime::spawn(async move {
+        restore_forwards(&restore_inner, session_id, host_id, &restore_events).await;
+    });
     let home_slot = Arc::clone(&handle_slot);
     let home_cwd = Arc::clone(&cwd);
     let home_events = events.clone();
@@ -1213,6 +1333,58 @@ fn emit_output(output: &Channel<InvokeResponseBody>, pending: &mut Vec<u8>) -> u
     let sent = bytes.len() as u64;
     let _ = output.send(InvokeResponseBody::Raw(bytes));
     sent
+}
+
+async fn bind_local(port: u16) -> Result<TcpListener, SshError> {
+    TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+        .await
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AddrInUse {
+                SshError::new("port_in_use")
+            } else {
+                eprintln!("ssh forward: {error}");
+                SshError::new("connect_failed")
+            }
+        })
+}
+
+async fn restore_forwards(
+    inner: &Arc<Inner>,
+    session_id: u64,
+    host_id: i64,
+    events: &Channel<Value>,
+) {
+    let saved = match lock(&inner.store).forwards(host_id) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("ssh forward restore: {}", error.code);
+            return;
+        }
+    };
+    let state = SshState {
+        inner: Arc::clone(inner),
+    };
+    for row in saved {
+        let Ok(spec) = parse_spec(
+            &row.kind,
+            u32::from(row.listen_port),
+            &row.target_host,
+            u32::from(row.target_port),
+        ) else {
+            continue;
+        };
+        let port = row.listen_port;
+        if let Err(error) = state.start_forward(session_id, row.id, spec).await {
+            emit(
+                events,
+                json!({
+                    "type": "notice",
+                    "code": "forward_restore",
+                    "params": { "port": port, "reason": error.code },
+                }),
+            );
+        }
+    }
 }
 
 async fn accept_forward(

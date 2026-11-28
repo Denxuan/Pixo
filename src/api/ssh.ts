@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 
-import type { SshConfigPreview, SshForward, SshHost, SshHostDraft, SshRemoteListing, SshSessionEvent, SshSnippet, SshStatus } from "@/types/ssh";
+import type { SshConfigPreview, SshForward, SshHost, SshHostDraft, SshRemoteListing, SshSessionEvent, SshSnippet, SshStatus, TrustedHost } from "@/types/ssh";
 import type { SshTransferEvent } from "@/utils/sshTransfer";
 import { isDesktop } from "@/utils/desktop";
 
@@ -49,6 +49,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const sshStatus = () => call<SshStatus>("ssh_status");
 export const sshSetEnabled = (enabled: boolean) => call<SshStatus>("ssh_set_enabled", { enabled });
 export const sshSetKeepalive = (seconds: number) => call<SshStatus>("ssh_set_keepalive", { seconds });
+export const sshKnownHosts = () => call<TrustedHost[]>("ssh_known_hosts");
+export const sshForgetKnownHost = (host: string, port: number) => call<void>("ssh_known_host_forget", { host, port });
 export const sshHosts = () => call<SshHost[]>("ssh_hosts_list");
 export const sshSaveHost = (host: SshHostDraft) => call<SshHost>("ssh_host_save", { host });
 export const sshDeleteHost = (id: number, detach = false) => call<void>("ssh_host_delete", { id, detach });
@@ -128,8 +130,8 @@ export const sshTransferForget = (taskId: number) => call<void>("ssh_transfer_fo
 
 export const sshForwards = (sessionId: number) => call<SshForward[]>("ssh_forward_list", { sessionId });
 
-export const sshForwardOpen = (sessionId: number, localPort: number, remoteHost: string, remotePort: number) =>
-  call<SshForward>("ssh_forward_open", { sessionId, localPort, remoteHost, remotePort });
+export const sshForwardOpen = (sessionId: number, kind: string, listenPort: number, targetHost: string, targetPort: number) =>
+  call<SshForward>("ssh_forward_open", { sessionId, kind, listenPort, targetHost, targetPort });
 
 export const sshForwardClose = (sessionId: number, id: number) =>
   call<void>("ssh_forward_close", { sessionId, id });
