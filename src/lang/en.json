@@ -104,6 +104,7 @@
         "groupExclude": "Exclusions",
         "paste": "Paste",
         "pastePlain": "Plain text",
+        "preview": "Preview",
         "filterKind": "Filter by type",
         "help": "How to use"
       },
@@ -572,6 +573,8 @@
         "shortcutRecording": "Press the new shortcut",
         "shortcutNeedModifier": "Press it together with a modifier key.",
         "kindDisabled": "This kind of content is turned off in settings.",
+        "previewTruncated": "This preview shows only the beginning.",
+        "imageSize": "{{width}} × {{height}}",
         "copiedTimes_one": "Copied {{count}} time",
         "copiedTimes_other": "Copied {{count}} times",
         "statusReason": {

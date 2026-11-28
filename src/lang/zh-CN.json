@@ -104,6 +104,7 @@
         "groupExclude": "排除",
         "paste": "粘贴",
         "pastePlain": "纯文本",
+        "preview": "预览",
         "filterKind": "按类型筛选",
         "help": "使用说明"
       },
@@ -572,6 +573,8 @@
         "shortcutRecording": "请按下新的快捷键",
         "shortcutNeedModifier": "请和一个修饰键一起按。",
         "kindDisabled": "这种内容已在设置中关闭。",
+        "previewTruncated": "内容较长，这里只显示开头。",
+        "imageSize": "{{width}} × {{height}}",
         "copiedTimes_one": "复制过 {{count}} 次",
         "copiedTimes_other": "复制过 {{count}} 次",
         "statusReason": {

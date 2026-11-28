@@ -66,6 +66,7 @@ declare global {
   const PlayCircleOutlined: typeof import('@ant-design/icons').PlayCircleOutlined
   const PlusOutlined: typeof import('@ant-design/icons').PlusOutlined
   const Popconfirm: typeof import('antd').Popconfirm
+  const Popover: typeof import('antd').Popover
   const PoweroffOutlined: typeof import('@ant-design/icons').PoweroffOutlined
   const PushpinFilled: typeof import('@ant-design/icons').PushpinFilled
   const PushpinOutlined: typeof import('@ant-design/icons').PushpinOutlined

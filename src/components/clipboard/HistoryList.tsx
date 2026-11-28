@@ -106,9 +106,25 @@ function KindBadge({ kind, src, label }: { kind: string; src?: string; label?: s
   );
 }
 
+const PREVIEW_LIMIT = 8000;
+
+const previewStyles = {
+  root: { maxWidth: "min(308px, calc(100vw - 24px))" },
+  container: { maxWidth: "min(308px, calc(100vw - 24px))", overflow: "hidden" },
+};
+
+const previewScroll = {
+  maxHeight: "min(220px, calc(100vh - 96px))",
+  overflow: "auto",
+  overflowWrap: "anywhere" as const,
+  whiteSpace: "pre-wrap" as const,
+  overscrollBehavior: "contain" as const,
+};
+
 function ClipTitle({ item }: { item: ClipSummary }) {
   const { t } = useTranslation();
   const [full, setFull] = useState("");
+  const [truncated, setTruncated] = useState(false);
   const [previewUrl, setPreviewUrl] = useState("");
   const content = item.kind === "files" ? item.fileNames.join(", ") : item.preview || t("zdx.label.clipboard.image");
   const named = item.label?.trim() ?? "";
@@ -131,23 +147,38 @@ function ClipTitle({ item }: { item: ClipSummary }) {
     }
     if (full) return;
     void clipboardGet(item.id).then((detail) => {
-      if (detail.text) setFull(detail.text.slice(0, 8000));
-      else if (detail.files.length > 0) setFull(detail.files.join("\n"));
-      else setFull(title);
+      const text = detail.text ?? (detail.files.length > 0 ? detail.files.join("\n") : title);
+      setTruncated(text.length > PREVIEW_LIMIT);
+      setFull(text.slice(0, PREVIEW_LIMIT));
     }).catch(() => setFull(title));
   }
 
-  const tooltip = item.kind === "image"
-    ? (previewUrl ? <img src={previewUrl} alt="" width={180} height={180} style={{ objectFit: "contain" }} /> : undefined)
-    : (full ? <span className="whitespace-pre-wrap break-words" style={{ display: "inline-block", maxWidth: 360 }}>{full}</span> : undefined);
+  const previewLabel = t("zdx.label.clipboard.preview");
+  const preview = item.kind === "image" ? (
+    <div>
+      {previewUrl ? (
+        <img src={previewUrl} alt={previewLabel} style={{ display: "block", maxWidth: "100%", maxHeight: 180, objectFit: "contain" }} />
+      ) : (
+        <span>{t("zdx.label.clipboard.image")}</span>
+      )}
+      {item.imageWidth && item.imageHeight ? (
+        <div style={{ marginTop: 6 }}>{t("zdx.text.clipboard.imageSize", { width: item.imageWidth, height: item.imageHeight })}</div>
+      ) : null}
+    </div>
+  ) : (
+    <div>
+      {full || title}
+      {truncated ? <div style={{ marginTop: 6 }}>{t("zdx.text.clipboard.previewTruncated")}</div> : null}
+    </div>
+  );
 
   return (
-    <Tooltip mouseEnterDelay={1} title={tooltip}>
-      <span className="min-w-0 flex-1" onMouseEnter={load}>
-        <Typography.Text ellipsis style={{ display: "block", margin: 0 }}>{title}</Typography.Text>
-        {named && <Typography.Text ellipsis type="secondary" style={{ display: "block", margin: 0, fontSize: 12 }}>{content}</Typography.Text>}
+    <Popover mouseEnterDelay={0.35} placement="topLeft" destroyOnHidden styles={previewStyles} content={<div role="region" aria-label={previewLabel} style={previewScroll}>{preview}</div>}>
+      <span className="block min-w-0 flex-1 overflow-hidden" onMouseEnter={load}>
+        <Typography.Text ellipsis style={{ display: "block", margin: 0, maxWidth: "100%" }}>{title}</Typography.Text>
+        {named && <Typography.Text ellipsis type="secondary" style={{ display: "block", margin: 0, maxWidth: "100%", fontSize: 12 }}>{content}</Typography.Text>}
       </span>
-    </Tooltip>
+    </Popover>
   );
 }
 

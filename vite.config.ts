@@ -38,6 +38,7 @@ export default defineConfig(() => ({
             "Menu",
             "Modal",
             "Popconfirm",
+            "Popover",
             "Segmented",
             "Select",
             "Space",

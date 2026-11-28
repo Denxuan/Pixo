@@ -422,7 +422,14 @@ export default function ClipboardPanel() {
           ))}
         </div>
         <Flex align="center" className="shrink-0">
-          <Tooltip title={helpContent} placement="topRight">
+          <Tooltip
+            title={helpContent}
+            placement="topRight"
+            styles={{
+              root: { maxWidth: 320 },
+              container: { maxWidth: 320, maxHeight: "min(240px, calc(100vh - 80px))", overflow: "auto" },
+            }}
+          >
             <Button type="text" size="small" aria-label={t("zdx.label.clipboard.help")} aria-description={panelHelp} icon={<InfoCircleOutlined />} style={{ color: token.colorTextSecondary }} />
           </Tooltip>
           <Popconfirm
