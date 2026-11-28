@@ -92,13 +92,32 @@ pub struct DataProfile {
 
 #[tauri::command]
 pub fn system_data_profile(app: AppHandle) -> Result<DataProfile, String> {
-    let root = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
     Ok(DataProfile {
-        clipboard_db: root.join("clipboard").join("history.db").to_string_lossy().into_owned(),
-        screenshot_library: root.join("screenshot").join("library.db").to_string_lossy().into_owned(),
+        clipboard_db: root
+            .join("clipboard")
+            .join("history.db")
+            .to_string_lossy()
+            .into_owned(),
+        screenshot_library: root
+            .join("screenshot")
+            .join("library.db")
+            .to_string_lossy()
+            .into_owned(),
         screenshot_save_dir: crate::screenshot::save_directory(&app),
-        ssh_db: root.join("ssh").join("hosts.db").to_string_lossy().into_owned(),
-        docker_db: root.join("docker").join("endpoints.db").to_string_lossy().into_owned(),
+        ssh_db: root
+            .join("ssh")
+            .join("hosts.db")
+            .to_string_lossy()
+            .into_owned(),
+        docker_db: root
+            .join("docker")
+            .join("endpoints.db")
+            .to_string_lossy()
+            .into_owned(),
         app_data_dir: root.to_string_lossy().into_owned(),
         recording: crate::screenshot::capture_active(),
         ssh_sessions: crate::ssh::live_sessions(&app),
@@ -107,13 +126,20 @@ pub fn system_data_profile(app: AppHandle) -> Result<DataProfile, String> {
 }
 
 #[tauri::command]
-pub async fn system_export_bundle(app: AppHandle, kind: String, title: String) -> Result<bool, String> {
+pub async fn system_export_bundle(
+    app: AppHandle,
+    kind: String,
+    title: String,
+) -> Result<bool, String> {
     if title.trim().is_empty() || title.chars().count() > 80 {
         return Err("invalid_input".into());
     }
     let (file_name, body) = match kind.as_str() {
         "hosts" => ("pixo-hosts.json".to_string(), crate::ssh::hosts_json(&app)?),
-        "endpoints" => ("pixo-endpoints.json".to_string(), crate::docker::endpoints_json(&app)?),
+        "endpoints" => (
+            "pixo-endpoints.json".to_string(),
+            crate::docker::endpoints_json(&app)?,
+        ),
         _ => return Err("invalid_input".into()),
     };
     let dialog_app = app.clone();
@@ -132,7 +158,9 @@ pub async fn system_export_bundle(app: AppHandle, kind: String, title: String) -
     let Some(picked) = picked else {
         return Ok(false);
     };
-    let path = picked.into_path().map_err(|_| "invalid_input".to_string())?;
+    let path = picked
+        .into_path()
+        .map_err(|_| "invalid_input".to_string())?;
     std::fs::write(&path, body).map_err(|_| "storage".to_string())?;
     #[cfg(unix)]
     {

@@ -1,17 +1,20 @@
-/* Ant Design 的运行时样式会在 hover 和 focus 时改写边框与阴影，这里用更高优先级把插画描边留住。 */
+/* 按下的控件和浮层才加重。页面里的分区只用一根细线，避免每一层都画成贴纸。 */
 
 .pixo-ink-button.ant-btn-primary,
-.pixo-ink-button.ant-btn-default,
-.pixo-ink-button.ant-btn-dashed,
-.pixo-ink-button.ant-btn-variant-solid,
-.pixo-ink-button.ant-btn-variant-outlined,
-.pixo-ink-button.ant-btn-variant-dashed,
-.pixo-ink-button.ant-btn-variant-filled {
-  border-color: var(--pixo-ink) !important;
-  box-shadow: var(--pixo-shadow) var(--pixo-shadow) 0 var(--pixo-ink) !important;
+.pixo-ink-button.ant-btn-variant-solid {
+  border-color: transparent !important;
+  box-shadow: none !important;
   font-weight: 600;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+}
+
+.pixo-ink-button.ant-btn-default:not([class*="danger"]),
+.pixo-ink-button.ant-btn-dashed:not([class*="danger"]),
+.pixo-ink-button.ant-btn-variant-outlined:not([class*="danger"]),
+.pixo-ink-button.ant-btn-variant-dashed:not([class*="danger"]),
+.pixo-ink-button.ant-btn-variant-filled:not([class*="danger"]) {
+  border-color: var(--pixo-border) !important;
+  box-shadow: none !important;
+  font-weight: 500;
 }
 
 .pixo-ink-button.ant-btn-primary:focus-visible,
@@ -21,9 +24,11 @@
 .pixo-ink-button.ant-btn-variant-outlined:focus-visible,
 .pixo-ink-button.ant-btn-variant-dashed:focus-visible,
 .pixo-ink-button.ant-btn-variant-filled:focus-visible {
-  box-shadow:
-    var(--pixo-shadow) var(--pixo-shadow) 0 var(--pixo-ink),
-    0 0 0 3px color-mix(in srgb, var(--pixo-primary) 45%, transparent) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pixo-primary) 32%, transparent) !important;
+}
+
+.pixo-ink-button.ant-btn:active {
+  transform: scale(0.98);
 }
 
 .pixo-ink-button.ant-btn-text:focus-visible,
@@ -35,43 +40,44 @@
 }
 
 .pixo-ink-field:not([class*="status-error"]):not([class*="status-warning"]) {
-  border-color: var(--pixo-ink) !important;
-  box-shadow: var(--pixo-shadow) var(--pixo-shadow) 0 var(--pixo-ink) !important;
+  border-color: var(--pixo-border) !important;
+  box-shadow: none !important;
 }
 
 .pixo-ink-field.ant-select:not([class*="status-error"]):not([class*="status-warning"]) .ant-select-selector {
-  border-color: var(--pixo-ink) !important;
+  border-color: var(--pixo-border) !important;
 }
 
 .pixo-ink-field:focus,
 .pixo-ink-field:focus-within {
-  box-shadow:
-    var(--pixo-shadow) var(--pixo-shadow) 0 var(--pixo-ink),
-    0 0 0 3px color-mix(in srgb, var(--pixo-primary) 45%, transparent) !important;
+  border-color: var(--pixo-primary) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pixo-primary) 28%, transparent) !important;
 }
 
 .pixo-ink-box,
 .pixo-ink-notice.ant-notification-notice,
-.pixo-ink-notice .ant-notification-notice {
-  border: var(--pixo-line) solid var(--pixo-ink) !important;
-  box-shadow: var(--pixo-shadow) var(--pixo-shadow) 0 var(--pixo-ink) !important;
-}
-
-.pixo-ink-border {
-  border: var(--pixo-line) solid var(--pixo-ink) !important;
+.pixo-ink-notice .ant-notification-notice,
+.pixo-ink-popup {
+  border: 1px solid var(--pixo-border) !important;
+  border-radius: var(--pixo-radius-lg) !important;
+  box-shadow: 0 12px 32px rgba(20, 16, 12, 0.16) !important;
 }
 
 .pixo-ink-popup {
-  border: var(--pixo-line) solid var(--pixo-ink) !important;
-  border-radius: var(--pixo-radius-lg) !important;
   background-color: var(--pixo-paper) !important;
-  box-shadow: var(--pixo-shadow) var(--pixo-shadow) 0 var(--pixo-ink) !important;
+}
+
+.pixo-ink-border {
+  border: 1px solid var(--pixo-border) !important;
+}
+
+.pixo-ink-segmented {
+  border: 1px solid var(--pixo-border) !important;
+  box-shadow: none !important;
 }
 
 .pixo-ink-title {
   font-weight: 600;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
 }
 
 .pixo-ink-tooltip {
@@ -83,15 +89,45 @@
 }
 
 .pixo-progress-rail {
-  border: var(--pixo-line) solid var(--pixo-ink) !important;
-  box-shadow: var(--pixo-shadow-sm) var(--pixo-shadow-sm) 0 var(--pixo-ink) !important;
+  border: 1px solid var(--pixo-border) !important;
+  box-shadow: none !important;
 }
 
 .pixo-progress-track {
   border: none !important;
 }
 
-.pixo-nav .ant-menu-item-selected {
-  outline: 2px solid var(--pixo-ink);
-  box-shadow: var(--pixo-shadow-sm) var(--pixo-shadow-sm) 0 var(--pixo-ink);
+.pixo-search {
+  background: var(--pixo-paper);
+  color: var(--pixo-muted);
+  box-shadow: inset 0 0 0 1px var(--pixo-border);
+}
+
+.pixo-search:hover {
+  color: var(--pixo-ink);
+}
+
+.pixo-search:focus-visible {
+  outline: 2px solid var(--pixo-primary);
+  outline-offset: 2px;
+}
+
+.pixo-search:active {
+  transform: scale(0.98);
+}
+
+.pixo-rail-item:not([aria-current="page"]):hover {
+  background: var(--pixo-hover);
+}
+
+.pixo-rail-item:focus-visible {
+  outline: 2px solid var(--pixo-primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pixo-ink-button.ant-btn:active,
+  .pixo-search:active {
+    transform: none;
+  }
 }

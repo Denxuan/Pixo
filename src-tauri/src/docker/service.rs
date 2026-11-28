@@ -7,14 +7,18 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bollard::Docker;
-use bollard::models::{ContainerCreateBody, ContainerStatsResponse, HostConfig, PortBinding};
+use bollard::models::{
+    ContainerCreateBody, ContainerStatsResponse, EndpointSettings, HostConfig, Mount,
+    MountBindOptions, MountType, Network, NetworkingConfig, PortBinding, RestartPolicy,
+    RestartPolicyNameEnum,
+};
 use bollard::query_parameters::{
     CreateContainerOptions, CreateImageOptionsBuilder, ListContainersOptionsBuilder,
     ListImagesOptionsBuilder, LogsOptionsBuilder, RemoveContainerOptionsBuilder,
     RemoveImageOptionsBuilder, RestartContainerOptionsBuilder, StatsOptionsBuilder,
     StopContainerOptionsBuilder,
 };
-use futures_util::StreamExt;
+use futures_util::{StreamExt, stream};
 use russh::client;
 use russh::{ChannelMsg, Disconnect};
 use russh_sftp::client::SftpSession;
@@ -33,10 +37,11 @@ use crate::ssh::dial::{self, ClientHandler};
 use super::compose::{self, ComposePreview, ComposeProject, LabeledContainer};
 use super::context::{self, ContextPreview};
 use super::error::{DockerError, log_docker};
+use super::hostdir;
 use super::model::{
     ContainerRow, ContainerUsage, DockerStatus, Endpoint, EndpointDraft, EndpointKind,
-    EngineSummary, ImageRow, NetworkRow, NormalizedEndpoint, VolumeRow, normalize,
-    parse_publish_list, split_command, valid_container_name, valid_image_ref, valid_resource_name,
+    EngineSummary, HostDirEntry, HostDirListing, ImageRow, NetworkRow, NormalizedEndpoint,
+    normalize, normalize_run, split_command, valid_image_ref, valid_resource_name,
 };
 use super::sockets::{self, SocketCandidate};
 use super::store::Store;
@@ -149,8 +154,10 @@ pub fn initialize(app: AppHandle) -> Result<DockerState, DockerError> {
 
 impl DockerState {
     pub fn status(&self) -> Result<DockerStatus, DockerError> {
+        let store = lock(&self.inner.store);
         Ok(DockerStatus {
-            enabled: lock(&self.inner.store).enabled()?,
+            enabled: store.enabled()?,
+            image_updates: store.image_updates()?,
         })
     }
 
@@ -178,6 +185,11 @@ impl DockerState {
         }
         let _ = self.inner.app.emit("docker://enabled", enabled);
         self.touch_menu();
+        self.status()
+    }
+
+    pub fn set_image_updates(&self, enabled: bool) -> Result<DockerStatus, DockerError> {
+        lock(&self.inner.store).set_image_updates(enabled)?;
         self.status()
     }
 
@@ -311,6 +323,81 @@ impl DockerState {
         read_summary(&docker, socket).await
     }
 
+    pub async fn mirrors(&self, endpoint_id: i64) -> Result<Vec<String>, DockerError> {
+        self.require()?;
+        let (docker, _) = self.client(endpoint_id)?;
+        let info = docker
+            .info()
+            .await
+            .map_err(|error| map_bollard(error, false))?;
+        Ok(configured_mirrors(&info))
+    }
+
+    pub async fn set_mirrors(
+        &self,
+        endpoint_id: i64,
+        requested: Vec<String>,
+    ) -> Result<(), DockerError> {
+        self.require()?;
+        let mirrors = super::mirrors::normalize_mirrors(&requested)?;
+        let endpoint = lock(&self.inner.store).get(endpoint_id)?;
+        let plan = {
+            let (docker, socket) = self.client(endpoint_id)?;
+            let info = docker
+                .info()
+                .await
+                .map_err(|error| map_bollard(error, false))?;
+            let version = docker
+                .version()
+                .await
+                .map_err(|error| map_bollard(error, false))?;
+            if podman_engine(&version) {
+                return Err(DockerError::new("mirror_unsupported"));
+            }
+            super::mirrors::daemon_plan(
+                endpoint.kind == EndpointKind::Local,
+                cfg!(target_os = "macos"),
+                info.os_type.as_deref().unwrap_or(""),
+                info.operating_system.as_deref().unwrap_or(""),
+                info.security_options.as_deref().unwrap_or(&[]),
+                socket.as_deref().unwrap_or(""),
+            )?
+        };
+        let current = self
+            .engine_shell(endpoint_id, &endpoint, &super::mirrors::read_script(&plan)?)
+            .await?;
+        let existing = super::mirrors::command_stdout(&current).map_err(|error| {
+            log_docker("mirrors", error.code);
+            error
+        })?;
+        let merged = super::mirrors::merge_daemon(&existing, &mirrors)?;
+        let script =
+            super::mirrors::write_script(&plan, &super::mirrors::encode_base64(merged.as_bytes()))?;
+        let wrote = self.engine_shell(endpoint_id, &endpoint, &script).await?;
+        if let Err(error) = super::mirrors::map_shell(wrote.status, &wrote.stderr) {
+            log_docker("mirrors", error.code);
+            return Err(error);
+        }
+        self.drop_client(endpoint_id);
+        Ok(())
+    }
+
+    async fn engine_shell(
+        &self,
+        endpoint_id: i64,
+        endpoint: &Endpoint,
+        script: &str,
+    ) -> Result<super::mirrors::ShellOutput, DockerError> {
+        match endpoint.kind {
+            EndpointKind::Local if cfg!(windows) => Err(DockerError::new("mirror_unsupported")),
+            EndpointKind::Local => local_shell(script.to_string()).await,
+            EndpointKind::Ssh => {
+                let session = self.ssh_session(endpoint_id)?;
+                remote_shell(&session, script).await
+            }
+        }
+    }
+
     pub async fn containers(&self, endpoint_id: i64) -> Result<Vec<ContainerRow>, DockerError> {
         self.require()?;
         let (docker, _) = self.client(endpoint_id)?;
@@ -372,6 +459,7 @@ impl DockerState {
                     .await
             }
             "remove" => {
+                self.keep_compose_of_container(endpoint_id, id).await?;
                 docker
                     .remove_container(
                         id,
@@ -473,6 +561,112 @@ impl DockerState {
         serde_json::to_value(value).map_err(|_| DockerError::new("api"))
     }
 
+    pub async fn image_updates(
+        &self,
+        endpoint_id: i64,
+        events: Channel<Value>,
+    ) -> Result<(), DockerError> {
+        self.require()?;
+        if !lock(&self.inner.store).image_updates()? {
+            return Err(DockerError::new("image_updates_off"));
+        }
+        let (docker, _) = self.client(endpoint_id)?;
+        let options = ListImagesOptionsBuilder::new().all(false).build();
+        let images = docker
+            .list_images(Some(options))
+            .await
+            .map_err(|error| map_bollard(error, false))?;
+        let mut jobs = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for image in images {
+            if jobs.len() == 32 {
+                break;
+            }
+            let digests = image.repo_digests;
+            for tag in image.repo_tags {
+                if jobs.len() == 32 {
+                    break;
+                }
+                if !valid_image_ref(&tag)
+                    || !super::updates::checkable_reference(&tag)
+                    || !seen.insert(tag.clone())
+                {
+                    continue;
+                }
+                let credentials = super::registry::credentials(&tag, None, None)
+                    .ok()
+                    .flatten();
+                jobs.push(RegistryCheck {
+                    tag,
+                    digests: digests.clone(),
+                    credentials,
+                });
+            }
+        }
+        let mut pending = stream::iter(jobs)
+            .map(|job| {
+                let docker = docker.clone();
+                async move {
+                    let state = registry_digest_state(&docker, &job).await;
+                    super::updates::ImageUpdate {
+                        reference: job.tag,
+                        state: state.to_string(),
+                    }
+                }
+            })
+            .buffer_unordered(4);
+        while let Some(update) = pending.next().await {
+            emit(
+                &events,
+                json!({
+                    "type": "update",
+                    "reference": update.reference,
+                    "state": update.state,
+                }),
+            );
+        }
+        Ok(())
+    }
+
+    pub async fn image_users(
+        &self,
+        endpoint_id: i64,
+        reference: &str,
+    ) -> Result<Vec<String>, DockerError> {
+        self.require()?;
+        if !lock(&self.inner.store).image_updates()? {
+            return Err(DockerError::new("image_updates_off"));
+        }
+        let reference = image_name(reference)?.to_string();
+        let (docker, _) = self.client(endpoint_id)?;
+        let inspected = docker
+            .inspect_image(&reference)
+            .await
+            .map_err(|error| map_bollard(error, false))?;
+        let image_id = inspected.id.unwrap_or_default();
+        let options = ListContainersOptionsBuilder::new().all(true).build();
+        let containers = docker
+            .list_containers(Some(options))
+            .await
+            .map_err(|error| map_bollard(error, false))?;
+        let uses = containers
+            .iter()
+            .map(|item| super::updates::ImageUse {
+                name: item
+                    .names
+                    .as_ref()
+                    .and_then(|names| names.first())
+                    .map(|name| name.trim_start_matches('/').to_string())
+                    .unwrap_or_default(),
+                image: item.image.clone().unwrap_or_default(),
+                image_id: item.image_id.clone().unwrap_or_default(),
+            })
+            .collect::<Vec<_>>();
+        Ok(super::updates::containers_using(
+            &reference, &image_id, &uses,
+        ))
+    }
+
     pub async fn image_remove(&self, endpoint_id: i64, name: &str) -> Result<(), DockerError> {
         self.require()?;
         let name = image_name(name)?;
@@ -487,32 +681,49 @@ impl DockerState {
     pub async fn image_run(
         &self,
         endpoint_id: i64,
-        image: &str,
-        name: &str,
-        ports: &str,
-        command: &str,
+        request: super::model::ContainerRunRequest,
     ) -> Result<String, DockerError> {
         self.require()?;
-        let image = image_name(image)?.to_string();
-        let name = optional_container_name(name)?;
-        let published = parse_publish_list(ports)?;
-        let command = split_command(command)?;
+        let run = normalize_run(request)?;
         let (docker, _) = self.client(endpoint_id)?;
-        let (exposed, bindings) = port_config(&published)?;
+        let (exposed, bindings) = port_config(&run.ports)?;
+        let restart = run.restart.as_deref().and_then(restart_policy);
+        let mounts = run_mounts(&run.mounts);
+        let has_mounts = !mounts.is_empty();
+        let network = run.network.clone();
+        let host_config =
+            (bindings.is_some() || network.is_some() || restart.is_some() || has_mounts).then(
+                || HostConfig {
+                    port_bindings: bindings,
+                    network_mode: network.clone(),
+                    restart_policy: restart,
+                    mounts: has_mounts.then_some(mounts),
+                    ..HostConfig::default()
+                },
+            );
+        let networking_config = network
+            .filter(|name| !matches!(name.as_str(), "host" | "none" | "bridge"))
+            .map(|name| {
+                let mut endpoints = HashMap::new();
+                endpoints.insert(name, EndpointSettings::default());
+                NetworkingConfig {
+                    endpoints_config: Some(endpoints),
+                }
+            });
         let created = docker
             .create_container(
                 Some(CreateContainerOptions {
-                    name,
+                    name: run.name,
                     platform: String::new(),
                 }),
                 ContainerCreateBody {
-                    image: Some(image),
-                    cmd: (!command.is_empty()).then_some(command),
+                    image: Some(run.image),
+                    cmd: (!run.command.is_empty()).then_some(run.command),
+                    env: (!run.env.is_empty()).then_some(run.env),
+                    working_dir: run.workdir,
                     exposed_ports: exposed,
-                    host_config: bindings.map(|port_bindings| HostConfig {
-                        port_bindings: Some(port_bindings),
-                        ..HostConfig::default()
-                    }),
+                    host_config,
+                    networking_config,
                     ..ContainerCreateBody::default()
                 },
             )
@@ -582,11 +793,20 @@ impl DockerState {
         let credentials = super::registry::credentials(&reference, username, password.as_deref())?;
         let (docker, _) = self.client(endpoint_id)?;
         self.spawn_task(endpoint_id, events, move |events, mut cancel| async move {
+            let previous = docker
+                .inspect_image(&reference)
+                .await
+                .ok()
+                .and_then(|image| image.id);
             let options = CreateImageOptionsBuilder::new().from_image(&reference).build();
             let mut stream = docker.create_image(Some(options), None, credentials);
+            let mut cancelled = false;
             loop {
                 tokio::select! {
-                    _ = cancel.wait_for(|stopped| *stopped) => break,
+                    _ = cancel.wait_for(|stopped| *stopped) => {
+                        cancelled = true;
+                        break;
+                    }
                     item = stream.next() => {
                         match item {
                             Some(Ok(info)) => {
@@ -606,6 +826,11 @@ impl DockerState {
                             None => break,
                         }
                     }
+                }
+            }
+            if !cancelled {
+                if let Some(previous) = previous.as_deref() {
+                    remove_replaced_image(&docker, &reference, previous).await;
                 }
             }
             emit(&events, json!({"type": "closed", "code": "ok", "params": {}}));
@@ -737,15 +962,7 @@ impl DockerState {
             .list_networks(None)
             .await
             .map_err(|error| map_bollard(error, false))?;
-        Ok(rows
-            .into_iter()
-            .map(|item| NetworkRow {
-                id: item.id.unwrap_or_default(),
-                name: item.name.unwrap_or_default(),
-                driver: item.driver.unwrap_or_default(),
-                scope: item.scope.unwrap_or_default(),
-            })
-            .collect())
+        Ok(rows.into_iter().map(network_row).collect())
     }
 
     pub async fn network_inspect(
@@ -773,48 +990,23 @@ impl DockerState {
             .map_err(|error| map_bollard(error, true))
     }
 
-    pub async fn volumes(&self, endpoint_id: i64) -> Result<Vec<VolumeRow>, DockerError> {
+    pub async fn list_host_dirs(
+        &self,
+        endpoint_id: i64,
+        path: &str,
+    ) -> Result<HostDirListing, DockerError> {
         self.require()?;
-        let (docker, _) = self.client(endpoint_id)?;
-        let listed = docker
-            .list_volumes(None::<bollard::query_parameters::ListVolumesOptions>)
-            .await
-            .map_err(|error| map_bollard(error, false))?;
-        Ok(listed
-            .volumes
-            .unwrap_or_default()
-            .into_iter()
-            .map(|item| VolumeRow {
-                name: item.name,
-                driver: item.driver,
-                mountpoint: item.mountpoint,
-                scope: item
-                    .scope
-                    .map(|scope| scope.to_string())
-                    .unwrap_or_default(),
-            })
-            .collect())
-    }
-
-    pub async fn volume_inspect(&self, endpoint_id: i64, name: &str) -> Result<Value, DockerError> {
-        self.require()?;
-        let name = resource_name(name)?;
-        let (docker, _) = self.client(endpoint_id)?;
-        let value = docker
-            .inspect_volume(name)
-            .await
-            .map_err(|error| map_bollard(error, false))?;
-        serde_json::to_value(value).map_err(|_| DockerError::new("api"))
-    }
-
-    pub async fn volume_remove(&self, endpoint_id: i64, name: &str) -> Result<(), DockerError> {
-        self.require()?;
-        let name = resource_name(name)?;
-        let (docker, _) = self.client(endpoint_id)?;
-        docker
-            .remove_volume(name, None::<bollard::query_parameters::RemoveVolumeOptions>)
-            .await
-            .map_err(|error| map_bollard(error, true))
+        if path.len() > 1024 || path.contains('\0') {
+            return Err(DockerError::new("invalid_input"));
+        }
+        let endpoint = lock(&self.inner.store).get(endpoint_id)?;
+        match endpoint.kind {
+            EndpointKind::Local => hostdir::list_local(path),
+            EndpointKind::Ssh => {
+                let session = self.ssh_session(endpoint_id)?;
+                list_remote_host_dirs(&session, path).await
+            }
+        }
     }
 
     pub async fn compose_projects(
@@ -823,7 +1015,13 @@ impl DockerState {
     ) -> Result<Vec<ComposeProject>, DockerError> {
         self.require()?;
         let saved = lock(&self.inner.store).list_compose(endpoint_id)?;
-        let recognized = self.recognize_compose(endpoint_id).await?;
+        let hidden = lock(&self.inner.store).list_hidden(endpoint_id)?;
+        let recognized = self
+            .recognize_compose(endpoint_id)
+            .await?
+            .into_iter()
+            .filter(|project| !compose::is_hidden(&hidden, &project.name, &project.config_path))
+            .collect::<Vec<_>>();
         Ok(compose::merge_projects(&saved, &recognized))
     }
 
@@ -939,7 +1137,7 @@ impl DockerState {
         if id <= 0 {
             return Err(DockerError::new("invalid_input"));
         }
-        lock(&self.inner.store).delete_compose(endpoint_id, id)
+        lock(&self.inner.store).forget_compose(endpoint_id, id)
     }
 
     pub async fn compose_action(
@@ -958,19 +1156,23 @@ impl DockerState {
     }
 
     pub async fn compose_remove(&self, endpoint_id: i64, name: &str) -> Result<(), DockerError> {
-        let (endpoint, project, location, id) = self.compose_target(endpoint_id, name).await?;
-        self.run_compose(
-            &endpoint,
-            endpoint_id,
-            compose::ComposeAction::Down,
-            &project,
-            &location,
-        )
-        .await?;
-        if let Some(id) = id {
-            lock(&self.inner.store).delete_compose(endpoint_id, id)?;
+        self.require()?;
+        let name = name.trim();
+        if !compose::valid_project_name(name) {
+            return Err(DockerError::new("invalid_input"));
         }
-        Ok(())
+        let saved = lock(&self.inner.store).list_compose(endpoint_id)?;
+        let recognized = self.recognize_compose(endpoint_id).await?;
+        let project = compose::merge_projects(&saved, &recognized)
+            .into_iter()
+            .find(|item| item.name.eq_ignore_ascii_case(name))
+            .ok_or_else(|| DockerError::new("not_found"))?;
+        lock(&self.inner.store).hide_compose(
+            endpoint_id,
+            project.id,
+            &project.name,
+            &project.config_path,
+        )
     }
 
     pub async fn compose_file(&self, endpoint_id: i64, name: &str) -> Result<String, DockerError> {
@@ -1054,6 +1256,53 @@ impl DockerState {
                 run_remote_compose(&session, command, action.failure_code()).await
             }
         }
+    }
+
+    async fn keep_compose_of_container(
+        &self,
+        endpoint_id: i64,
+        id: &str,
+    ) -> Result<(), DockerError> {
+        let (docker, _) = self.client(endpoint_id)?;
+        let inspected = docker
+            .inspect_container(id, None)
+            .await
+            .map_err(|error| map_bollard(error, false))?;
+        let config = inspected.config.unwrap_or_default();
+        let labels = config.labels.unwrap_or_default();
+        let service = labels
+            .get("com.docker.compose.service")
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default();
+        let image = config.image.unwrap_or_default();
+        let recognized = self.recognize_compose(endpoint_id).await?;
+        let saved = lock(&self.inner.store).list_compose(endpoint_id)?;
+        let hidden = lock(&self.inner.store).list_hidden(endpoint_id)?;
+        let Some(project) = compose::project_to_keep(&labels, &recognized, &saved, &hidden) else {
+            return Ok(());
+        };
+        let services = project
+            .services
+            .into_iter()
+            .map(|name| compose::ComposeService {
+                image: if !service.is_empty() && name.eq_ignore_ascii_case(&service) {
+                    image.clone()
+                } else {
+                    String::new()
+                },
+                name,
+                ports: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        lock(&self.inner.store).upsert_compose(
+            endpoint_id,
+            &project.name,
+            &project.config_path,
+            &project.working_dir,
+            &services,
+            now_millis(),
+        )?;
+        Ok(())
     }
 
     async fn recognize_compose(
@@ -1484,16 +1733,38 @@ fn resource_name(value: &str) -> Result<&str, DockerError> {
     }
 }
 
-fn optional_container_name(value: &str) -> Result<Option<String>, DockerError> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Ok(None);
-    }
-    if valid_container_name(value) {
-        Ok(Some(value.to_string()))
-    } else {
-        Err(DockerError::new("invalid_input"))
-    }
+fn restart_policy(name: &str) -> Option<RestartPolicy> {
+    let policy = match name {
+        "always" => RestartPolicyNameEnum::ALWAYS,
+        "unless-stopped" => RestartPolicyNameEnum::UNLESS_STOPPED,
+        "on-failure" => RestartPolicyNameEnum::ON_FAILURE,
+        _ => return None,
+    };
+    Some(RestartPolicy {
+        name: Some(policy),
+        maximum_retry_count: (name == "on-failure").then_some(3),
+    })
+}
+
+fn run_mounts(mounts: &[super::model::RunMount]) -> Vec<Mount> {
+    mounts
+        .iter()
+        .map(|item| Mount {
+            target: Some(item.target.clone()),
+            source: Some(item.source.clone()),
+            typ: Some(if item.bind {
+                MountType::BIND
+            } else {
+                MountType::VOLUME
+            }),
+            read_only: Some(item.read_only),
+            bind_options: item.bind.then_some(MountBindOptions {
+                create_mountpoint: Some(true),
+                ..MountBindOptions::default()
+            }),
+            ..Mount::default()
+        })
+        .collect()
 }
 
 fn exec_command(value: &str) -> Result<Vec<String>, DockerError> {
@@ -1507,6 +1778,30 @@ fn exec_command(value: &str) -> Result<Vec<String>, DockerError> {
         return Err(DockerError::new("invalid_input"));
     }
     Ok(args)
+}
+
+fn network_row(item: Network) -> NetworkRow {
+    let configs = item.ipam.as_ref().and_then(|ipam| ipam.config.as_ref());
+    let join = |pick: fn(&bollard::models::IpamConfig) -> &Option<String>| {
+        configs
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|row| pick(row).clone())
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
+    };
+    NetworkRow {
+        id: item.id.unwrap_or_default(),
+        name: item.name.unwrap_or_default(),
+        driver: item.driver.unwrap_or_default(),
+        scope: item.scope.unwrap_or_default(),
+        subnet: join(|row| &row.subnet),
+        gateway: join(|row| &row.gateway),
+        ipv6: item.enable_ipv6.unwrap_or(false),
+    }
 }
 
 fn port_config(
@@ -1619,6 +1914,65 @@ fn memory_limit(sample: &ContainerStatsResponse) -> Option<u64> {
     let memory = sample.memory_stats.as_ref()?;
     let limit = memory.limit?;
     (limit > 0 && limit < 1 << 60).then_some(limit)
+}
+
+struct RegistryCheck {
+    tag: String,
+    digests: Vec<String>,
+    credentials: Option<bollard::auth::DockerCredentials>,
+}
+
+async fn registry_digest_state(docker: &Docker, job: &RegistryCheck) -> &'static str {
+    match tokio::time::timeout(
+        Duration::from_secs(10),
+        docker.inspect_registry_image(&job.tag, job.credentials.clone()),
+    )
+    .await
+    {
+        Ok(Ok(info)) => super::updates::registry_state(
+            &job.tag,
+            &job.digests,
+            info.descriptor.digest.as_deref(),
+        ),
+        _ => super::updates::UNKNOWN,
+    }
+}
+
+async fn remove_replaced_image(docker: &Docker, reference: &str, previous_id: &str) {
+    let current_id = match docker.inspect_image(reference).await {
+        Ok(image) => image.id,
+        Err(_) => return,
+    };
+    let old = match docker.inspect_image(previous_id).await {
+        Ok(image) => image,
+        Err(_) => return,
+    };
+    let tags = old.repo_tags.unwrap_or_default();
+    let options = ListContainersOptionsBuilder::new().all(true).build();
+    let Ok(containers) = docker.list_containers(Some(options)).await else {
+        return;
+    };
+    let uses = containers
+        .into_iter()
+        .map(|item| super::updates::ImageUse {
+            name: item
+                .names
+                .as_ref()
+                .and_then(|names| names.first())
+                .map(|name| name.trim_start_matches('/').to_string())
+                .unwrap_or_default(),
+            image: item.image.unwrap_or_default(),
+            image_id: item.image_id.unwrap_or_default(),
+        })
+        .collect::<Vec<_>>();
+    let Some(id) =
+        super::updates::replaced_image_to_remove(previous_id, current_id.as_deref(), &tags, &uses)
+    else {
+        return;
+    };
+    let _ = docker
+        .remove_image(&id, Some(RemoveImageOptionsBuilder::new().build()), None)
+        .await;
 }
 
 fn image_name(value: &str) -> Result<&str, DockerError> {
@@ -1930,6 +2284,88 @@ async fn write_remote_text(sftp: &SftpSession, path: &str, text: &str) -> Result
     remote.close().await.map_err(|error| map_remote_io(&error))
 }
 
+async fn list_remote_host_dirs(
+    session: &AsyncMutex<Option<client::Handle<ClientHandler>>>,
+    raw: &str,
+) -> Result<HostDirListing, DockerError> {
+    let sftp = open_compose_sftp(session).await?;
+    let result = read_remote_dirs(&sftp, raw).await;
+    let _ = sftp.close().await;
+    result
+}
+
+async fn read_remote_dirs(sftp: &SftpSession, raw: &str) -> Result<HostDirListing, DockerError> {
+    let path = remote_browse_start(raw)?;
+    let listed = sftp.read_dir(&path).await.map_err(map_browse_sftp)?;
+    let mut entries = Vec::new();
+    let mut seen = 0;
+    for entry in listed {
+        seen += 1;
+        if seen > 4000 {
+            break;
+        }
+        let name = entry.file_name();
+        if !crate::ssh::remote::valid_component(&name) {
+            continue;
+        }
+        let child = remote_child(&path, &name, &entry.path());
+        let is_dir = match entry.file_type() {
+            FileType::Dir => true,
+            FileType::Symlink => match sftp.metadata(&child).await {
+                Ok(meta) => matches!(meta.file_type(), FileType::Dir),
+                Err(_) => false,
+            },
+            _ => false,
+        };
+        if is_dir {
+            entries.push(HostDirEntry { name, path: child });
+        }
+    }
+    entries.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    entries.truncate(500);
+    let parent = crate::ssh::remote::parent_remote(&path);
+    Ok(HostDirListing {
+        path,
+        parent,
+        entries,
+    })
+}
+
+fn remote_browse_start(raw: &str) -> Result<String, DockerError> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok("/".to_string());
+    }
+    crate::ssh::remote::normalize_absolute(raw).ok_or_else(|| DockerError::new("invalid_input"))
+}
+
+fn remote_child(dir: &str, name: &str, given: &str) -> String {
+    if given.starts_with('/') && !given.contains('\0') {
+        return given.to_string();
+    }
+    if dir == "/" {
+        format!("/{name}")
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+fn map_browse_sftp(error: russh_sftp::client::error::Error) -> DockerError {
+    use russh_sftp::client::error::Error;
+    match error {
+        Error::Status(status) => match status.status_code {
+            StatusCode::NoSuchFile => DockerError::new("dir_missing"),
+            StatusCode::PermissionDenied => DockerError::new("dir_denied"),
+            StatusCode::NoConnection | StatusCode::ConnectionLost => {
+                DockerError::new("disconnected")
+            }
+            _ => DockerError::new("unreachable"),
+        },
+        Error::Timeout => DockerError::new("timeout"),
+        _ => DockerError::new("unreachable"),
+    }
+}
+
 async fn open_compose_sftp(
     session: &AsyncMutex<Option<client::Handle<ClientHandler>>>,
 ) -> Result<SftpSession, DockerError> {
@@ -1984,6 +2420,108 @@ async fn run_remote_compose(
     finish_remote_status(status, failure)
 }
 
+async fn remote_shell(
+    session: &AsyncMutex<Option<client::Handle<ClientHandler>>>,
+    script: &str,
+) -> Result<super::mirrors::ShellOutput, DockerError> {
+    let mut channel = open_remote_command(session, script.to_string()).await?;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut status = None;
+    let mut truncated = false;
+    loop {
+        match channel.wait().await {
+            Some(ChannelMsg::Data { data }) => {
+                if stdout.len() + data.len() > 256 * 1024 {
+                    truncated = true;
+                } else {
+                    stdout.extend_from_slice(&data);
+                }
+            }
+            Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
+                let room = 8 * 1024usize.saturating_sub(stderr.len());
+                if room > 0 {
+                    let take = room.min(data.len());
+                    stderr.extend_from_slice(&data[..take]);
+                }
+            }
+            Some(message) => {
+                if remote_message_ends(&message, &mut status) {
+                    break;
+                }
+            }
+            None => break,
+        }
+    }
+    if truncated {
+        stdout.clear();
+    }
+    Ok(super::mirrors::ShellOutput {
+        status: status.map(|code| code as i32),
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        truncated,
+    })
+}
+
+async fn local_shell(script: String) -> Result<super::mirrors::ShellOutput, DockerError> {
+    tokio::task::spawn_blocking(move || run_local_shell(&script))
+        .await
+        .map_err(|_| DockerError::new("mirror_apply"))?
+}
+
+fn run_local_shell(script: &str) -> Result<super::mirrors::ShellOutput, DockerError> {
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|_| {
+            DockerError::new(if cfg!(windows) {
+                "mirror_unsupported"
+            } else {
+                "mirror_apply"
+            })
+        })?;
+    Ok(super::mirrors::capture(
+        output.status.code(),
+        &output.stdout,
+        &output.stderr,
+    ))
+}
+
+fn podman_engine(version: &bollard::models::SystemVersion) -> bool {
+    let component = version.components.as_ref().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item.name.to_ascii_lowercase().contains("podman"))
+    });
+    let platform = version
+        .platform
+        .as_ref()
+        .is_some_and(|item| item.name.to_ascii_lowercase().contains("podman"));
+    component || platform
+}
+
+fn configured_mirrors(info: &bollard::models::SystemInfo) -> Vec<String> {
+    let Some(config) = info.registry_config.as_ref() else {
+        return Vec::new();
+    };
+    if let Some(mirrors) = config
+        .mirrors
+        .as_ref()
+        .filter(|items| items.iter().any(|item| !item.trim().is_empty()))
+    {
+        return mirrors.clone();
+    }
+    config
+        .index_configs
+        .as_ref()
+        .and_then(|indexes| indexes.get("docker.io"))
+        .and_then(|index| index.mirrors.clone())
+        .unwrap_or_default()
+}
+
 async fn open_remote_command(
     session: &AsyncMutex<Option<client::Handle<ClientHandler>>>,
     command: String,
@@ -2009,12 +2547,28 @@ async fn wait_remote_status(channel: &mut russh::Channel<client::Msg>) -> Option
     let mut status = None;
     loop {
         match channel.wait().await {
-            Some(ChannelMsg::ExitStatus { exit_status }) => status = Some(exit_status),
-            Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
-            Some(_) => {}
+            Some(message) => {
+                if remote_message_ends(&message, &mut status) {
+                    break;
+                }
+            }
+            None => break,
         }
     }
     status
+}
+
+fn remote_message_ends(message: &ChannelMsg, status: &mut Option<u32>) -> bool {
+    match message {
+        ChannelMsg::ExitStatus { exit_status } => {
+            *status = Some(*exit_status);
+            false
+        }
+        // The server often closes stdout before it sends the exit status.
+        // Stopping at Eof reports a successful `compose up` as a failure.
+        ChannelMsg::Close => true,
+        _ => false,
+    }
 }
 
 fn finish_remote_status(status: Option<u32>, failure: &'static str) -> Result<(), DockerError> {
@@ -2179,21 +2733,17 @@ async fn stream_local_compose_logs(
     events: Channel<Value>,
     mut cancel: watch::Receiver<bool>,
 ) {
-    let mut command = match local_compose_command(
-        &endpoint,
-        &location,
-        &project,
-        compose::ComposeAction::Logs,
-    ) {
-        Ok(command) => command,
-        Err(error) => {
-            emit(
-                &events,
-                json!({"type": "closed", "code": error.code, "params": error.params}),
-            );
-            return;
-        }
-    };
+    let mut command =
+        match local_compose_command(&endpoint, &location, &project, compose::ComposeAction::Logs) {
+            Ok(command) => command,
+            Err(error) => {
+                emit(
+                    &events,
+                    json!({"type": "closed", "code": error.code, "params": error.params}),
+                );
+                return;
+            }
+        };
     command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -2434,4 +2984,23 @@ fn now_millis() -> i64 {
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remote_message_ends;
+    use russh::ChannelMsg;
+
+    #[test]
+    fn compose_exit_status_arrives_after_stdout_eof() {
+        let mut status = None;
+        assert!(!remote_message_ends(&ChannelMsg::Eof, &mut status));
+        assert!(status.is_none());
+        assert!(!remote_message_ends(
+            &ChannelMsg::ExitStatus { exit_status: 0 },
+            &mut status
+        ));
+        assert_eq!(status, Some(0));
+        assert!(remote_message_ends(&ChannelMsg::Close, &mut status));
+    }
 }

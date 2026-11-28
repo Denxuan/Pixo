@@ -6,7 +6,7 @@ import { useSharedSettings } from "@/hooks/useSharedSettings";
 import { useSettingsStore } from "@/stores/settings";
 import { isTrayIcon } from "@/components/icons/TrayMark";
 import { isDesktop } from "@/utils/desktop";
-import { ILLUSTRATION, illustrationConfig, illustrationPalette, isDarkTheme, SHELL_BACKGROUND } from "@/utils/theme";
+import { ACCENT, ILLUSTRATION, illustrationConfig, illustrationPalette, isDarkTheme, SHELL_BACKGROUND } from "@/utils/theme";
 
 const ClipboardPanel = lazy(() => import("@/pages/ClipboardPanel"));
 const ScreenshotOverlay = lazy(() => import("@/pages/ScreenshotOverlay"));
@@ -48,7 +48,7 @@ function themeProps(illustrated: boolean, dark: boolean) {
 function IllustrationVars({ active, canvas, dark }: { active: boolean; canvas: boolean; dark: boolean }) {
   useLayoutEffect(() => {
     const root = document.documentElement;
-    const names = ["--pixo-ink", "--pixo-line", "--pixo-radius", "--pixo-radius-lg", "--pixo-paper", "--pixo-primary", "--pixo-sider", "--pixo-shadow", "--pixo-shadow-sm"];
+    const names = ["--pixo-ink", "--pixo-muted", "--pixo-line", "--pixo-radius", "--pixo-radius-lg", "--pixo-paper", "--pixo-primary", "--pixo-sider", "--pixo-border", "--pixo-hover", "--pixo-shadow", "--pixo-shadow-sm"];
     if (!active) {
       for (const name of names) root.style.removeProperty(name);
       root.style.removeProperty("background");
@@ -57,12 +57,15 @@ function IllustrationVars({ active, canvas, dark }: { active: boolean; canvas: b
     }
     const palette = illustrationPalette(dark);
     root.style.setProperty("--pixo-ink", palette.ink);
+    root.style.setProperty("--pixo-muted", palette.muted);
     root.style.setProperty("--pixo-line", `${ILLUSTRATION.line}px`);
     root.style.setProperty("--pixo-radius", `${ILLUSTRATION.radius}px`);
     root.style.setProperty("--pixo-radius-lg", `${ILLUSTRATION.radiusLG}px`);
     root.style.setProperty("--pixo-paper", palette.container);
-    root.style.setProperty("--pixo-primary", "#52C41A");
+    root.style.setProperty("--pixo-primary", ACCENT);
     root.style.setProperty("--pixo-sider", palette.sider);
+    root.style.setProperty("--pixo-border", palette.stroke);
+    root.style.setProperty("--pixo-hover", palette.hoverBg);
     root.style.setProperty("--pixo-shadow", `${ILLUSTRATION.shadow}px`);
     root.style.setProperty("--pixo-shadow-sm", `${ILLUSTRATION.shadowSm}px`);
     if (canvas) root.style.background = palette.paper;

@@ -12,6 +12,7 @@ declare global {
   const Alert: typeof import('antd').Alert
   const ApiOutlined: typeof import('@ant-design/icons').ApiOutlined
   const AppstoreOutlined: typeof import('@ant-design/icons').AppstoreOutlined
+  const ArrowUpOutlined: typeof import('@ant-design/icons').ArrowUpOutlined
   const AutoComplete: typeof import('antd').AutoComplete
   const Avatar: typeof import('antd').Avatar
   const BorderOuterOutlined: typeof import('@ant-design/icons').BorderOuterOutlined
@@ -41,6 +42,7 @@ declare global {
   const FileTextOutlined: typeof import('@ant-design/icons').FileTextOutlined
   const Flex: typeof import('antd').Flex
   const FolderOpenOutlined: typeof import('@ant-design/icons').FolderOpenOutlined
+  const FolderOutlined: typeof import('@ant-design/icons').FolderOutlined
   const FontColorsOutlined: typeof import('@ant-design/icons').FontColorsOutlined
   const FontSizeOutlined: typeof import('@ant-design/icons').FontSizeOutlined
   const Form: typeof import('antd').Form
@@ -85,10 +87,12 @@ declare global {
   const SettingOutlined: typeof import('@ant-design/icons').SettingOutlined
   const Space: typeof import('antd').Space
   const Spin: typeof import('antd').Spin
+  const Steps: typeof import('antd').Steps
   const StopOutlined: typeof import('@ant-design/icons').StopOutlined
   const StrictMode: typeof import('react').StrictMode
   const Suspense: typeof import('react').Suspense
   const Switch: typeof import('antd').Switch
+  const SyncOutlined: typeof import('@ant-design/icons').SyncOutlined
   const Table: typeof import('antd').Table
   const Tabs: typeof import('antd').Tabs
   const Tag: typeof import('antd').Tag

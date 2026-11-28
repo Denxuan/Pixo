@@ -100,7 +100,6 @@ export default function ScreenshotSettingsPage() {
 
   return (
     <Flex vertical gap={16}>
-      <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("zdx.text.screenshot.settingsDescription")}</Typography.Paragraph>
       {error && <Alert type="error" showIcon message={error} />}
       {!desktop && <Alert type="info" showIcon message={t("zdx.text.screenshot.desktopOnly")} />}
       {desktop && loading && (

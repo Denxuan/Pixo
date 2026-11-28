@@ -137,10 +137,7 @@ export default function ClipboardSettingsPage() {
 
   return (
     <Flex vertical gap={16}>
-      <div className="min-w-0">
-        <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("zdx.text.clipboard.settingsDescription")}</Typography.Paragraph>
-        {status && <Typography.Paragraph type="secondary" style={{ marginBottom: 0, wordBreak: "break-all" }}>{t("zdx.text.clipboard.storagePath", { path: status.storagePath })}</Typography.Paragraph>}
-      </div>
+      {status && <Typography.Paragraph type="secondary" style={{ marginBottom: 0, wordBreak: "break-all" }}>{t("zdx.text.clipboard.storagePath", { path: status.storagePath })}</Typography.Paragraph>}
 
       {confirmCount !== null && (
         <Alert

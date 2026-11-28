@@ -73,7 +73,7 @@ export default function TerminalAppearance({ open, onClose }: { open: boolean; o
           <SettingRow label={t("zdx.label.ssh.theme")} description={t("zdx.text.ssh.themeHint")}>
             <Select
               aria-label={t("zdx.label.ssh.theme")}
-              className="w-40"
+              className="w-44"
               value={appearance.themeId}
               onChange={(value) => appearance.setThemeId(value as SshThemeId)}
               options={sshThemes.map((theme) => ({ value: theme, label: t(`zdx.label.ssh.theme${theme[0].toUpperCase()}${theme.slice(1)}`) }))}

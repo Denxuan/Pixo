@@ -6,26 +6,29 @@ import type { ThemeMode } from "../stores/settings";
 const FONT = "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei UI\", \"Microsoft YaHei\", \"Noto Sans CJK SC\", Ubuntu, Cantarell, sans-serif";
 
 export const ILLUSTRATION = {
-  line: 3,
-  radius: 12,
-  radiusLG: 16,
-  radiusSM: 8,
-  shadow: 4,
-  shadowSm: 2,
-  controlHeight: 40,
-  controlHeightSM: 34,
-  controlHeightLG: 48,
+  line: 1,
+  radius: 8,
+  radiusLG: 12,
+  radiusSM: 6,
+  shadow: 2,
+  shadowSm: 1,
+  controlHeight: 32,
+  controlHeightSM: 28,
+  controlHeightLG: 40,
 } as const;
 
 type Palette = {
   ink: string;
   text: string;
+  muted: string;
   paper: string;
   container: string;
   elevated: string;
   sider: string;
   trigger: string;
   card: string;
+  stroke: string;
+  strokeSoft: string;
   slider: string;
   progressRemaining: string;
   tooltipBg: string;
@@ -38,8 +41,10 @@ type Palette = {
   notifyWarning: string;
 };
 
+export const ACCENT = "#1677FF";
+
 const CRAYON = {
-  primary: "#52C41A",
+  primary: ACCENT,
   success: "#51CF66",
   warning: "#FFD93D",
   error: "#FA5252",
@@ -47,20 +52,23 @@ const CRAYON = {
 } as const;
 
 const LIGHT: Palette = {
-  ink: "#2C2C2C",
-  text: "#2C2C2C",
-  paper: "#FFF9F0",
-  container: "#FFFFFF",
+  ink: "#241F1B",
+  text: "#241F1B",
+  muted: "#7A7268",
+  paper: "#F3EEE6",
+  container: "#FBF9F6",
   elevated: "#FFFFFF",
-  sider: "#FFF0F6",
-  trigger: "#FFE7BA",
-  card: "#FFF0F6",
-  slider: "#237804",
-  progressRemaining: "#D9F7BE",
-  tooltipBg: "rgba(100, 100, 100, 0.95)",
+  sider: "#E7E0D4",
+  trigger: "#DDD4C6",
+  card: "#FFFFFF",
+  stroke: "#D5CBBC",
+  strokeSoft: "#E4DCD0",
+  slider: "#0958D9",
+  progressRemaining: "#BAE0FF",
+  tooltipBg: "rgba(36, 31, 27, 0.92)",
   selectedBg: "#FFFFFF",
-  selectedText: "#2C2C2C",
-  hoverBg: "rgba(44, 44, 44, 0.06)",
+  selectedText: "#241F1B",
+  hoverBg: "rgba(36, 31, 27, 0.06)",
   notifySuccess: "#F6FFED",
   notifyError: "#FFF1F0",
   notifyInfo: "#E6F4FF",
@@ -68,20 +76,23 @@ const LIGHT: Palette = {
 };
 
 const DARK: Palette = {
-  ink: "#F4E7D4",
-  text: "#F4E7D4",
-  paper: "#1C1612",
-  container: "#2A221C",
-  elevated: "#342820",
-  sider: "#3A2832",
-  trigger: "#4A3424",
-  card: "#3A2832",
-  slider: "#95DE64",
-  progressRemaining: "#274916",
-  tooltipBg: "rgba(42, 34, 28, 0.96)",
-  selectedBg: "#F4E7D4",
-  selectedText: "#2C2C2C",
-  hoverBg: "rgba(244, 231, 212, 0.12)",
+  ink: "#EDE6DA",
+  text: "#EDE6DA",
+  muted: "#A79B8C",
+  paper: "#100E0C",
+  container: "#1C1916",
+  elevated: "#26221E",
+  sider: "#141210",
+  trigger: "#2A2520",
+  card: "#26221E",
+  stroke: "#3F382F",
+  strokeSoft: "#2E2924",
+  slider: "#69B1FF",
+  progressRemaining: "#15325B",
+  tooltipBg: "rgba(20, 18, 16, 0.96)",
+  selectedBg: "#312C27",
+  selectedText: "#EDE6DA",
+  hoverBg: "rgba(237, 230, 218, 0.08)",
   notifySuccess: "#162312",
   notifyError: "#2A1215",
   notifyInfo: "#111A2C",
@@ -102,11 +113,11 @@ export function inkShadow(color: string, offset: number = ILLUSTRATION.shadow): 
   return `${offset}px ${offset}px 0 ${color}`;
 }
 
-export function inkFrameStyle(token: { lineWidth: number; colorBorder: string }, radius: number, offset: number = ILLUSTRATION.shadow): CSSProperties {
+export function inkFrameStyle(token: { lineWidth: number; colorBorder: string }, radius: number, offset: number = 0): CSSProperties {
   return {
     border: `${token.lineWidth}px solid ${token.colorBorder}`,
     borderRadius: radius,
-    boxShadow: inkShadow(token.colorBorder, offset),
+    boxShadow: offset > 0 ? inkShadow(token.colorBorder, offset) : "none",
   };
 }
 
@@ -121,15 +132,17 @@ export function appTheme(dark: boolean): Omit<ThemeConfig, "algorithm"> {
       colorInfo: CRAYON.info,
       colorTextBase: palette.text,
       colorText: palette.text,
-      colorBorder: palette.ink,
-      colorBorderSecondary: palette.ink,
+      colorTextSecondary: palette.muted,
+      colorLink: ACCENT,
+      colorBorder: palette.stroke,
+      colorBorderSecondary: palette.strokeSoft,
       colorBgBase: palette.paper,
       colorBgLayout: palette.paper,
       colorBgContainer: palette.container,
       colorBgElevated: palette.elevated,
       colorTextLightSolid: "#FFFFFF",
       fontFamily: FONT,
-      fontSize: 15,
+      fontSize: 14,
       fontWeightStrong: 600,
       lineWidth: ILLUSTRATION.line,
       lineWidthBold: ILLUSTRATION.line,
@@ -145,15 +158,15 @@ export function appTheme(dark: boolean): Omit<ThemeConfig, "algorithm"> {
         primaryShadow: "none",
         dangerShadow: "none",
         defaultShadow: "none",
-        fontWeight: 600,
+        fontWeight: 500,
       },
       Modal: { boxShadow: "none" },
       Card: {
-        boxShadow: inkShadow(palette.ink),
+        boxShadow: "none",
         colorBgContainer: palette.card,
       },
       Tooltip: {
-        colorBorder: palette.ink,
+        colorBorder: palette.stroke,
         colorBgSpotlight: palette.tooltipBg,
         borderRadius: ILLUSTRATION.radiusSM,
       },
@@ -186,12 +199,12 @@ export function appTheme(dark: boolean): Omit<ThemeConfig, "algorithm"> {
         activeBarBorderWidth: 0,
         itemBg: "transparent",
         subMenuItemBg: "transparent",
-        itemHeight: 40,
+        itemHeight: 36,
         itemMarginInline: 8,
-        itemMarginBlock: 4,
+        itemMarginBlock: 2,
         itemBorderRadius: ILLUSTRATION.radius,
         groupTitleFontSize: 12,
-        groupTitleColor: palette.text,
+        groupTitleColor: palette.muted,
         itemColor: palette.text,
         itemHoverColor: palette.text,
         itemHoverBg: palette.hoverBg,
@@ -199,14 +212,14 @@ export function appTheme(dark: boolean): Omit<ThemeConfig, "algorithm"> {
         itemSelectedColor: palette.selectedText,
         darkItemBg: "transparent",
         darkSubMenuItemBg: "transparent",
-        darkGroupTitleColor: palette.text,
+        darkGroupTitleColor: palette.muted,
         darkItemColor: palette.text,
         darkItemHoverColor: palette.text,
         darkItemHoverBg: palette.hoverBg,
         darkItemSelectedBg: palette.selectedBg,
         darkItemSelectedColor: palette.selectedText,
       },
-      Tabs: { horizontalMargin: "0 0 20px 0" },
+      Tabs: { horizontalMargin: "0 0 16px 0" },
       Alert: { withDescriptionPadding: "12px 16px" },
       Progress: {
         circleTextColor: palette.text,
@@ -253,7 +266,7 @@ export function illustrationConfig(dark: boolean): Omit<ConfigProviderProps, "ch
     inputNumber: {
       classNames: { root: "pixo-ink-field", actions: "pixo-ink-actions" },
     },
-    segmented: { classNames: { root: "pixo-ink-box" } },
+    segmented: { classNames: { root: "pixo-ink-segmented" } },
     progress: {
       classNames: { rail: "pixo-progress-rail", track: "pixo-progress-track" },
       styles: { rail: { height: 16 }, track: { height: 10 } },

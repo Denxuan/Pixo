@@ -18,6 +18,7 @@ import { dockerErrorText } from "@/utils/dockerMessage";
 export default function DockerPage() {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [imageUpdates, setImageUpdates] = useState(false);
   const [endpoints, setEndpoints] = useState<DockerEndpoint[]>([]);
   const [hosts, setHosts] = useState<SshHost[]>([]);
   const [sshEnabled, setSshEnabled] = useState(false);
@@ -29,10 +30,12 @@ export default function DockerPage() {
   const [editing, setEditing] = useState<DockerEndpoint | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [note, setNote] = useState("");
   const ticket = useRef(0);
   const launchedEndpoint = useRef<number | null>(null);
   const phaseRef = useRef("");
   const reviving = useRef(false);
+  const holdRenew = useRef(false);
   const connectRef = useRef<(endpoint: DockerEndpoint) => Promise<void>>(async () => undefined);
   const location = useLocation();
   const navigate = useNavigate();
@@ -48,6 +51,7 @@ export default function DockerPage() {
         .catch(() => ({ enabled: false, hosts: [] as SshHost[] })),
     ]);
     setEnabled(status.enabled);
+    setImageUpdates(status.imageUpdates);
     setEndpoints(listed);
     setSshEnabled(ssh.enabled);
     setHosts(ssh.hosts);
@@ -123,7 +127,10 @@ export default function DockerPage() {
     }
     setPhase("connecting");
     const previous = selectedId;
-    if (previous && previous !== endpoint.id) void dockerDisconnect(previous).catch(() => undefined);
+    if (previous && previous !== endpoint.id) {
+      setNote("");
+      void dockerDisconnect(previous).catch(() => undefined);
+    }
     const events = new Channel<DockerConnectEvent>();
     const pending: DockerConnectEvent[] = [];
     const gate = { id: 0 };
@@ -173,6 +180,7 @@ export default function DockerPage() {
 
   useEffect(() => {
     if (phase !== "connecting") reviving.current = false;
+    if (phase === "ready") holdRenew.current = false;
   }, [phase]);
 
   useEffect(() => {
@@ -181,6 +189,7 @@ export default function DockerPage() {
     if (!endpoint) return;
     let stopped = false;
     const timer = window.setInterval(() => {
+      if (holdRenew.current) return;
       void dockerRenew(endpoint.id).catch((caught: unknown) => {
         if (stopped) return;
         if (caught instanceof DockerRequestError && (caught.code === "disconnected" || caught.code === "unreachable" || caught.code === "timeout")) {
@@ -257,11 +266,12 @@ export default function DockerPage() {
         {selected && phase === "connecting" && (
           <div className="flex flex-1 flex-col items-center justify-center gap-3">
             <Spin />
-            <span>{t("zdx.text.docker.connecting")}</span>
+            <span>{note || t("zdx.text.docker.connecting")}</span>
           </div>
         )}
         {selected && phase === "closed" && (
-          <div className="flex flex-1 items-center justify-center p-6">
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6">
+            {note && <Alert className="max-w-md" type="success" showIcon message={note} />}
             <Empty description={error || t("zdx.text.docker.unreachableTitle")}>
               {selected.kind === "ssh" && !sshEnabled ? (
                 <Button onClick={() => navigate("/settings/ssh")}>{t("zdx.label.docker.openSsh")}</Button>
@@ -271,7 +281,19 @@ export default function DockerPage() {
             </Empty>
           </div>
         )}
-        {selected && phase === "ready" && summary && <ResourcePanel endpointId={selected.id} summary={summary} host={containerHost(selected, hosts)} onLost={() => revive(selected)} />}
+        {selected && phase === "ready" && summary && (
+          <ResourcePanel
+            endpointId={selected.id}
+            summary={summary}
+            host={containerHost(selected, hosts)}
+            imageUpdates={imageUpdates}
+            note={note}
+            onNoteClear={() => setNote("")}
+            onMirrorsSaved={() => setNote(t("zdx.text.docker.mirrorsSaved"))}
+            onRenewHold={(held) => { holdRenew.current = held; }}
+            onLost={() => revive(selected)}
+          />
+        )}
       </section>
         )}
       />
@@ -283,6 +305,7 @@ export default function DockerPage() {
         sshEnabled={sshEnabled}
         onClose={() => setFormOpen(false)}
         onSaved={() => { setFormOpen(false); void reload(); }}
+        onHostSaved={(host) => setHosts((rows) => [...rows.filter((item) => item.id !== host.id), host])}
       />
       <ImportContexts open={importOpen} onClose={() => setImportOpen(false)} onImported={() => { setImportOpen(false); void reload(); }} />
       <SessionPrompt

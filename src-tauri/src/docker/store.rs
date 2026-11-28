@@ -75,6 +75,20 @@ impl Store {
             conn.pragma_update(None, "user_version", 3)
                 .map_err(storage)?;
         }
+        if version < 4 {
+            conn.execute_batch(
+                "ALTER TABLE docker_compose_projects ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
+                 CREATE TABLE IF NOT EXISTS docker_compose_hidden (
+                   endpoint_id INTEGER NOT NULL,
+                   name TEXT NOT NULL,
+                   config_path TEXT NOT NULL,
+                   PRIMARY KEY (endpoint_id, name, config_path)
+                 );",
+            )
+            .map_err(storage)?;
+            conn.pragma_update(None, "user_version", 4)
+                .map_err(storage)?;
+        }
         Ok(Self { conn })
     }
 
@@ -83,14 +97,15 @@ impl Store {
     }
 
     pub fn set_enabled(&self, enabled: bool) -> Result<(), DockerError> {
-        self.conn
-            .execute(
-                "INSERT INTO docker_settings (key, value) VALUES ('enabled', ?1)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                params![if enabled { "true" } else { "false" }],
-            )
-            .map(|_| ())
-            .map_err(storage)
+        self.set_bool("enabled", enabled)
+    }
+
+    pub fn image_updates(&self) -> Result<bool, DockerError> {
+        self.bool_setting("image_updates", true)
+    }
+
+    pub fn set_image_updates(&self, enabled: bool) -> Result<(), DockerError> {
+        self.set_bool("image_updates", enabled)
     }
 
     pub fn list(&self) -> Result<Vec<Endpoint>, DockerError> {
@@ -194,6 +209,12 @@ impl Store {
                 params![id],
             )
             .map_err(storage)?;
+        self.conn
+            .execute(
+                "DELETE FROM docker_compose_hidden WHERE endpoint_id = ?1",
+                params![id],
+            )
+            .map_err(storage)?;
         Ok(())
     }
 
@@ -203,7 +224,7 @@ impl Store {
             .prepare(
                 "SELECT id, name, config_path, working_dir, services
                  FROM docker_compose_projects
-                 WHERE endpoint_id = ?1
+                 WHERE endpoint_id = ?1 AND hidden = 0
                  ORDER BY name, id",
             )
             .map_err(storage)?;
@@ -240,10 +261,12 @@ impl Store {
                  ON CONFLICT(endpoint_id, config_path) DO UPDATE SET
                    name = excluded.name,
                    working_dir = excluded.working_dir,
-                   services = excluded.services",
+                   services = excluded.services,
+                   hidden = 0",
                 params![endpoint_id, name, config_path, working_dir, services_json, now],
             )
             .map_err(storage)?;
+        self.unhide_compose(endpoint_id, name, config_path)?;
         self.conn
             .query_row(
                 "SELECT id, name, config_path, working_dir, services FROM docker_compose_projects WHERE endpoint_id = ?1 AND config_path = ?2",
@@ -262,18 +285,110 @@ impl Store {
             .map_err(storage)
     }
 
-    pub fn delete_compose(&self, endpoint_id: i64, id: i64) -> Result<(), DockerError> {
-        let changed = self
-            .conn
-            .execute(
-                "DELETE FROM docker_compose_projects WHERE endpoint_id = ?1 AND id = ?2",
-                params![endpoint_id, id],
-            )
-            .map_err(storage)?;
-        if changed == 0 {
-            return Err(DockerError::new("not_found"));
+    pub fn hide_compose(
+        &self,
+        endpoint_id: i64,
+        id: Option<i64>,
+        name: &str,
+        config_path: &str,
+    ) -> Result<(), DockerError> {
+        let name = name.trim();
+        let config_path = config_path.trim();
+        if name.is_empty() && config_path.is_empty() {
+            return Err(DockerError::new("invalid_input"));
+        }
+        if let Some(id) = id {
+            self.conn
+                .execute(
+                    "UPDATE docker_compose_projects SET hidden = 1 WHERE endpoint_id = ?1 AND id = ?2",
+                    params![endpoint_id, id],
+                )
+                .map_err(storage)?;
+        }
+        if !name.is_empty() {
+            self.conn
+                .execute(
+                    "UPDATE docker_compose_projects SET hidden = 1
+                     WHERE endpoint_id = ?1 AND name = ?2 COLLATE NOCASE",
+                    params![endpoint_id, name],
+                )
+                .map_err(storage)?;
+            self.insert_hidden(endpoint_id, name, "")?;
+        }
+        if !config_path.is_empty() && !config_path.starts_with("engine://") {
+            self.insert_hidden(endpoint_id, "", config_path)?;
         }
         Ok(())
+    }
+
+    pub fn list_hidden(&self, endpoint_id: i64) -> Result<Vec<(String, String)>, DockerError> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT name, config_path FROM docker_compose_hidden WHERE endpoint_id = ?1")
+            .map_err(storage)?;
+        let rows = statement
+            .query_map(params![endpoint_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(storage)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(storage)
+    }
+
+    fn insert_hidden(
+        &self,
+        endpoint_id: i64,
+        name: &str,
+        config_path: &str,
+    ) -> Result<(), DockerError> {
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO docker_compose_hidden (endpoint_id, name, config_path)
+                 VALUES (?1, ?2, ?3)",
+                params![endpoint_id, name, config_path],
+            )
+            .map(|_| ())
+            .map_err(storage)
+    }
+
+    fn unhide_compose(
+        &self,
+        endpoint_id: i64,
+        name: &str,
+        config_path: &str,
+    ) -> Result<(), DockerError> {
+        self.conn
+            .execute(
+                "DELETE FROM docker_compose_hidden
+                 WHERE endpoint_id = ?1
+                   AND ((name != '' AND name = ?2 COLLATE NOCASE)
+                     OR (config_path != '' AND config_path = ?3))",
+                params![endpoint_id, name, config_path],
+            )
+            .map(|_| ())
+            .map_err(storage)
+    }
+
+    pub fn forget_compose(&self, endpoint_id: i64, id: i64) -> Result<(), DockerError> {
+        let found = self
+            .conn
+            .query_row(
+                "SELECT name, config_path FROM docker_compose_projects WHERE endpoint_id = ?1 AND id = ?2",
+                params![endpoint_id, id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(storage)?
+            .ok_or_else(|| DockerError::new("not_found"))?;
+        self.hide_compose(endpoint_id, Some(id), &found.0, &found.1)
+    }
+
+    fn set_bool(&self, key: &str, enabled: bool) -> Result<(), DockerError> {
+        self.conn
+            .execute(
+                "INSERT INTO docker_settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, if enabled { "true" } else { "false" }],
+            )
+            .map(|_| ())
+            .map_err(storage)
     }
 
     fn bool_setting(&self, key: &str, default: bool) -> Result<bool, DockerError> {

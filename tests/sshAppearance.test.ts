@@ -4,15 +4,18 @@ import {
   clampLineHeight,
   clampScrollback,
   defaultSshPalette,
+  normalizeThemeId,
   resolvePalette,
   terminalFontFamily,
 } from "@/utils/sshAppearance";
 import { expect, test } from "vitest";
 
-test("follow uses ink in dark mode and paper in light mode", () => {
-  expect(resolvePalette("follow", defaultSshPalette, true).background).toBe("#101012");
-  expect(resolvePalette("follow", defaultSshPalette, false).background).toBe("#fbfbfc");
-  expect(resolvePalette("sea", defaultSshPalette, false).cyan).toBe("#7fd3d0");
+test("follow uses the dark scheme in dark mode and the light scheme otherwise", () => {
+  expect(resolvePalette("follow", defaultSshPalette, true).background).toBe("#0c0c0c");
+  expect(resolvePalette("follow", defaultSshPalette, false).background).toBe("#fafafa");
+  expect(resolvePalette("green", defaultSshPalette, false).foreground).toBe("#00ff00");
+  expect(normalizeThemeId("grove")).toBe("green");
+  expect(normalizeThemeId("ink")).toBe("dark");
 });
 
 test("a broken custom color falls back to the ink palette", () => {

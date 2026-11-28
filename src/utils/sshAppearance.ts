@@ -23,107 +23,197 @@ export const sshPaletteKeys = [
 
 export type SshPaletteKey = (typeof sshPaletteKeys)[number];
 export type SshPalette = Record<SshPaletteKey, string>;
-export type SshThemeId = "follow" | "ink" | "day" | "sea" | "grove" | "custom";
+export type SshThemeId = "follow" | "dark" | "light" | "green" | "solarizedDark" | "solarizedLight" | "dracula" | "nord" | "custom";
 export type SshFontId = "system" | "menlo" | "consolas" | "cascadia" | "jetbrains" | "fira" | "sarasa" | "custom";
 export type SshCursorStyle = "block" | "bar" | "underline";
 
-export const sshThemes: SshThemeId[] = ["follow", "ink", "day", "sea", "grove", "custom"];
+export const sshThemes: SshThemeId[] = ["follow", "dark", "light", "green", "solarizedDark", "solarizedLight", "dracula", "nord", "custom"];
 export const sshFonts: SshFontId[] = ["system", "menlo", "consolas", "cascadia", "jetbrains", "fira", "sarasa", "custom"];
 export const sshCursorStyles: SshCursorStyle[] = ["block", "bar", "underline"];
 
-const ink: SshPalette = {
-  background: "#101012",
-  foreground: "#e8e8ed",
-  cursor: "#e8e8ed",
-  selection: "#3d4ad6",
-  black: "#3a3a40",
-  red: "#ff6b6b",
-  green: "#3dd68c",
-  yellow: "#f5c451",
-  blue: "#7aa2f7",
-  magenta: "#c792ea",
-  cyan: "#5fd0d0",
-  white: "#d6d6dc",
-  brightBlack: "#6e6e76",
-  brightRed: "#ff8d8d",
-  brightGreen: "#6ee7ad",
-  brightYellow: "#ffd56a",
-  brightBlue: "#9cbcff",
-  brightMagenta: "#ddb4f5",
-  brightCyan: "#8ae4e4",
+const darkPalette: SshPalette = {
+  background: "#0c0c0c",
+  foreground: "#cccccc",
+  cursor: "#ffffff",
+  selection: "#264f78",
+  black: "#0c0c0c",
+  red: "#c50f1f",
+  green: "#13a10e",
+  yellow: "#c19c00",
+  blue: "#0037da",
+  magenta: "#881798",
+  cyan: "#3a96dd",
+  white: "#cccccc",
+  brightBlack: "#767676",
+  brightRed: "#e74856",
+  brightGreen: "#16c60c",
+  brightYellow: "#f9f1a5",
+  brightBlue: "#3b78ff",
+  brightMagenta: "#b4009e",
+  brightCyan: "#61d6d6",
+  brightWhite: "#f2f2f2",
+};
+
+const lightPalette: SshPalette = {
+  background: "#fafafa",
+  foreground: "#383a42",
+  cursor: "#526fff",
+  selection: "#bfceff",
+  black: "#383a42",
+  red: "#e45649",
+  green: "#50a14f",
+  yellow: "#c18401",
+  blue: "#0184bc",
+  magenta: "#a626a4",
+  cyan: "#0997b3",
+  white: "#fafafa",
+  brightBlack: "#4f525e",
+  brightRed: "#e06c75",
+  brightGreen: "#98c379",
+  brightYellow: "#e5c07b",
+  brightBlue: "#61afef",
+  brightMagenta: "#c678dd",
+  brightCyan: "#56b6c2",
   brightWhite: "#ffffff",
 };
 
-const day: SshPalette = {
-  background: "#fbfbfc",
-  foreground: "#1c1c1e",
-  cursor: "#1c1c1e",
-  selection: "#d5dbff",
-  black: "#2a2a2e",
-  red: "#b42318",
-  green: "#067647",
-  yellow: "#b54708",
-  blue: "#1d4ed8",
-  magenta: "#9d174d",
-  cyan: "#0e7490",
-  white: "#f4f4f6",
-  brightBlack: "#52525b",
-  brightRed: "#d92d20",
-  brightGreen: "#079455",
-  brightYellow: "#dc6803",
-  brightBlue: "#3b6cff",
-  brightMagenta: "#c026d3",
-  brightCyan: "#06b6d4",
+const greenPalette: SshPalette = {
+  background: "#000000",
+  foreground: "#00ff00",
+  cursor: "#23ff18",
+  selection: "#083905",
+  black: "#000000",
+  red: "#990000",
+  green: "#00a600",
+  yellow: "#999900",
+  blue: "#0000b2",
+  magenta: "#b200b2",
+  cyan: "#00a6b2",
+  white: "#bfbfbf",
+  brightBlack: "#666666",
+  brightRed: "#e50000",
+  brightGreen: "#00d900",
+  brightYellow: "#e5e500",
+  brightBlue: "#0000ff",
+  brightMagenta: "#e500e5",
+  brightCyan: "#00e5e5",
+  brightWhite: "#e5e5e5",
+};
+
+const solarizedDark: SshPalette = {
+  background: "#002b36",
+  foreground: "#839496",
+  cursor: "#93a1a1",
+  selection: "#073642",
+  black: "#073642",
+  red: "#dc322f",
+  green: "#859900",
+  yellow: "#b58900",
+  blue: "#268bd2",
+  magenta: "#d33682",
+  cyan: "#2aa198",
+  white: "#eee8d5",
+  brightBlack: "#002b36",
+  brightRed: "#cb4b16",
+  brightGreen: "#586e75",
+  brightYellow: "#657b83",
+  brightBlue: "#839496",
+  brightMagenta: "#6c71c4",
+  brightCyan: "#93a1a1",
+  brightWhite: "#fdf6e3",
+};
+
+const solarizedLight: SshPalette = {
+  background: "#fdf6e3",
+  foreground: "#657b83",
+  cursor: "#586e75",
+  selection: "#eee8d5",
+  black: "#073642",
+  red: "#dc322f",
+  green: "#859900",
+  yellow: "#b58900",
+  blue: "#268bd2",
+  magenta: "#d33682",
+  cyan: "#2aa198",
+  white: "#eee8d5",
+  brightBlack: "#002b36",
+  brightRed: "#cb4b16",
+  brightGreen: "#586e75",
+  brightYellow: "#657b83",
+  brightBlue: "#839496",
+  brightMagenta: "#6c71c4",
+  brightCyan: "#93a1a1",
+  brightWhite: "#fdf6e3",
+};
+
+const dracula: SshPalette = {
+  background: "#282a36",
+  foreground: "#f8f8f2",
+  cursor: "#f8f8f2",
+  selection: "#44475a",
+  black: "#21222c",
+  red: "#ff5555",
+  green: "#50fa7b",
+  yellow: "#f1fa8c",
+  blue: "#bd93f9",
+  magenta: "#ff79c4",
+  cyan: "#8be9fd",
+  white: "#f8f8f2",
+  brightBlack: "#6272a4",
+  brightRed: "#ff6e6e",
+  brightGreen: "#69ff94",
+  brightYellow: "#ffffa5",
+  brightBlue: "#d6acff",
+  brightMagenta: "#ff92df",
+  brightCyan: "#a4ffff",
   brightWhite: "#ffffff",
 };
 
-const sea: SshPalette = {
-  background: "#0e1c24",
-  foreground: "#d5e7ea",
-  cursor: "#9be7e0",
-  selection: "#1d6f7a",
-  black: "#16323a",
-  red: "#e56b6b",
-  green: "#6dcf9a",
-  yellow: "#e3c36a",
-  blue: "#7eb6d9",
-  magenta: "#d39ad6",
-  cyan: "#7fd3d0",
-  white: "#d5e7ea",
-  brightBlack: "#4d6d76",
-  brightRed: "#ff8f8f",
-  brightGreen: "#8ee3b4",
-  brightYellow: "#f3d98a",
-  brightBlue: "#a5d0ea",
-  brightMagenta: "#e4b8e6",
-  brightCyan: "#b6f0ee",
-  brightWhite: "#ffffff",
+const nord: SshPalette = {
+  background: "#2e3440",
+  foreground: "#d8dee9",
+  cursor: "#d8dee9",
+  selection: "#434c5e",
+  black: "#3b4252",
+  red: "#bf616a",
+  green: "#a3be8c",
+  yellow: "#ebcb8b",
+  blue: "#81a1c1",
+  magenta: "#b48ead",
+  cyan: "#88c0d0",
+  white: "#e5e9f0",
+  brightBlack: "#4c566a",
+  brightRed: "#bf616a",
+  brightGreen: "#a3be8c",
+  brightYellow: "#ebcb8b",
+  brightBlue: "#81a1c1",
+  brightMagenta: "#b48ead",
+  brightCyan: "#8fbcbb",
+  brightWhite: "#eceff4",
 };
 
-const grove: SshPalette = {
-  background: "#141a14",
-  foreground: "#e4ecdf",
-  cursor: "#c6e2a4",
-  selection: "#3d5c32",
-  black: "#243024",
-  red: "#e07a6a",
-  green: "#8fce6a",
-  yellow: "#d6c36a",
-  blue: "#8eb4c9",
-  magenta: "#c9a0c4",
-  cyan: "#7ec8b0",
-  white: "#e4ecdf",
-  brightBlack: "#5d6b58",
-  brightRed: "#f09a8c",
-  brightGreen: "#b4e492",
-  brightYellow: "#ead48e",
-  brightBlue: "#b4d2e2",
-  brightMagenta: "#e0c0dc",
-  brightCyan: "#a8e4d0",
-  brightWhite: "#ffffff",
+const presets: Record<Exclude<SshThemeId, "follow" | "custom">, SshPalette> = {
+  dark: darkPalette,
+  light: lightPalette,
+  green: greenPalette,
+  solarizedDark,
+  solarizedLight,
+  dracula,
+  nord,
 };
 
-const presets: Record<Exclude<SshThemeId, "follow" | "custom">, SshPalette> = { ink, day, sea, grove };
+const legacyThemes: Record<string, SshThemeId> = {
+  ink: "dark",
+  day: "light",
+  sea: "dark",
+  grove: "green",
+};
+
+export function normalizeThemeId(value: string): SshThemeId {
+  if (value in legacyThemes) return legacyThemes[value];
+  if ((sshThemes as readonly string[]).includes(value)) return value as SshThemeId;
+  return "follow";
+}
 
 const fontStacks: Record<Exclude<SshFontId, "custom">, string> = {
   system: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
@@ -159,9 +249,10 @@ export function clampScrollback(value: number) {
   return Math.min(100000, Math.max(1000, Math.round(value)));
 }
 
-export function resolvePalette(themeId: SshThemeId, custom: SshPalette, dark: boolean): SshPalette {
-  const base = themeId === "follow" ? (dark ? ink : day) : themeId === "custom" ? custom : presets[themeId];
-  const fallback = themeId === "day" || (themeId === "follow" && !dark) ? day : ink;
+export function resolvePalette(themeId: SshThemeId | string, custom: SshPalette, dark: boolean): SshPalette {
+  const id = normalizeThemeId(themeId);
+  const base = id === "follow" ? (dark ? darkPalette : lightPalette) : id === "custom" ? custom : presets[id];
+  const fallback = id === "light" || (id === "follow" && !dark) ? lightPalette : darkPalette;
   return sshPaletteKeys.reduce((palette, key) => {
     palette[key] = isHexColor(base[key]) ? base[key] : fallback[key];
     return palette;
@@ -202,4 +293,4 @@ export function toTerminalTheme(palette: SshPalette) {
   };
 }
 
-export const defaultSshPalette = ink;
+export const defaultSshPalette = darkPalette;

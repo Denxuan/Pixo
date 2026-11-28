@@ -11,12 +11,13 @@ import type {
   DockerSocket,
   DockerStatus,
   EngineSummary,
+  HostDirListing,
   ImageRow,
   NetworkRow,
-  VolumeRow,
   ComposePreview,
   ComposeProjectRequest,
   ComposeProject,
+  ContainerRunRequest,
 } from "@/types/docker";
 import { isDesktop } from "@/utils/desktop";
 
@@ -64,6 +65,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 
 export const dockerStatus = () => call<DockerStatus>("docker_status");
 export const dockerSetEnabled = (enabled: boolean) => call<DockerStatus>("docker_set_enabled", { enabled });
+export const dockerSetImageUpdates = (enabled: boolean) => call<DockerStatus>("docker_set_image_updates", { enabled });
 export const dockerEndpoints = () => call<DockerEndpoint[]>("docker_endpoints_list");
 export const dockerSaveEndpoint = (endpoint: DockerEndpointDraft) => call<DockerEndpoint>("docker_endpoint_save", { endpoint });
 export const dockerDeleteEndpoint = (id: number) => call<void>("docker_endpoint_delete", { id });
@@ -77,6 +79,8 @@ export const dockerHostKeyDecide = (linkId: number, accept: boolean) => call<voi
 export const dockerAnswer = (linkId: number, promptId: number, secret: string, remember: boolean, cancel: boolean) =>
   call<void>("docker_answer", { linkId, promptId, secret, remember, cancel });
 export const dockerSummary = (endpointId: number) => call<EngineSummary>("docker_summary", { endpointId });
+export const dockerMirrors = (endpointId: number) => call<string[]>("docker_mirrors", { endpointId });
+export const dockerSetMirrors = (endpointId: number, mirrors: string[]) => call<void>("docker_set_mirrors", { endpointId, mirrors });
 export const dockerContainers = (endpointId: number) => call<ContainerRow[]>("docker_containers", { endpointId });
 export const dockerContainerAction = (endpointId: number, id: string, action: string, force = false) =>
   call<void>("docker_container_action", { endpointId, id, action, force });
@@ -87,9 +91,8 @@ export const dockerImageRemove = (endpointId: number, name: string) => call<void
 export const dockerNetworks = (endpointId: number) => call<NetworkRow[]>("docker_networks", { endpointId });
 export const dockerNetworkInspect = (endpointId: number, name: string) => call<unknown>("docker_network_inspect", { endpointId, name });
 export const dockerNetworkRemove = (endpointId: number, name: string) => call<void>("docker_network_remove", { endpointId, name });
-export const dockerVolumes = (endpointId: number) => call<VolumeRow[]>("docker_volumes", { endpointId });
-export const dockerVolumeInspect = (endpointId: number, name: string) => call<unknown>("docker_volume_inspect", { endpointId, name });
-export const dockerVolumeRemove = (endpointId: number, name: string) => call<void>("docker_volume_remove", { endpointId, name });
+export const dockerListDirs = (endpointId: number, path: string) =>
+  call<HostDirListing>("docker_list_dirs", { endpointId, path });
 export const dockerComposeProjects = (endpointId: number) => call<ComposeProject[]>("docker_compose_projects", { endpointId });
 export const dockerComposePreview = (path: string) => call<ComposePreview>("docker_compose_preview", { path });
 export const dockerPickFolder = (title: string) => call<string | null>("docker_pick_folder", { title });
@@ -115,6 +118,18 @@ export function dockerComposeLogs(endpointId: number, name: string, events: Chan
   return call<number>("docker_compose_logs", { endpointId, name, events });
 }
 
+export type DockerImageUpdateEvent = {
+  type: "update";
+  reference: string;
+  state: "update" | "current" | "unknown";
+};
+
+export function dockerImageUpdates(endpointId: number, events: Channel<DockerImageUpdateEvent>) {
+  return call<void>("docker_image_updates", { endpointId, events });
+}
+export const dockerImageUsers = (endpointId: number, reference: string) =>
+  call<string[]>("docker_image_users", { endpointId, reference });
+
 export function dockerImagePull(
   endpointId: number,
   reference: string,
@@ -133,8 +148,8 @@ export function dockerImagePull(
 
 export type DockerExecEvent = { type: "state"; state: string } | { type: "closed"; code: string; params?: Record<string, unknown> };
 
-export function dockerImageRun(endpointId: number, image: string, name: string, ports: string, command: string) {
-  return call<string>("docker_image_run", { endpointId, image, name, ports, command });
+export function dockerImageRun(endpointId: number, request: ContainerRunRequest) {
+  return call<string>("docker_image_run", { endpointId, request });
 }
 
 export type ContainerUsage = {

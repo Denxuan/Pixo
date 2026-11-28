@@ -2,7 +2,6 @@ import { clipboardGet, clipboardImage, clipboardSourceIcon } from "@/api/clipboa
 import Kbd from "@/components/Kbd";
 import type { ClipSummary } from "@/types/clipboard";
 import { formatBytes, formatRelativeTime } from "@/utils/time";
-import { inkShadow } from "@/utils/theme";
 
 type LoadedSource = { name: string; url: string };
 
@@ -241,9 +240,8 @@ export default function HistoryList({
             style={{
               display: "block",
               background: active ? token.colorPrimaryBg : undefined,
-              border: `2px solid ${active ? token.colorBorder : "transparent"}`,
+              border: `1px solid ${active ? token.colorPrimary : "transparent"}`,
               borderRadius: token.borderRadius,
-              boxShadow: active ? inkShadow(token.colorBorder, 2) : undefined,
               marginBottom: 8,
               padding: "8px 10px",
               cursor: "pointer",

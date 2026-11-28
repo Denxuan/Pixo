@@ -70,6 +70,7 @@ pub struct NormalizedEndpoint {
 #[serde(rename_all = "camelCase")]
 pub struct DockerStatus {
     pub enabled: bool,
+    pub image_updates: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -115,15 +116,24 @@ pub struct NetworkRow {
     pub name: String,
     pub driver: String,
     pub scope: String,
+    pub subnet: String,
+    pub gateway: String,
+    pub ipv6: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct VolumeRow {
+pub struct HostDirEntry {
     pub name: String,
-    pub driver: String,
-    pub mountpoint: String,
-    pub scope: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostDirListing {
+    pub path: String,
+    pub parent: Option<String>,
+    pub entries: Vec<HostDirEntry>,
 }
 
 pub fn normalize(draft: EndpointDraft) -> Result<NormalizedEndpoint, DockerError> {
@@ -379,11 +389,205 @@ fn parse_port(value: &str) -> Result<u16, DockerError> {
     Ok(port)
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerRunRequest {
+    pub image: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub restart: String,
+    #[serde(default)]
+    pub network: String,
+    #[serde(default)]
+    pub ports: String,
+    #[serde(default)]
+    pub mounts: Vec<MountInput>,
+    #[serde(default)]
+    pub env: Vec<EnvInput>,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub workdir: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MountInput {
+    pub kind: String,
+    pub source: String,
+    pub target: String,
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvInput {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunMount {
+    pub bind: bool,
+    pub source: String,
+    pub target: String,
+    pub read_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalizedRun {
+    pub image: String,
+    pub name: Option<String>,
+    pub restart: Option<String>,
+    pub network: Option<String>,
+    pub ports: Vec<PublishedPort>,
+    pub mounts: Vec<RunMount>,
+    pub env: Vec<String>,
+    pub command: Vec<String>,
+    pub workdir: Option<String>,
+}
+
+pub fn normalize_run(draft: ContainerRunRequest) -> Result<NormalizedRun, DockerError> {
+    let image = draft.image.trim();
+    if !valid_image_ref(image) {
+        return Err(DockerError::new("invalid_input"));
+    }
+    let name = match draft.name.trim() {
+        "" => None,
+        value if valid_container_name(value) => Some(value.to_string()),
+        _ => return Err(DockerError::new("invalid_input")),
+    };
+    let restart = match draft.restart.trim() {
+        "" | "no" => None,
+        "always" | "unless-stopped" | "on-failure" => Some(draft.restart.trim().to_string()),
+        _ => return Err(DockerError::new("invalid_input")),
+    };
+    let network = match draft.network.trim() {
+        "" => None,
+        value if valid_network_name(value) => Some(value.to_string()),
+        _ => return Err(DockerError::new("invalid_input")),
+    };
+    let ports = parse_publish_list(&draft.ports)?;
+    if matches!(network.as_deref(), Some("host") | Some("none")) && !ports.is_empty() {
+        return Err(DockerError::new("invalid_input"));
+    }
+    if draft.mounts.len() > 32 || draft.env.len() > 64 {
+        return Err(DockerError::new("invalid_input"));
+    }
+    let mut mounts = Vec::new();
+    let mut targets = Vec::new();
+    for item in &draft.mounts {
+        let source = item.source.trim();
+        let target = item.target.trim();
+        if source.is_empty() && target.is_empty() {
+            continue;
+        }
+        let bind = match item.kind.as_str() {
+            "bind" => true,
+            "volume" => false,
+            _ => return Err(DockerError::new("invalid_input")),
+        };
+        if !absolute_path(target) || targets.iter().any(|known| known == target) {
+            return Err(DockerError::new("invalid_input"));
+        }
+        if bind {
+            if !absolute_path(source) {
+                return Err(DockerError::new("invalid_input"));
+            }
+        } else if !valid_resource_name(source) {
+            return Err(DockerError::new("invalid_input"));
+        }
+        targets.push(target.to_string());
+        mounts.push(RunMount {
+            bind,
+            source: source.to_string(),
+            target: target.to_string(),
+            read_only: item.read_only,
+        });
+    }
+    let mut env = Vec::new();
+    let mut keys = Vec::new();
+    for item in &draft.env {
+        let key = item.key.trim();
+        if key.is_empty() && item.value.trim().is_empty() {
+            continue;
+        }
+        if !valid_env_key(key)
+            || item.value.len() > 4096
+            || item.value.chars().any(char::is_control)
+        {
+            return Err(DockerError::new("invalid_input"));
+        }
+        if keys.iter().any(|known| known == key) {
+            return Err(DockerError::new("invalid_input"));
+        }
+        keys.push(key.to_string());
+        env.push(format!("{key}={}", item.value));
+    }
+    let workdir = match draft.workdir.trim() {
+        "" => None,
+        value if absolute_path(value) => Some(value.to_string()),
+        _ => return Err(DockerError::new("invalid_input")),
+    };
+    Ok(NormalizedRun {
+        image: image.to_string(),
+        name,
+        restart,
+        network,
+        ports,
+        mounts,
+        env,
+        command: split_command(&draft.command)?,
+        workdir,
+    })
+}
+
+fn valid_network_name(value: &str) -> bool {
+    (1..=128).contains(&value.len())
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'))
+}
+
+fn valid_env_key(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (1..=128).contains(&value.len())
+        && (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn absolute_path(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > 1024
+        || value
+            .chars()
+            .any(|ch| ch == '\0' || ch == '\n' || ch == '\r')
+    {
+        return false;
+    }
+    if value == "/" || value == "\\" {
+        return false;
+    }
+    if value.starts_with('/') {
+        return true;
+    }
+    let bytes = value.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        EndpointDraft, EndpointKind, normalize, parse_publish_list, split_command, valid_image_ref,
-        valid_socket_path,
+        ContainerRunRequest, EndpointDraft, EndpointKind, EnvInput, MountInput, normalize,
+        normalize_run, parse_publish_list, split_command, valid_image_ref, valid_socket_path,
     };
 
     fn draft(kind: EndpointKind) -> EndpointDraft {
@@ -447,5 +651,72 @@ mod tests {
         );
         assert!(split_command("\"unterminated").is_err());
         assert!(split_command("").unwrap().is_empty());
+    }
+
+    #[test]
+    fn run_request_keeps_network_storage_and_env() {
+        let run = normalize_run(ContainerRunRequest {
+            image: "nginx:latest".into(),
+            name: "web".into(),
+            restart: "on-failure".into(),
+            network: "app".into(),
+            ports: "8080:80".into(),
+            mounts: vec![
+                MountInput {
+                    kind: "bind".into(),
+                    source: "/data/html".into(),
+                    target: "/usr/share/nginx/html".into(),
+                    read_only: true,
+                },
+                MountInput {
+                    kind: "volume".into(),
+                    source: "web-logs".into(),
+                    target: "/var/log/nginx".into(),
+                    read_only: false,
+                },
+            ],
+            env: vec![EnvInput {
+                key: "SITE".into(),
+                value: "pixo".into(),
+            }],
+            command: "nginx -g 'daemon off;'".into(),
+            workdir: "/usr/share/nginx/html".into(),
+        })
+        .unwrap();
+        assert_eq!(run.name.as_deref(), Some("web"));
+        assert_eq!(run.restart.as_deref(), Some("on-failure"));
+        assert_eq!(run.network.as_deref(), Some("app"));
+        assert_eq!(run.ports.len(), 1);
+        assert!(run.mounts[0].bind && run.mounts[0].read_only);
+        assert!(!run.mounts[1].bind);
+        assert_eq!(run.env, vec!["SITE=pixo".to_string()]);
+        assert_eq!(run.command, vec!["nginx", "-g", "daemon off;"]);
+    }
+
+    #[test]
+    fn host_network_rejects_published_ports_and_relative_mounts() {
+        let mut request = ContainerRunRequest {
+            image: "nginx:latest".into(),
+            name: String::new(),
+            restart: "no".into(),
+            network: "host".into(),
+            ports: "80".into(),
+            mounts: Vec::new(),
+            env: Vec::new(),
+            command: String::new(),
+            workdir: String::new(),
+        };
+        assert_eq!(
+            normalize_run(request.clone()).unwrap_err().code,
+            "invalid_input"
+        );
+        request.ports.clear();
+        request.mounts.push(MountInput {
+            kind: "bind".into(),
+            source: "html".into(),
+            target: "/usr/share/nginx/html".into(),
+            read_only: false,
+        });
+        assert_eq!(normalize_run(request).unwrap_err().code, "invalid_input");
     }
 }

@@ -461,7 +461,7 @@ export default function TerminalView({
           <Select
             size="small"
             aria-label={t("zdx.label.ssh.theme")}
-            className="w-28"
+            className="w-40"
             popupMatchSelectWidth={false}
             value={themeId}
             onChange={(value) => setThemeId(value as SshThemeId)}

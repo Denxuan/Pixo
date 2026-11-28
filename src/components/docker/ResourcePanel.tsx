@@ -15,26 +15,29 @@ import {
   dockerImageInspect,
   dockerImagePull,
   dockerImageRemove,
-  dockerImageRun,
+  dockerImageUpdates,
+  type DockerImageUpdateEvent,
+  dockerImageUsers,
   dockerImages,
   dockerPickFile,
   dockerSummary,
   dockerNetworkInspect,
   dockerNetworkRemove,
   dockerNetworks,
-  dockerVolumeInspect,
-  dockerVolumeRemove,
-  dockerVolumes,
   dockerTaskStop,
 } from "@/api/docker";
 import DockerShell from "@/components/docker/DockerShell";
+import HostFolder from "@/components/docker/HostFolder";
 import LogsDialog from "@/components/docker/LogsDialog";
+import MirrorDialog from "@/components/docker/MirrorDialog";
+import RunDialog from "@/components/docker/RunDialog";
 import YamlEditor from "@/components/docker/YamlEditor";
 import type { ContainerUsage } from "@/api/docker";
-import type { ComposeProject, ContainerRow, DockerPullEvent, EngineSummary, ImageRow, NetworkRow, VolumeRow } from "@/types/docker";
+import type { ComposeProject, ContainerRow, DockerPullEvent, EngineSummary, ImageRow, NetworkRow } from "@/types/docker";
+import { applyPullProgress, emptyPull, pullTotals, type PullLayer, type PullProgress } from "@/utils/dockerPull";
 import { dockerErrorText, formatBytes, formatTime } from "@/utils/dockerMessage";
 
-type TabKey = "overview" | "containers" | "images" | "networks" | "volumes" | "compose";
+type TabKey = "overview" | "containers" | "images" | "networks" | "compose";
 
 type ComposeSource = "file" | "yaml";
 
@@ -42,14 +45,24 @@ export default function ResourcePanel({
   endpointId,
   summary,
   host,
+  imageUpdates = false,
+  note,
+  onNoteClear,
+  onMirrorsSaved,
+  onRenewHold,
   onLost,
 }: {
   endpointId: number;
   summary: EngineSummary;
   host: string;
+  imageUpdates?: boolean;
+  note?: string;
+  onNoteClear?: () => void;
+  onMirrorsSaved?: () => void;
+  onRenewHold?: (held: boolean) => void;
   onLost?: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { token } = antdTheme.useToken();
   const [tab, setTab] = useState<TabKey>("overview");
   const [engine, setEngine] = useState(summary);
@@ -60,13 +73,13 @@ export default function ResourcePanel({
   const [containers, setContainers] = useState<ContainerRow[]>([]);
   const [images, setImages] = useState<ImageRow[]>([]);
   const [networks, setNetworks] = useState<NetworkRow[]>([]);
-  const [volumes, setVolumes] = useState<VolumeRow[]>([]);
   const [shell, setShell] = useState<{ id: string; name: string } | null>(null);
   const [projects, setProjects] = useState<ComposeProject[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [draftName, setDraftName] = useState("");
   const [directory, setDirectory] = useState("");
+  const [folderOpen, setFolderOpen] = useState(false);
   const [source, setSource] = useState<ComposeSource>("file");
   const [composeFile, setComposeFile] = useState("");
   const [yaml, setYaml] = useState("");
@@ -76,15 +89,33 @@ export default function ResourcePanel({
   const [logs, setLogs] = useState<{ name: string; containerId?: string } | null>(null);
   const [acting, setActing] = useState(false);
   const [pullOpen, setPullOpen] = useState(false);
+  const [upgradeRef, setUpgradeRef] = useState<string | null>(null);
+  const [updates, setUpdates] = useState<Record<string, "update" | "current" | "unknown">>({});
+  const [checking, setChecking] = useState(false);
+  const [mirrorOpen, setMirrorOpen] = useState(false);
+  const [runOpen, setRunOpen] = useState(false);
   const [runImage, setRunImage] = useState<ImageRow | null>(null);
   const [notice, setNotice] = useState("");
   const [usage, setUsage] = useState<Record<string, ContainerUsage>>({});
   const lostRef = useRef(onLost);
   lostRef.current = onLost;
 
+  const clearNoteRef = useRef(onNoteClear);
+  clearNoteRef.current = onNoteClear;
+
   useEffect(() => {
     setEngine(summary);
   }, [summary]);
+
+  useEffect(() => {
+    setUpdates({});
+  }, [endpointId]);
+
+  useEffect(() => {
+    if (!note) return;
+    setNotice(note);
+    clearNoteRef.current?.();
+  }, [note]);
 
   useEffect(() => {
     if (tab === "overview") return;
@@ -97,9 +128,7 @@ export default function ResourcePanel({
         ? dockerImages(endpointId).then((rows) => { if (alive) setImages(rows); })
         : tab === "networks"
           ? dockerNetworks(endpointId).then((rows) => { if (alive) setNetworks(rows); })
-          : tab === "volumes"
-            ? dockerVolumes(endpointId).then((rows) => { if (alive) setVolumes(rows); })
-            : dockerComposeProjects(endpointId).then((rows) => { if (alive) setProjects(rows); });
+          : dockerComposeProjects(endpointId).then((rows) => { if (alive) setProjects(rows); });
     void load.catch((caught: unknown) => {
       if (alive) report(caught);
     }).finally(() => { if (alive) setLoading(false); });
@@ -142,9 +171,10 @@ export default function ResourcePanel({
     }
   }
 
-  function confirmRemove(name: string, action: (force: boolean) => Promise<void>, running = false) {
+  function confirmRemove(name: string, action: (force: boolean) => Promise<void>, running = false, detail?: string) {
     Modal.confirm({
       title: t("zdx.text.docker.removeConfirm", { name }),
+      content: detail,
       okText: t("zdx.label.docker.remove"),
       cancelText: t("zdx.label.docker.cancel"),
       okButtonProps: { danger: true },
@@ -175,6 +205,55 @@ export default function ResourcePanel({
     report(caught);
   }
 
+  async function checkUpdates() {
+    if (checking) return;
+    setChecking(true);
+    setError("");
+    setUpdates({});
+    setNotice(t("zdx.text.docker.checkingUpdates"));
+    const events = new Channel<DockerImageUpdateEvent>();
+    events.onmessage = (event) => {
+      if (event.type !== "update") return;
+      setUpdates((current) => ({ ...current, [event.reference]: event.state }));
+    };
+    try {
+      await dockerImageUpdates(endpointId, events);
+      setNotice("");
+    } catch (caught) {
+      setNotice("");
+      fail(caught);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function upgrade(reference: string) {
+    try {
+      const users = await dockerImageUsers(endpointId, reference);
+      if (users.length > 0) {
+        const separator = i18n.language.toLowerCase().startsWith("zh") ? "、" : ", ";
+        Modal.warning({
+          title: t("zdx.text.docker.upgradeBlocked", { name: reference }),
+          content: t("zdx.text.docker.upgradeBlockedBody", { containers: users.join(separator) }),
+          okText: t("zdx.label.docker.confirm"),
+        });
+        return;
+      }
+      Modal.confirm({
+        title: t("zdx.text.docker.upgradeConfirm", { name: reference }),
+        content: t("zdx.text.docker.upgradeReady"),
+        okText: t("zdx.label.docker.upgrade"),
+        cancelText: t("zdx.label.docker.cancel"),
+        onOk: () => {
+          setUpgradeRef(reference);
+          setPullOpen(true);
+        },
+      });
+    } catch (caught) {
+      fail(caught);
+    }
+  }
+
   function runContainer(id: string, action: "start" | "stop" | "restart") {
     void dockerContainerAction(endpointId, id, action).then(() => setTick((value) => value + 1)).catch(fail);
   }
@@ -193,7 +272,6 @@ export default function ResourcePanel({
   const containerRows = containers.filter((row) => matches(needle, row.name, row.image, row.id, row.status));
   const imageRows = images.filter((row) => matches(needle, row.id, row.tags.join(" ")));
   const networkRows = networks.filter((row) => matches(needle, row.name, row.driver, row.id));
-  const volumeRows = volumes.filter((row) => matches(needle, row.name, row.driver, row.mountpoint));
   const projectRows = projects.filter((row) => matches(needle, row.name, row.configPath, row.services.map((service) => service.name).join(" ")));
 
   async function runCompose(name: string, action: "build" | "up" | "down") {
@@ -212,7 +290,7 @@ export default function ResourcePanel({
   function confirmCompose(name: string, kind: "down" | "delete") {
     Modal.confirm({
       title: t(kind === "down" ? "zdx.text.docker.composeDownConfirm" : "zdx.text.docker.composeDeleteConfirm", { name }),
-      okText: t(kind === "down" ? "zdx.label.docker.composeDown" : "zdx.label.docker.remove"),
+      okText: t(kind === "down" ? "zdx.label.docker.composeDown" : "zdx.label.docker.forgetCompose"),
       cancelText: t("zdx.label.docker.cancel"),
       okButtonProps: { danger: kind === "delete" },
       onOk: () => kind === "down" ? runCompose(name, "down") : dockerComposeRemove(endpointId, name).then(() => setTick((value) => value + 1)).catch(fail),
@@ -234,6 +312,7 @@ export default function ResourcePanel({
   function openCreate() {
     setDraftName("");
     setDirectory("");
+    setFolderOpen(false);
     setSource("file");
     setComposeFile("");
     setYaml("");
@@ -287,7 +366,10 @@ export default function ResourcePanel({
             }
             setTick((value) => value + 1);
           }} />
-          {tab === "images" && <ActionIcon label={t("zdx.label.docker.pull")} icon={<CloudDownloadOutlined />} onClick={() => setPullOpen(true)} />}
+          <ActionIcon label={t("zdx.label.docker.mirrors")} icon={<SettingOutlined />} onClick={() => setMirrorOpen(true)} />
+          {tab === "containers" && <ActionIcon label={t("zdx.label.docker.createContainer")} icon={<PlusOutlined />} onClick={() => { setNotice(""); setRunImage(null); setRunOpen(true); }} />}
+          {tab === "images" && imageUpdates && <ActionIcon label={t("zdx.label.docker.checkUpdates")} icon={<SyncOutlined spin={checking} />} onClick={() => void checkUpdates()} />}
+          {tab === "images" && <ActionIcon label={t("zdx.label.docker.pull")} icon={<CloudDownloadOutlined />} onClick={() => { setUpgradeRef(null); setPullOpen(true); }} />}
           {tab === "compose" && <ActionIcon label={t("zdx.label.docker.createCompose")} icon={<PlusOutlined />} onClick={openCreate} />}
         </Space>
         {tab !== "overview" && <Input allowClear style={{ width: 220 }} value={query} placeholder={t("zdx.placeholder.docker.filter")} aria-label={t("zdx.placeholder.docker.filter")} onChange={(event) => setQuery(event.target.value)} />}
@@ -302,7 +384,6 @@ export default function ResourcePanel({
           { key: "containers", label: t("zdx.label.docker.containers") },
           { key: "images", label: t("zdx.label.docker.images") },
           { key: "networks", label: t("zdx.label.docker.networks") },
-          { key: "volumes", label: t("zdx.label.docker.volumes") },
           { key: "compose", label: t("zdx.label.docker.compose") },
         ]}
       />
@@ -414,7 +495,7 @@ export default function ResourcePanel({
                         if (key === "details") void showInspect(row.name, () => dockerContainerInspect(endpointId, row.id));
                         if (key === "shell") setShell({ id: row.id, name: row.name });
                         if (key === "logs") setLogs({ name: row.name, containerId: row.id });
-                        if (key === "remove") confirmRemove(row.name, (force) => dockerContainerAction(endpointId, row.id, "remove", force).catch(fail), active);
+                        if (key === "remove") confirmRemove(row.name, (force) => dockerContainerAction(endpointId, row.id, "remove", force).catch(fail), active, t("zdx.text.docker.containerRemoveBody"));
                       },
                     }}
                   >
@@ -439,11 +520,18 @@ export default function ResourcePanel({
             { title: t("zdx.label.docker.tags"), render: (_, row) => row.tags.length ? row.tags.join(", ") : row.id.slice(0, 12), ellipsis: true },
             { title: t("zdx.label.docker.size"), width: 110, render: (_, row) => formatBytes(row.size) },
             { title: t("zdx.label.docker.created"), width: 180, render: (_, row) => formatTime(row.created) },
-            actionsColumn<ImageRow>(t, 148, (_, row) => {
+            ...(imageUpdates ? [{
+              title: t("zdx.label.docker.update"),
+              width: 120,
+              render: (_: unknown, row: ImageRow) => <UpdateMark tags={row.tags} updates={updates} checking={checking} />,
+            }] : []),
+            actionsColumn<ImageRow>(t, imageUpdates ? 188 : 148, (_, row) => {
               const name = row.tags[0] || row.id;
+              const target = imageUpdates ? row.tags.find((tag) => updates[tag] === "update") : undefined;
               return (
                 <>
-                  <ActionIcon label={t("zdx.label.docker.run")} icon={<PlayCircleOutlined />} onClick={() => { setNotice(""); setRunImage(row); }} />
+                  {target && <ActionIcon label={t("zdx.label.docker.upgrade")} icon={<ArrowUpOutlined />} onClick={() => void upgrade(target)} />}
+                  <ActionIcon label={t("zdx.label.docker.run")} icon={<PlayCircleOutlined />} onClick={() => { setNotice(""); setRunImage(row); setRunOpen(true); }} />
                   <ActionIcon label={t("zdx.label.docker.inspect")} icon={<EyeOutlined />} onClick={() => void showInspect(name, () => dockerImageInspect(endpointId, name))} />
                   <ActionIcon label={t("zdx.label.docker.remove")} danger icon={<DeleteOutlined />} onClick={() => confirmRemove(name, () => dockerImageRemove(endpointId, name).catch(fail))} />
                 </>
@@ -474,29 +562,6 @@ export default function ResourcePanel({
           ]}
         />
       )}
-      {tab === "volumes" && (
-        <Table
-          size="small"
-          rowKey="name"
-          loading={loading}
-          dataSource={volumeRows}
-          pagination={false}
-          locale={{ emptyText: t("zdx.text.docker.emptyVolumes") }}
-          scroll={{ x: "max-content" }}
-          columns={[
-            { title: t("zdx.label.docker.name"), dataIndex: "name", ellipsis: true },
-            { title: t("zdx.label.docker.driver"), dataIndex: "driver", width: 120 },
-            { title: t("zdx.label.docker.mount"), dataIndex: "mountpoint", ellipsis: true },
-            { title: t("zdx.label.docker.scope"), dataIndex: "scope", width: 120 },
-            actionsColumn<VolumeRow>(t, 136, (_, row) => (
-              <>
-                <ActionIcon label={t("zdx.label.docker.inspect")} icon={<EyeOutlined />} onClick={() => void showInspect(row.name, () => dockerVolumeInspect(endpointId, row.name))} />
-                <ActionIcon label={t("zdx.label.docker.remove")} danger icon={<DeleteOutlined />} onClick={() => confirmRemove(row.name, () => dockerVolumeRemove(endpointId, row.name).catch(fail))} />
-              </>
-            )),
-          ]}
-        />
-      )}
       {tab === "compose" && (
         <Table
           size="small"
@@ -521,7 +586,7 @@ export default function ResourcePanel({
                     { key: "build", icon: <CodeOutlined />, label: t("zdx.label.docker.composeBuild") },
                     { key: "up", icon: <PlayCircleOutlined />, label: t("zdx.label.docker.composeUp") },
                     { key: "down", icon: <ClearOutlined />, label: t("zdx.label.docker.composeDown") },
-                    { key: "delete", icon: <DeleteOutlined />, label: t("zdx.label.docker.remove"), danger: true },
+                    { key: "delete", icon: <DeleteOutlined />, label: t("zdx.label.docker.forgetCompose"), danger: true },
                     { key: "details", icon: <InfoCircleOutlined />, label: t("zdx.label.docker.details") },
                     { key: "logs", icon: <FileTextOutlined />, label: t("zdx.label.docker.showLogs") },
                   ],
@@ -547,7 +612,10 @@ export default function ResourcePanel({
         okText={t("zdx.label.docker.confirm")}
         cancelText={t("zdx.label.docker.cancel")}
         confirmLoading={creating}
-        onCancel={() => setCreateOpen(false)}
+        onCancel={() => {
+          setFolderOpen(false);
+          setCreateOpen(false);
+        }}
         onOk={() => void createCompose()}
         destroyOnHidden
         styles={{
@@ -573,18 +641,27 @@ export default function ResourcePanel({
               onChange={(event) => setDraftName(event.target.value)}
             />
           </label>
-          <label className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2">
             <span>{t("zdx.label.docker.composePath")} <span style={{ color: token.colorError }}>*</span></span>
-            <Input
-              aria-label={t("zdx.label.docker.composePath")}
-              placeholder={t("zdx.placeholder.docker.composeDirectory")}
-              value={directory}
-              spellCheck={false}
-              className="font-mono"
-              onChange={(event) => setDirectory(event.target.value)}
-            />
+            <Space.Compact block>
+              <Input
+                aria-label={t("zdx.label.docker.composePath")}
+                placeholder={t("zdx.placeholder.docker.composeDirectory")}
+                value={directory}
+                disabled={creating}
+                spellCheck={false}
+                className="min-w-0 font-mono"
+                onChange={(event) => setDirectory(event.target.value)}
+              />
+              <Button
+                disabled={creating}
+                aria-label={t("zdx.label.docker.chooseFolder")}
+                icon={<FolderOutlined />}
+                onClick={() => setFolderOpen(true)}
+              />
+            </Space.Compact>
             <Typography.Text type="secondary">{t("zdx.text.docker.composeDirectoryHint")}</Typography.Text>
-          </label>
+          </div>
           <div className="flex flex-col gap-2">
             <span>{t("zdx.label.docker.composeSource")}</span>
             <Radio.Group value={source} onChange={(event) => setSource(event.target.value as ComposeSource)}>
@@ -592,38 +669,77 @@ export default function ResourcePanel({
               <Radio value="yaml">{t("zdx.label.docker.writeCompose")}</Radio>
             </Radio.Group>
             {source === "file" ? (
-              <Input
-                readOnly
-                aria-label={t("zdx.label.docker.uploadCompose")}
-                placeholder={t("zdx.placeholder.docker.choose")}
-                value={composeFile}
-                onClick={() => void pickComposeFile()}
-                suffix={<Button type="text" size="small" aria-label={t("zdx.label.docker.chooseComposeFile")} icon={<RightOutlined />} onClick={(event) => { event.stopPropagation(); void pickComposeFile(); }} />}
-              />
+              <label className="flex flex-col gap-2">
+                <span>{t("zdx.label.docker.uploadCompose")} <span style={{ color: token.colorError }}>*</span></span>
+                <Input
+                  readOnly
+                  aria-label={t("zdx.label.docker.uploadCompose")}
+                  placeholder={t("zdx.placeholder.docker.choose")}
+                  value={composeFile}
+                  onClick={() => void pickComposeFile()}
+                  suffix={<Button type="text" size="small" aria-label={t("zdx.label.docker.chooseComposeFile")} icon={<RightOutlined />} onClick={(event) => { event.stopPropagation(); void pickComposeFile(); }} />}
+                />
+              </label>
             ) : (
-              <YamlEditor
-                label={t("zdx.label.docker.writeCompose")}
-                placeholder={t("zdx.placeholder.docker.composeYaml")}
-                value={yaml}
-                onChange={setYaml}
-              />
+              <label className="flex flex-col gap-2">
+                <span>{t("zdx.label.docker.writeCompose")} <span style={{ color: token.colorError }}>*</span></span>
+                <YamlEditor
+                  label={t("zdx.label.docker.writeCompose")}
+                  placeholder={t("zdx.placeholder.docker.composeYaml")}
+                  value={yaml}
+                  onChange={setYaml}
+                />
+              </label>
             )}
           </div>
           <Checkbox checked={startProject} onChange={(event) => setStartProject(event.target.checked)}>{t("zdx.label.docker.startCompose")}</Checkbox>
         </div>
       </Modal>
+      <HostFolder
+        open={folderOpen}
+        endpointId={endpointId}
+        initial={directory}
+        onClose={() => setFolderOpen(false)}
+        onPick={(path) => {
+          setDirectory(path);
+          setFolderOpen(false);
+        }}
+      />
       <InspectDrawer value={inspect} onClose={() => setInspect(null)} />
       <LogsDialog endpointId={endpointId} target={logs} onClose={() => setLogs(null)} />
       <Drawer title={composeView?.name || t("zdx.label.docker.details")} open={composeView !== null} width={720} onClose={() => setComposeView(null)}>
         <pre className="m-0 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">{composeView?.body}</pre>
       </Drawer>
-      <PullDialog open={pullOpen} endpointId={endpointId} onClose={() => setPullOpen(false)} onDone={() => setTick((value) => value + 1)} />
+      <PullDialog
+        open={pullOpen}
+        endpointId={endpointId}
+        preset={upgradeRef ?? undefined}
+        onClose={() => { setPullOpen(false); setUpgradeRef(null); }}
+        onDone={() => {
+          if (upgradeRef) setUpdates((current) => ({ ...current, [upgradeRef]: "current" }));
+          setTick((value) => value + 1);
+        }}
+      />
       <DockerShell key={shell?.id ?? "shell"} endpointId={endpointId} container={shell} onClose={() => setShell(null)} />
+      <MirrorDialog
+        endpointId={endpointId}
+        open={mirrorOpen}
+        onClose={() => setMirrorOpen(false)}
+        onSaved={() => {
+          setMirrorOpen(false);
+          onMirrorsSaved?.();
+          onRenewHold?.(false);
+          onLost?.();
+        }}
+        onBusy={onRenewHold}
+      />
       <RunDialog
         endpointId={endpointId}
+        open={runOpen}
         image={runImage}
-        onClose={() => setRunImage(null)}
+        onClose={() => setRunOpen(false)}
         onDone={() => {
+          setRunOpen(false);
           setRunImage(null);
           setNotice(t("zdx.text.docker.ran"));
           setTab("containers");
@@ -747,106 +863,123 @@ function usageText(t: (key: string, options?: Record<string, unknown>) => string
   return t("zdx.text.docker.usageMemory", { memory });
 }
 
-function RunDialog({
-  endpointId,
-  image,
-  onClose,
-  onDone,
-  onError,
+function UpdateMark({
+  tags,
+  updates,
+  checking,
 }: {
-  endpointId: number;
-  image: ImageRow | null;
-  onClose: () => void;
-  onDone: () => void;
-  onError: (caught: unknown) => void;
+  tags: string[];
+  updates: Record<string, "update" | "current" | "unknown">;
+  checking: boolean;
 }) {
   const { t } = useTranslation();
-  const [name, setName] = useState("");
-  const [ports, setPorts] = useState("");
-  const [command, setCommand] = useState("");
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState("");
-  const imageName = image ? image.tags[0] || image.id : "";
+  if (tags.length === 0) return <span>{t("zdx.text.docker.updateNone")}</span>;
+  const states = tags.map((tag) => updates[tag]).filter((state) => state !== undefined);
+  if (checking && states.length < tags.length) return <Spin size="small" />;
+  if (states.includes("update")) return <Tag color="warning">{t("zdx.text.docker.updateAvailable")}</Tag>;
+  if (states.length === tags.length && states.every((state) => state === "current")) return <Tag>{t("zdx.text.docker.updateCurrent")}</Tag>;
+  if (states.includes("unknown")) return <Tag>{t("zdx.text.docker.updateUnknown")}</Tag>;
+  return <span>{t("zdx.text.docker.updateUnchecked")}</span>;
+}
 
-  useEffect(() => {
-    if (image) return;
-    setName("");
-    setPorts("");
-    setCommand("");
-    setRunning(false);
-    setError("");
-  }, [image]);
+function pullStatusText(t: (key: string) => string, status: string): string {
+  const key = {
+    "Pulling fs layer": "zdx.text.docker.pullLayer",
+    "Waiting": "zdx.text.docker.pullWaiting",
+    "Downloading": "zdx.text.docker.pullDownloading",
+    "Verifying Checksum": "zdx.text.docker.pullVerifying",
+    "Download complete": "zdx.text.docker.pullDownloaded",
+    "Extracting": "zdx.text.docker.pullExtracting",
+    "Pull complete": "zdx.text.docker.pullLayerDone",
+    "Already exists": "zdx.text.docker.pullExists",
+  }[status];
+  return key ? t(key) : status;
+}
 
-  async function start() {
-    if (!imageName || running) return;
-    setRunning(true);
-    setError("");
-    try {
-      await dockerImageRun(endpointId, imageName, name.trim(), ports.trim(), command.trim());
-      onDone();
-    } catch (caught) {
-      if (caught instanceof DockerRequestError) {
-        setError(dockerErrorText(t, caught));
-        if (caught.code === "disconnected" || caught.code === "unreachable" || caught.code === "timeout") onError(caught);
-      }
-      setRunning(false);
-    }
-  }
-
+function PullBar({ percent }: { percent: number }) {
+  const { token } = antdTheme.useToken();
   return (
-    <Modal
-      title={t("zdx.text.docker.runTitle", { name: imageName })}
-      open={image !== null}
-      okText={t("zdx.label.docker.run")}
-      cancelText={t("zdx.label.docker.cancel")}
-      confirmLoading={running}
-      onCancel={onClose}
-      onOk={() => void start()}
-      destroyOnHidden
-    >
-      <Flex vertical gap={8}>
-        {error && <Alert type="error" showIcon message={error} />}
-        <Input value={name} disabled={running} aria-label={t("zdx.label.docker.containerName")} placeholder={t("zdx.placeholder.docker.containerName")} onChange={(event) => setName(event.target.value)} />
-        <Input value={ports} disabled={running} aria-label={t("zdx.label.docker.publish")} placeholder={t("zdx.placeholder.docker.publish")} onChange={(event) => setPorts(event.target.value)} />
-        <Typography.Text type="secondary">{t("zdx.text.docker.publishHint")}</Typography.Text>
-        <Input value={command} disabled={running} aria-label={t("zdx.label.docker.command")} placeholder={t("zdx.placeholder.docker.command")} onChange={(event) => setCommand(event.target.value)} />
-        <Typography.Text type="secondary">{t("zdx.text.docker.commandHint")}</Typography.Text>
-      </Flex>
-    </Modal>
+    <div className="h-1 overflow-hidden rounded-full" style={{ background: token.colorFillSecondary }}>
+      <div className="h-full rounded-full" style={{ width: `${Math.max(0, Math.min(100, percent))}%`, background: token.colorPrimary }} />
+    </div>
+  );
+}
+
+function PullProgressView({ progress, running }: { progress: PullProgress; running: boolean }) {
+  const { t } = useTranslation();
+  const totals = pullTotals(progress.layers);
+  if (!running && progress.layers.length === 0 && !progress.headline) return null;
+  return (
+    <div className="mt-3 flex flex-col gap-3">
+      {totals.total > 0 ? (
+        <div className="flex flex-col gap-1">
+          <span className="text-sm">{t("zdx.text.docker.pullOverall", { current: formatBytes(totals.current), total: formatBytes(totals.total), percent: totals.percent })}</span>
+          <PullBar percent={totals.percent} />
+        </div>
+      ) : running ? <span className="text-sm">{t("zdx.text.docker.pullProgress")}</span> : null}
+      {progress.headline && <Typography.Text type="secondary">{progress.headline}</Typography.Text>}
+      {progress.layers.length > 0 && (
+        <div className="flex max-h-60 flex-col gap-2 overflow-auto">
+          {progress.layers.map((layer) => (
+            <PullLayerRow key={layer.id} layer={layer} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PullLayerRow({ layer }: { layer: PullLayer }) {
+  const { t } = useTranslation();
+  const percent = layer.total > 0 ? Math.round((layer.current / layer.total) * 100) : 0;
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-3 text-xs">
+        <span className="shrink-0 font-mono">{layer.id.slice(0, 12)}</span>
+        <span className="min-w-0 flex-1 truncate">{pullStatusText(t, layer.status)}</span>
+        {layer.total > 0 && <span className="shrink-0">{formatBytes(layer.current)} / {formatBytes(layer.total)}</span>}
+      </div>
+      {layer.total > 0 && <PullBar percent={percent} />}
+    </div>
   );
 }
 
 function PullDialog({
   open,
   endpointId,
+  preset,
   onClose,
   onDone,
 }: {
   open: boolean;
   endpointId: number;
+  preset?: string;
   onClose: () => void;
   onDone: () => void;
 }) {
   const { t } = useTranslation();
+  const { token } = antdTheme.useToken();
   const [reference, setReference] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
   const [needsAuth, setNeedsAuth] = useState(false);
-  const [lines, setLines] = useState<string[]>([]);
+  const [progress, setProgress] = useState<PullProgress>(emptyPull);
   const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
   const taskRef = useRef(0);
   const stopped = useRef(false);
+  const startedPreset = useRef("");
 
   useEffect(() => {
     if (open) return;
+    startedPreset.current = "";
     setReference("");
     setUsername("");
     setPassword("");
     setRemember(true);
     setNeedsAuth(false);
-    setLines([]);
+    setProgress(emptyPull());
     setError("");
     setRunning(false);
   }, [open]);
@@ -859,50 +992,58 @@ function PullDialog({
     setRunning(false);
   }
 
+  function pull(name: string) {
+    const events = new Channel<DockerPullEvent>();
+    events.onmessage = (event) => {
+      if (event.type === "closed") {
+        setRunning(false);
+        taskRef.current = 0;
+        if (event.code === "ok") {
+          onDone();
+          onClose();
+        } else {
+          setNeedsAuth(event.code === "registry_auth");
+          setError(dockerErrorText(t, { code: event.code, params: event.params ?? {} }));
+        }
+        return;
+      }
+      setProgress((current) => applyPullProgress(current, event));
+    };
+    stopped.current = false;
+    setRunning(true);
+    setError("");
+    setProgress(emptyPull());
+    const auth = needsAuth && username.trim() && password ? { username: username.trim(), password, remember } : undefined;
+    void dockerImagePull(endpointId, name, events, auth).then((id) => {
+      if (stopped.current) {
+        void dockerTaskStop(id).catch(() => undefined);
+        return;
+      }
+      taskRef.current = id;
+    }).catch((caught: unknown) => {
+      if (stopped.current) return;
+      setRunning(false);
+      if (caught instanceof DockerRequestError) setError(dockerErrorText(t, caught));
+    });
+  }
+
   function start() {
     const name = reference.trim();
-    if (!name) return;
+    if (!name || running) return;
     Modal.confirm({
       title: t("zdx.text.docker.pullConfirm", { name }),
       okText: t("zdx.label.docker.pull"),
       cancelText: t("zdx.label.docker.cancel"),
-      onOk: () => {
-        const events = new Channel<DockerPullEvent>();
-        events.onmessage = (event) => {
-          if (event.type === "closed") {
-            setRunning(false);
-            taskRef.current = 0;
-            if (event.code === "ok") {
-              onDone();
-              onClose();
-            } else {
-              setNeedsAuth(event.code === "registry_auth");
-              setError(dockerErrorText(t, { code: event.code, params: event.params ?? {} }));
-            }
-            return;
-          }
-          const label = event.id ? `${event.id} ${event.status}` : event.status;
-          setLines((current) => [...current.slice(-20), label]);
-        };
-        stopped.current = false;
-        setRunning(true);
-        setError("");
-        setLines([]);
-        const auth = needsAuth && username.trim() && password ? { username: username.trim(), password, remember } : undefined;
-        void dockerImagePull(endpointId, name, events, auth).then((id) => {
-          if (stopped.current) {
-            void dockerTaskStop(id).catch(() => undefined);
-            return;
-          }
-          taskRef.current = id;
-        }).catch((caught: unknown) => {
-          if (stopped.current) return;
-          setRunning(false);
-          if (caught instanceof DockerRequestError) setError(dockerErrorText(t, caught));
-        });
-      },
+      onOk: () => pull(name),
     });
   }
+
+  useEffect(() => {
+    if (!open || !preset || startedPreset.current === preset) return;
+    startedPreset.current = preset;
+    setReference(preset);
+    pull(preset);
+  }, [open, preset]);
 
   return (
     <Modal
@@ -915,7 +1056,10 @@ function PullDialog({
       onOk={() => { if (!running) start(); }}
       destroyOnHidden
     >
-      <Input value={reference} disabled={running} placeholder={t("zdx.placeholder.docker.image")} aria-label={t("zdx.label.docker.reference")} onChange={(event) => setReference(event.target.value)} />
+      <label className="flex flex-col gap-2">
+        <span>{t("zdx.label.docker.reference")} <span style={{ color: token.colorError }}>*</span></span>
+        <Input value={reference} disabled={running} placeholder={t("zdx.placeholder.docker.image")} aria-label={t("zdx.label.docker.reference")} onChange={(event) => setReference(event.target.value)} />
+      </label>
       {needsAuth && (
         <Flex vertical gap={8} className="mt-3">
           <Typography.Text type="secondary">{t("zdx.text.docker.registryHint")}</Typography.Text>
@@ -925,8 +1069,7 @@ function PullDialog({
         </Flex>
       )}
       {error && <Alert className="mt-3" type="error" showIcon message={error} />}
-      {lines.length > 0 && <pre className="mt-3 max-h-60 overflow-auto whitespace-pre-wrap text-xs">{lines.join("\n")}</pre>}
-      {running && lines.length === 0 && <div className="mt-3 text-sm">{t("zdx.text.docker.pullProgress")}</div>}
+      <PullProgressView progress={progress} running={running} />
     </Modal>
   );
 }

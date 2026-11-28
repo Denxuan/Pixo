@@ -4,6 +4,7 @@ export type DockerKind = "local" | "ssh";
 
 export type DockerStatus = {
   enabled: boolean;
+  imageUpdates: boolean;
 };
 
 export type DockerEndpoint = {
@@ -68,6 +69,18 @@ export type ContainerRow = {
   created: number;
 };
 
+export type ContainerRunRequest = {
+  image: string;
+  name: string;
+  restart: string;
+  network: string;
+  ports: string;
+  mounts: { kind: "bind" | "volume"; source: string; target: string; readOnly: boolean }[];
+  env: { key: string; value: string }[];
+  command: string;
+  workdir: string;
+};
+
 export type ImageRow = {
   id: string;
   tags: string[];
@@ -80,6 +93,9 @@ export type NetworkRow = {
   name: string;
   driver: string;
   scope: string;
+  subnet: string;
+  gateway: string;
+  ipv6: boolean;
 };
 
 export type ComposeService = {
@@ -112,11 +128,15 @@ export type ComposeProject = ComposePreview & {
   origin: "engine" | "file" | "both";
 };
 
-export type VolumeRow = {
+export type HostDirEntry = {
   name: string;
-  driver: string;
-  mountpoint: string;
-  scope: string;
+  path: string;
+};
+
+export type HostDirListing = {
+  path: string;
+  parent: string | null;
+  entries: HostDirEntry[];
 };
 
 export type DockerConnectEvent =

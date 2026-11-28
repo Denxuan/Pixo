@@ -292,7 +292,11 @@ fn matches_shot(path: &str, text: Option<&str>, query: Option<&str>) -> bool {
         return true;
     };
     let needle: String = query.chars().take(200).collect::<String>().to_lowercase();
-    let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_lowercase();
+    let name = path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path)
+        .to_lowercase();
     name.contains(&needle) || text.is_some_and(|value| value.to_lowercase().contains(&needle))
 }
 

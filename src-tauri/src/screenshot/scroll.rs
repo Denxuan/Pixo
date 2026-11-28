@@ -1,4 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -43,12 +44,29 @@ enum Motion {
 }
 
 const ROW_SAMPLES: usize = 32;
+/// Mean per-channel difference above this is not the same row.
+const ALIGN_LIMIT: u32 = 18;
 /// Peaks closer than this are the same alignment, not two ways the page could have moved.
 const PEAK_GAP: i32 = 8;
 
+struct Placement {
+    motion: Motion,
+    header: u32,
+    footer: u32,
+}
+
 fn find_shift(previous: &[u8], next: &[u8], width: u32, height: u32) -> Motion {
+    placement(previous, next, width, height).motion
+}
+
+fn placement(previous: &[u8], next: &[u8], width: u32, height: u32) -> Placement {
+    let miss = |motion| Placement {
+        motion,
+        header: 0,
+        footer: 0,
+    };
     if previous.len() != next.len() || width < 8 || height < 16 {
-        return Motion::Unaligned;
+        return miss(Motion::Unaligned);
     }
     let previous_rows = row_samples(previous, width, height);
     let next_rows = row_samples(next, width, height);
@@ -68,21 +86,31 @@ fn find_shift(previous: &[u8], next: &[u8], width: u32, height: u32) -> Motion {
         false,
         &weights,
         0,
+        u32::MAX,
+        u64::MAX,
     );
     let static_rows = sticky.iter().filter(|row| **row).count();
     // A grabbed frame is noisy even when the page has not moved. Blank gaps
     // and a repeating line rhythm pull the average down after a real scroll,
     // so "unchanged" also requires almost every row to still sit in place.
     if unchanged <= 6 && static_rows.saturating_add(8) >= height as usize {
-        return Motion::Unchanged;
+        return miss(Motion::Unchanged);
     }
     // Sticky headers match at shift 0 and drown out a real jump. Blank rows
     // match at every offset, so only rows that are actually distinctive vote.
+    let header_px = header.max(0) as u32;
+    let footer = footer_from_frames(previous, next, &previous_rows, width, height, header_px);
     let voting: Vec<u32> = (0..height)
-        .filter(|&y| !sticky[y as usize] && weights[y as usize] > 0)
+        .filter(|&y| {
+            !sticky[y as usize] && weights[y as usize] > 0 && y >= header_px && y + footer < height
+        })
         .collect();
     if voting.len() < 8 {
-        return Motion::Unaligned;
+        return Placement {
+            motion: Motion::Unaligned,
+            header: header_px,
+            footer,
+        };
     }
     let still = score_rows(
         &previous_rows,
@@ -93,69 +121,318 @@ fn find_shift(previous: &[u8], next: &[u8], width: u32, height: u32) -> Motion {
         true,
         &weights,
         header,
+        u32::MAX,
+        u64::MAX,
     );
     // New rows come from the bottom of the next frame. A shift into the fixed
     // toolbar would paste that bar into the strip and skip the lines between.
-    let max_shift = height
-        .saturating_sub(header as u32)
-        .saturating_sub(8)
-        .max(1) as i32;
+    let max_shift = height.saturating_sub(header_px).saturating_sub(8).max(1) as i32;
     let mut best: Option<Alignment> = None;
     let mut rival: Option<Alignment> = None;
-    let mut shift = 1i32;
-    while shift <= max_shift {
-        consider_shift(
-            &mut best,
-            &mut rival,
-            &previous_rows,
-            &next_rows,
-            shift,
-            &voting,
-            &sticky,
-            &weights,
-            header,
-        );
-        consider_shift(
-            &mut best,
-            &mut rival,
-            &previous_rows,
-            &next_rows,
-            -shift,
-            &voting,
-            &sticky,
-            &weights,
-            header,
-        );
-        shift += 1;
-    }
+    scan_alignments(
+        &mut best,
+        &mut rival,
+        &previous_rows,
+        &next_rows,
+        &voting,
+        &sticky,
+        &weights,
+        header,
+        max_shift,
+        still,
+    );
     let Some(best) = best else {
-        return Motion::Unaligned;
-    };
-    // A rival blocks the match only when it explains the page about as well.
-    // A perfect overlap stays: a worse offset used to veto it and drop the scroll.
-    if let Some(rival) = rival {
-        let margin = if best.score == 0 {
-            0
-        } else if best.overlap < height / 3 {
-            6
-        } else if best.score <= 6 {
-            3
-        } else {
-            2
+        return Placement {
+            motion: Motion::Unaligned,
+            header: header_px,
+            footer,
         };
-        let similar = rival.overlap.saturating_mul(3) >= best.overlap.saturating_mul(2)
-            && best.overlap.saturating_mul(3) >= rival.overlap.saturating_mul(2);
-        if rival.score <= best.score.saturating_add(margin) && similar {
-            return Motion::Unaligned;
-        }
-    }
+    };
     let moved = best.score == 0 || best.score.saturating_add(2) < still;
     let close = best.score <= 28;
     let obvious = best.score.saturating_mul(2).saturating_add(8) < still;
     if !moved || !(close || obvious) {
-        return Motion::Unaligned;
+        return Placement {
+            motion: Motion::Unaligned,
+            header: header_px,
+            footer,
+        };
     }
-    Motion::Shift(best.shift)
+    // Sampled rows treat two similar form lines as the same scroll. Confirm the
+    // offset against the pixels, and drop a grab whose top and bottom moved apart.
+    let mut candidates = vec![best.lo, best.shift, best.hi];
+    if let Some(rival) = rival
+        && rival.score <= best.score.saturating_add(10)
+    {
+        candidates.extend([rival.lo, rival.shift, rival.hi]);
+    }
+    let motion = match confirm_shift(
+        previous,
+        next,
+        width,
+        height,
+        header_px,
+        footer,
+        max_shift,
+        best.shift,
+        &candidates,
+    ) {
+        Some(shift) => Motion::Shift(shift),
+        None => Motion::Unaligned,
+    };
+    Placement {
+        motion,
+        header: header_px,
+        footer,
+    }
+}
+
+fn scan_alignments(
+    best: &mut Option<Alignment>,
+    rival: &mut Option<Alignment>,
+    previous_rows: &[[u8; ROW_SAMPLES]],
+    next_rows: &[[u8; ROW_SAMPLES]],
+    voting: &[u32],
+    sticky: &[bool],
+    weights: &[u32],
+    header: i32,
+    max_shift: i32,
+    still: u32,
+) {
+    // A shift worse than this can never be chosen. Score it only until that
+    // is already guaranteed, instead of reading every remaining row. Every
+    // voting row still votes: skipping rows made two similar form lines look
+    // like the same scroll and pasted one section over the next.
+    let obvious = still.saturating_sub(8) / 2;
+    let abort_above = still.saturating_sub(3).min(obvious.max(28)).max(6);
+    score_offsets(
+        best,
+        rival,
+        previous_rows,
+        next_rows,
+        voting,
+        sticky,
+        weights,
+        header,
+        max_shift,
+        abort_above,
+    );
+}
+
+fn score_offsets(
+    best: &mut Option<Alignment>,
+    rival: &mut Option<Alignment>,
+    previous_rows: &[[u8; ROW_SAMPLES]],
+    next_rows: &[[u8; ROW_SAMPLES]],
+    voting: &[u32],
+    sticky: &[bool],
+    weights: &[u32],
+    header: i32,
+    max_shift: i32,
+    abort_above: u32,
+) {
+    let vote_weight = voting.iter().map(|y| u64::from(weights[*y as usize])).sum();
+    let mut shift = 1i32;
+    while shift <= max_shift {
+        consider_shift(
+            best,
+            rival,
+            previous_rows,
+            next_rows,
+            shift,
+            voting,
+            sticky,
+            weights,
+            header,
+            abort_above,
+            vote_weight,
+        );
+        consider_shift(
+            best,
+            rival,
+            previous_rows,
+            next_rows,
+            -shift,
+            voting,
+            sticky,
+            weights,
+            header,
+            abort_above,
+            vote_weight,
+        );
+        shift += 1;
+    }
+}
+
+fn confirm_shift(
+    previous: &[u8],
+    next: &[u8],
+    width: u32,
+    height: u32,
+    header: u32,
+    footer: u32,
+    max_shift: i32,
+    preferred: i32,
+    candidates: &[i32],
+) -> Option<i32> {
+    let mut ranked: Vec<(i32, u32)> = Vec::new();
+    for &coarse in candidates {
+        let mut best_shift = 0i32;
+        let mut best_sad = u32::MAX;
+        for delta in -6..=6 {
+            let shift = coarse + delta;
+            if shift == 0 || shift.abs() > max_shift {
+                continue;
+            }
+            let Some(sad) = content_sad(previous, next, width, height, shift, header, footer)
+            else {
+                continue;
+            };
+            let closer = best_shift != 0 && (shift - coarse).abs() < (best_shift - coarse).abs();
+            if sad < best_sad || (sad == best_sad && closer) {
+                best_sad = sad;
+                best_shift = shift;
+            }
+        }
+        if best_shift != 0 && best_sad <= ALIGN_LIMIT {
+            if let Some(existing) = ranked.iter_mut().find(|(shift, _)| *shift == best_shift) {
+                existing.1 = existing.1.min(best_sad);
+            } else {
+                ranked.push((best_shift, best_sad));
+            }
+        }
+    }
+    ranked.sort_by(|left, right| {
+        left.1
+            .cmp(&right.1)
+            .then_with(|| (left.0 - preferred).abs().cmp(&(right.0 - preferred).abs()))
+    });
+    let (shift, sad) = *ranked.first()?;
+    // Two far offsets that match equally are a repeated pattern, not a scroll.
+    if ranked
+        .iter()
+        .any(|(other, other_sad)| (*other - shift).abs() > 8 && *other_sad <= sad)
+    {
+        return None;
+    }
+    let content_bottom = height.saturating_sub(footer);
+    let mid = header + content_bottom.saturating_sub(header) / 2;
+    // A torn grab matches one shift on top and another below. Either half
+    // disagreeing is enough to drop the frame; a half with too little overlap
+    // simply does not vote.
+    if content_sad_band(
+        previous,
+        next,
+        width,
+        shift,
+        header,
+        mid,
+        header,
+        content_bottom,
+    )
+    .is_some_and(|sad| sad > ALIGN_LIMIT)
+        || content_sad_band(
+            previous,
+            next,
+            width,
+            shift,
+            mid,
+            content_bottom,
+            header,
+            content_bottom,
+        )
+        .is_some_and(|sad| sad > ALIGN_LIMIT)
+    {
+        return None;
+    }
+    Some(shift)
+}
+
+fn content_sad(
+    previous: &[u8],
+    next: &[u8],
+    width: u32,
+    height: u32,
+    shift: i32,
+    header: u32,
+    footer: u32,
+) -> Option<u32> {
+    let bottom = height.saturating_sub(footer);
+    content_sad_band(previous, next, width, shift, header, bottom, header, bottom)
+}
+
+/// Average per-channel difference for `previous` rows in `band_top..band_bottom`.
+/// The row they land on may sit anywhere in the scrolling area. Too few
+/// overlapping rows means this band cannot confirm or reject the shift.
+fn content_sad_band(
+    previous: &[u8],
+    next: &[u8],
+    width: u32,
+    shift: i32,
+    band_top: u32,
+    band_bottom: u32,
+    content_top: u32,
+    content_bottom: u32,
+) -> Option<u32> {
+    if band_bottom <= band_top || width < 8 || previous.len() != next.len() {
+        return None;
+    }
+    let stride = width as usize * 4;
+    let mut total = 0u64;
+    let mut pixels = 0u64;
+    let mut rows = 0u32;
+    let mut y = band_top;
+    while y < band_bottom {
+        // A fixed bar stays put. It is not evidence for the scroll distance.
+        if row_unmoved(previous, next, width, y) {
+            y += 1;
+            continue;
+        }
+        let other = y as i32 - shift;
+        if other >= content_top as i32 && other < content_bottom as i32 {
+            let left = y as usize * stride;
+            let right = other as usize * stride;
+            let mut x = 0usize;
+            while x < width as usize {
+                let a = left + x * 4;
+                let b = right + x * 4;
+                total += u64::from(previous[a].abs_diff(next[b]));
+                total += u64::from(previous[a + 1].abs_diff(next[b + 1]));
+                total += u64::from(previous[a + 2].abs_diff(next[b + 2]));
+                pixels += 3;
+                x += 1;
+            }
+            rows += 1;
+        }
+        y += 1;
+    }
+    if rows < 6 || pixels == 0 {
+        None
+    } else {
+        // Any real difference has to stay visible. Truncating a fraction to 0
+        // made a one-channel miss look like a perfect second alignment.
+        Some(((total + pixels - 1) / pixels) as u32)
+    }
+}
+
+fn row_unmoved(previous: &[u8], next: &[u8], width: u32, y: u32) -> bool {
+    let stride = width as usize * 4;
+    let start = y as usize * stride;
+    if start + stride > previous.len() || start + stride > next.len() {
+        return false;
+    }
+    let mut total = 0u32;
+    let mut count = 0u32;
+    let mut x = 0usize;
+    while x < width as usize {
+        let index = start + x * 4;
+        total += u32::from(previous[index].abs_diff(next[index]));
+        total += u32::from(previous[index + 1].abs_diff(next[index + 1]));
+        total += u32::from(previous[index + 2].abs_diff(next[index + 2]));
+        count += 3;
+        x += 2;
+    }
+    count > 0 && total / count <= 4
 }
 
 struct Alignment {
@@ -208,6 +485,8 @@ fn consider_shift(
     sticky: &[bool],
     weights: &[u32],
     header: i32,
+    abort_above: u32,
+    vote_weight: u64,
 ) {
     let score = score_rows(
         previous,
@@ -218,6 +497,8 @@ fn consider_shift(
         true,
         weights,
         header,
+        abort_above,
+        vote_weight,
     );
     if score == u32::MAX {
         return;
@@ -301,6 +582,183 @@ fn sticky_header(sticky: &[bool]) -> i32 {
     last as i32
 }
 
+/// Header and footer bands that stayed pixel-aligned between two grabs.
+/// A flat page background is not a footer: those rows already appear above it.
+fn fixed_edges(previous: &[u8], next: &[u8], width: u32, height: u32) -> (u32, u32) {
+    if previous.len() != next.len()
+        || width < 8
+        || height < 16
+        || previous.len() != width as usize * height as usize * 4
+    {
+        return (0, 0);
+    }
+    let previous_rows = row_samples(previous, width, height);
+    let next_rows = row_samples(next, width, height);
+    let sticky: Vec<bool> = (0..height)
+        .map(|y| row_static(&previous_rows[y as usize], &next_rows[y as usize]))
+        .collect();
+    let header = sticky_header(&sticky).max(0) as u32;
+    let footer = footer_from_frames(previous, next, &previous_rows, width, height, header);
+    (header, footer)
+}
+
+/// Bottom band that stays put while the page moves, including the dark margin
+/// under a button bar. A one-pixel grab shift still counts.
+fn footer_from_frames(
+    previous: &[u8],
+    next: &[u8],
+    rows: &[[u8; ROW_SAMPLES]],
+    width: u32,
+    height: u32,
+    header: u32,
+) -> u32 {
+    if width < 8 || height <= header.saturating_add(24) {
+        return 0;
+    }
+    let max_footer = (height / 3)
+        .clamp(64, 320)
+        .min(height.saturating_sub(header + 16));
+    let floor = height.saturating_sub(max_footer);
+    let mut bar_bottom = None;
+    let mut y = height;
+    while y > floor {
+        y -= 1;
+        if row_fixed(previous, next, width, height, y)
+            && row_is_bar(previous, rows, width, header, floor, y)
+        {
+            bar_bottom = Some(y);
+            break;
+        }
+    }
+    let Some(bar_bottom) = bar_bottom else {
+        return 0;
+    };
+    let mut footer_top = bar_bottom;
+    let mut quiet = 0u32;
+    while footer_top > floor {
+        let above = footer_top - 1;
+        if row_is_bar(previous, rows, width, header, floor, above)
+            && row_fixed(previous, next, width, height, above)
+        {
+            quiet = 0;
+            footer_top = above;
+            continue;
+        }
+        if quiet < 12
+            && row_pixel_contrast(previous, width, above) < 36
+            && row_fixed(previous, next, width, height, above)
+        {
+            quiet += 1;
+            footer_top = above;
+            continue;
+        }
+        break;
+    }
+    let footer = height.saturating_sub(footer_top);
+    if footer < 8 { 0 } else { footer }
+}
+
+fn row_fixed(previous: &[u8], next: &[u8], width: u32, height: u32, y: u32) -> bool {
+    let mut best_sad = u32::MAX;
+    let mut best_changed = u32::MAX;
+    for delta in -2i32..=2 {
+        let other = y as i32 + delta;
+        if other < 0 || other >= height as i32 {
+            continue;
+        }
+        let (sad, changed) = row_channel_sad(previous, next, width, y, other as u32);
+        if sad < best_sad {
+            best_sad = sad;
+            best_changed = changed;
+        }
+    }
+    // A line of text on a dark page barely moves the average, but it still
+    // changes a run of pixels. The action bar matches across the whole row.
+    // Samples are every other pixel, so the budget is about one short word.
+    best_sad <= 14 && best_changed <= (width / 80).max(2)
+}
+
+fn row_channel_sad(left: &[u8], right: &[u8], width: u32, y_left: u32, y_right: u32) -> (u32, u32) {
+    let stride = width as usize * 4;
+    let start_left = y_left as usize * stride;
+    let start_right = y_right as usize * stride;
+    if start_left + stride > left.len() || start_right + stride > right.len() {
+        return (u32::MAX, u32::MAX);
+    }
+    let mut total = 0u64;
+    let mut count = 0u64;
+    let mut changed = 0u32;
+    let mut x = 0usize;
+    while x < width as usize {
+        let a = start_left + x * 4;
+        let b = start_right + x * 4;
+        let dr = u32::from(left[a].abs_diff(right[b]));
+        let dg = u32::from(left[a + 1].abs_diff(right[b + 1]));
+        let db = u32::from(left[a + 2].abs_diff(right[b + 2]));
+        total += u64::from(dr + dg + db);
+        if dr > 20 || dg > 20 || db > 20 {
+            changed += 1;
+        }
+        count += 3;
+        x += 2;
+    }
+    if count == 0 {
+        (u32::MAX, u32::MAX)
+    } else {
+        (((total + count - 1) / count) as u32, changed)
+    }
+}
+
+fn row_pixel_contrast(frame: &[u8], width: u32, y: u32) -> u32 {
+    let stride = width as usize * 4;
+    let start = y as usize * stride;
+    if start + stride > frame.len() {
+        return 0;
+    }
+    let mut min_luma = 255u32;
+    let mut max_luma = 0u32;
+    let mut x = 0usize;
+    while x < width as usize {
+        let offset = start + x * 4;
+        let luma = (u32::from(frame[offset]) * 3
+            + u32::from(frame[offset + 1]) * 6
+            + u32::from(frame[offset + 2]))
+            / 10;
+        min_luma = min_luma.min(luma);
+        max_luma = max_luma.max(luma);
+        x += 2;
+    }
+    max_luma.saturating_sub(min_luma)
+}
+
+fn row_is_bar(
+    frame: &[u8],
+    rows: &[[u8; ROW_SAMPLES]],
+    width: u32,
+    header: u32,
+    page_end: u32,
+    y: u32,
+) -> bool {
+    row_pixel_contrast(frame, width, y) >= 36
+        || !row_matches_page(rows, header as usize, page_end as usize, y as usize)
+}
+
+fn row_matches_page(rows: &[[u8; ROW_SAMPLES]], header: usize, page_end: usize, y: usize) -> bool {
+    if page_end <= header || y >= rows.len() {
+        return false;
+    }
+    let mut nearest = u32::MAX;
+    let mut other = header;
+    while other < page_end {
+        nearest = nearest.min(row_sad(&rows[y], &rows[other]) / ROW_SAMPLES as u32);
+        if nearest <= 4 {
+            return true;
+        }
+        other += 1;
+    }
+    false
+}
+
 fn row_static(left: &[u8; ROW_SAMPLES], right: &[u8; ROW_SAMPLES]) -> bool {
     row_sad(left, right) / ROW_SAMPLES as u32 <= 4
 }
@@ -364,10 +822,13 @@ fn score_rows(
     skip_sticky: bool,
     weights: &[u32],
     header: i32,
+    abort_above: u32,
+    vote_weight: u64,
 ) -> u32 {
     let height = previous.len() as i32;
     let mut total = 0u64;
     let mut weight = 0u64;
+    let samples = ROW_SAMPLES as u64;
     for y in rows {
         let other = y as i32 - shift;
         if other < 0 || other >= height {
@@ -384,11 +845,17 @@ fn score_rows(
             u64::from(row_sad(&previous[y as usize], &next[other as usize])) * row_weight,
         );
         weight = weight.saturating_add(row_weight);
+        // Even if every row we have not read matches perfectly, this shift
+        // cannot win. Stop instead of walking the rest of the page.
+        let denom = vote_weight.saturating_mul(samples);
+        if denom > 0 && total / denom > u64::from(abort_above) {
+            return u32::MAX;
+        }
     }
     if weight == 0 {
         u32::MAX
     } else {
-        (total / (weight * ROW_SAMPLES as u64)) as u32
+        (total / (weight * samples)) as u32
     }
 }
 
@@ -437,9 +904,16 @@ impl Stitch {
     }
 
     fn push(&mut self, frame: &[u8], max_height: u32) -> Step {
-        let step = match find_shift(&self.previous, frame, self.width, self.view_height) {
+        let placed = placement(&self.previous, frame, self.width, self.view_height);
+        let step = match placed.motion {
             Motion::Unchanged | Motion::Unaligned => return Step::Still,
-            Motion::Shift(shift) if shift > 0 => self.grow_down(frame, shift as u32, max_height),
+            Motion::Shift(shift) if shift > 0 => self.grow_down(
+                frame,
+                shift as u32,
+                max_height,
+                placed.header,
+                placed.footer,
+            ),
             Motion::Shift(shift) => self.grow_up(frame, shift.unsigned_abs(), max_height),
         };
         if matches!(step, Step::Moved { .. }) {
@@ -453,7 +927,14 @@ impl Stitch {
         &self.previous
     }
 
-    fn grow_down(&mut self, frame: &[u8], shift: u32, max_height: u32) -> Step {
+    fn grow_down(
+        &mut self,
+        frame: &[u8],
+        shift: u32,
+        max_height: u32,
+        header: u32,
+        footer: u32,
+    ) -> Step {
         let new_top = self.view_top.saturating_add(shift);
         let bottom = new_top.saturating_add(self.view_height);
         if bottom <= self.height {
@@ -462,6 +943,13 @@ impl Stitch {
         }
         let extra = bottom - self.height;
         let room = max_height.saturating_sub(self.height);
+        // The new lines sit just above a fixed action bar. Appending the bottom
+        // of the grab would stamp that bar into the strip on every scroll.
+        if footer > 0 {
+            return self
+                .grow_past_footer(frame, extra, room, header, footer, new_top, max_height)
+                .unwrap_or(if room == 0 { Step::Full } else { Step::Still });
+        }
         let source = self.view_height.saturating_sub(extra);
         let take = extra.min(room).min(self.view_height.saturating_sub(source));
         if take == 0 {
@@ -478,6 +966,69 @@ impl Stitch {
         } else {
             Step::Moved { up: false }
         }
+    }
+
+    fn grow_past_footer(
+        &mut self,
+        frame: &[u8],
+        extra: u32,
+        room: u32,
+        header: u32,
+        footer: u32,
+        new_top: u32,
+        max_height: u32,
+    ) -> Option<Step> {
+        if footer == 0 || extra == 0 || room == 0 {
+            return None;
+        }
+        let content_bottom = self.view_height.saturating_sub(footer);
+        let source = content_bottom
+            .saturating_sub(extra)
+            .max(header.min(content_bottom));
+        let take = extra.min(room).min(content_bottom.saturating_sub(source));
+        if take == 0 || !self.replace_tail(frame, source, take, footer) {
+            return None;
+        }
+        if take < extra {
+            self.view_top = self.view_top.saturating_add(take);
+            return Some(Step::Full);
+        }
+        self.view_top = new_top;
+        Some(if self.height >= max_height {
+            Step::Full
+        } else {
+            Step::Moved { up: false }
+        })
+    }
+
+    /// Drop the previous footer, append the newly revealed rows, then the footer once.
+    fn replace_tail(&mut self, frame: &[u8], source_y: u32, count: u32, footer: u32) -> bool {
+        let stride = self.width as usize * 4;
+        if stride == 0 || footer == 0 || footer > self.view_height || footer > self.height {
+            return false;
+        }
+        let Some(content_end) = source_y.checked_add(count) else {
+            return false;
+        };
+        if content_end > self.view_height - footer {
+            return false;
+        }
+        let footer_bytes = footer as usize * stride;
+        let content_at = source_y as usize * stride;
+        let footer_at = (self.view_height - footer) as usize * stride;
+        if self.rgba.len() < footer_bytes
+            || frame.len() < content_at + count as usize * stride
+            || frame.len() < footer_at + footer_bytes
+        {
+            return false;
+        }
+        self.rgba.truncate(self.rgba.len() - footer_bytes);
+        self.height -= footer;
+        if count > 0 {
+            self.append(frame, source_y, count);
+        }
+        self.append(frame, self.view_height - footer, footer);
+        true
     }
 
     fn grow_up(&mut self, frame: &[u8], shift: u32, max_height: u32) -> Step {
@@ -669,6 +1220,91 @@ fn fit_preview(
     Some((out_width, out_height, pixels))
 }
 
+/// Grabs kept ahead of the stitch. The capture thread does not wait to join a
+/// frame, so a flick stays a sequence of overlapping grabs.
+const FRAME_BATCH: usize = 64;
+const FRAME_BYTES: usize = 256 * 1024 * 1024;
+
+struct Composer {
+    stitch: Stitch,
+    grown: bool,
+    synced: bool,
+    misses: u32,
+}
+
+impl Composer {
+    fn new(frame: Vec<u8>, width: u32, height: u32) -> Self {
+        Self {
+            stitch: Stitch::new(frame, width, height),
+            grown: false,
+            synced: false,
+            misses: 0,
+        }
+    }
+
+    fn absorb(&mut self, frame: &[u8], max_height: u32) -> Step {
+        match self.stitch.push(frame, max_height) {
+            Step::Moved { up } => {
+                self.grown = true;
+                self.misses = 0;
+                Step::Moved { up }
+            }
+            Step::Full => Step::Full,
+            Step::Still => {
+                let motion = find_shift(
+                    self.stitch.view(),
+                    frame,
+                    self.stitch.width,
+                    self.stitch.view_height,
+                );
+                if matches!(motion, Motion::Unchanged) {
+                    return Step::Still;
+                }
+                // The first grab can still show the capture overlay. Adopt the
+                // live page once, then keep every row that has already been
+                // stitched instead of replacing the strip with the latest view.
+                if !self.grown && !self.synced {
+                    self.misses = self.misses.saturating_add(1);
+                    if self.misses >= 2 {
+                        self.stitch.replace_view(frame);
+                        self.synced = true;
+                        self.misses = 0;
+                    }
+                }
+                Step::Still
+            }
+        }
+    }
+
+    fn into_strip(self) -> Strip {
+        Strip {
+            width: self.stitch.width,
+            height: self.stitch.height,
+            rgba: self.stitch.rgba,
+        }
+    }
+}
+
+/// Join grabs in the order they were taken. A frame that does not line up is
+/// left out, and the next grab is still compared with the last one that did.
+fn compose_frames(frames: &[Vec<u8>], width: u32, height: u32, max_height: u32) -> Strip {
+    let mut frames = frames.iter();
+    let Some(first) = frames.next() else {
+        return Strip {
+            width,
+            height: 0,
+            rgba: Vec::new(),
+        };
+    };
+    let mut composer = Composer::new(first.clone(), width, height);
+    for frame in frames {
+        if matches!(composer.absorb(frame, max_height), Step::Full) {
+            break;
+        }
+    }
+    composer.into_strip()
+}
+
 pub fn capture_strip(
     monitor_index: usize,
     origin_x: u32,
@@ -677,7 +1313,7 @@ pub fn capture_strip(
     height: u32,
     max_height: u32,
     cursor: Cursor,
-    mut progress: impl FnMut(&[u8], u32, u32),
+    mut progress: impl FnMut(&[u8], u32, u32) + Send + 'static,
 ) -> Result<Strip, ScreenshotError> {
     if width < MIN_WIDTH
         || height < MIN_HEIGHT
@@ -693,17 +1329,53 @@ pub fn capture_strip(
     let monitor = open_monitor(monitor_index)?;
     thread::sleep(Duration::from_millis(150));
     let first = grab_region(&monitor, origin_x, origin_y, width, height)?;
-    let mut stitch = Stitch::new(first, width, height);
-    progress(&stitch.rgba, stitch.width, stitch.height);
-    let mut grown = false;
-    let mut synced = false;
-    let mut misses = 0u32;
-    let mut hold_auto = Instant::now();
+    progress(&first, width, height);
+    let frame_bytes = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4)
+        .max(1);
+    let slots = (FRAME_BYTES / frame_bytes).clamp(8, FRAME_BATCH);
+    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(slots);
+    let hold_until = Arc::new(AtomicU64::new(0));
+    let hold_for_join = Arc::clone(&hold_until);
+    let clock = Instant::now();
+    let join_clock = clock.clone();
+    let mut anchor = first.clone();
+    let mut newest = anchor.clone();
+    let mut holding = false;
+    let stitcher = thread::spawn(move || {
+        let mut composer = Composer::new(first, width, height);
+        let mut preview_at = Instant::now() + Duration::from_millis(200);
+        while let Ok(frame) = rx.recv() {
+            if frame.len() != composer.stitch.view().len() {
+                break;
+            }
+            let step = composer.absorb(&frame, max_height);
+            if matches!(step, Step::Moved { up: true }) {
+                let until = join_clock.elapsed().as_millis() as u64 + 800;
+                hold_for_join.store(until, Ordering::Release);
+            }
+            if matches!(step, Step::Full) {
+                break;
+            }
+            if matches!(step, Step::Moved { .. }) && Instant::now() >= preview_at {
+                progress(
+                    &composer.stitch.rgba,
+                    composer.stitch.width,
+                    composer.stitch.height,
+                );
+                preview_at = Instant::now() + Duration::from_millis(200);
+            }
+        }
+        let strip = composer.into_strip();
+        progress(&strip.rgba, strip.width, strip.height);
+        strip
+    });
+    let mut failure = None;
     let mut input_ready = false;
     let mut saw_auto = false;
-    let mut next_preview = Instant::now();
     let deadline = Instant::now() + Duration::from_secs(90);
-    while !stopped() && stitch.height < max_height && Instant::now() < deadline {
+    while !stopped() && Instant::now() < deadline {
         let enabled = auto_enabled();
         if enabled && !saw_auto {
             input_ready = prepare_input();
@@ -712,63 +1384,107 @@ pub fn capture_strip(
             input_ready = false;
         }
         saw_auto = enabled;
-        let driving = enabled && input_ready && Instant::now() >= hold_auto;
+        let driving = enabled
+            && input_ready
+            && clock.elapsed().as_millis() as u64 >= hold_until.load(Ordering::Acquire);
         if driving && !scroll_down(&cursor) {
             input_ready = false;
         }
-        // Manual scrolling is a flick, not a 40ms step. Sample again as soon as
-        // the previous grab is done so the next frame still overlaps this one.
-        thread::sleep(Duration::from_millis(if driving { 160 } else { 8 }));
+        // The wheel needs a moment to move the page. A hand flick does not:
+        // grabbing the next frame does not wait for the previous one to be joined.
+        if driving {
+            thread::sleep(Duration::from_millis(160));
+        }
         if stopped() {
             break;
         }
-        let frame = grab_region(&monitor, origin_x, origin_y, width, height)?;
-        if frame.len() != stitch.view().len() {
-            break;
-        }
-        match stitch.push(&frame, max_height) {
-            Step::Moved { up } => {
-                grown = true;
-                misses = 0;
-                if up {
-                    hold_auto = Instant::now() + Duration::from_millis(800);
-                }
-                // Encoding the live preview on every jump stalls the next grab
-                // and turns a fast flick into a gap.
-                if Instant::now() >= next_preview {
-                    progress(&stitch.rgba, stitch.width, stitch.height);
-                    next_preview = Instant::now() + Duration::from_millis(90);
-                }
-            }
-            Step::Full => {
-                progress(&stitch.rgba, stitch.width, stitch.height);
+        let frame = match grab_region(&monitor, origin_x, origin_y, width, height) {
+            Ok(frame) => frame,
+            Err(error) => {
+                failure = Some(error);
                 break;
             }
-            Step::Still => {
-                let motion = find_shift(stitch.view(), &frame, width, height);
-                if matches!(motion, Motion::Unchanged) {
-                    continue;
-                }
-                // The first grab can still show the capture overlay. Adopt the
-                // live page once, then keep every row that has already been
-                // stitched instead of replacing the strip with the latest view.
-                if !grown && !synced {
-                    misses = misses.saturating_add(1);
-                    if misses >= 2 {
-                        stitch.replace_view(&frame);
-                        synced = true;
-                        misses = 0;
-                        progress(&stitch.rgba, stitch.width, stitch.height);
-                    }
-                }
+        };
+        if frame.len() != anchor.len() {
+            break;
+        }
+        if frame == newest {
+            if !driving {
+                thread::sleep(Duration::from_millis(4));
             }
+            continue;
+        }
+        // A slow scroll moves a few pixels per grab. Keep the latest frame and
+        // join it once the page has traveled far enough to be worth a stitch.
+        if shift_is_still_short(&anchor, &frame, width, height) {
+            newest = frame;
+            holding = true;
+            continue;
+        }
+        newest = frame.clone();
+        anchor.clone_from(&newest);
+        holding = false;
+        if tx.send(frame).is_err() {
+            break;
         }
     }
-    Ok(Strip {
-        width: stitch.width,
-        height: stitch.height,
-        rgba: stitch.rgba,
-    })
+    if holding && newest != anchor {
+        let _ = tx.send(newest);
+    }
+    drop(tx);
+    let strip = stitcher.join().map_err(|_| {
+        eprintln!("screenshot scroll stitch thread stopped");
+        ScreenshotError::new("capture_failed")
+    })?;
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    Ok(strip)
+}
+
+/// True when `next` is only a short, clear step away from the last joined frame.
+/// A fast flick falls outside this window and is recorded immediately.
+fn shift_is_still_short(previous: &[u8], next: &[u8], width: u32, height: u32) -> bool {
+    if previous.len() != next.len() || width < 8 || height < 32 {
+        return false;
+    }
+    let previous_rows = row_samples(previous, width, height);
+    let next_rows = row_samples(next, width, height);
+    // Keep this under one form row. Holding a whole checkbox row made the next
+    // join line up with the following similar row and overlap the section.
+    let limit = 8i32;
+    let mut best_shift = 0i32;
+    let mut best_score = u32::MAX;
+    let mut still = u32::MAX;
+    let bottom = height.saturating_sub(4);
+    for shift in -limit..=limit {
+        let mut total = 0u64;
+        let mut count = 0u64;
+        let mut y = 4u32;
+        while y < bottom {
+            let other = y as i32 - shift;
+            if (4..bottom as i32).contains(&other) {
+                total += u64::from(row_sad(
+                    &previous_rows[y as usize],
+                    &next_rows[other as usize],
+                ));
+                count += 1;
+            }
+            y += 4;
+        }
+        if count == 0 {
+            continue;
+        }
+        let score = (total / (count * ROW_SAMPLES as u64)) as u32;
+        if shift == 0 {
+            still = score;
+        }
+        if score < best_score || (score == best_score && shift.abs() < best_shift.abs()) {
+            best_score = score;
+            best_shift = shift;
+        }
+    }
+    best_score <= 8 && best_shift.abs() < limit && (best_shift == 0 || best_score + 3 < still)
 }
 
 fn open_monitor(index: usize) -> Result<xcap::Monitor, ScreenshotError> {
@@ -1082,7 +1798,7 @@ fn linux_scroll(cursor: &Cursor) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cursor, Motion, Stitch, find_shift, point_inside};
+    use super::{Cursor, Motion, Stitch, compose_frames, find_shift, fixed_edges, point_inside};
 
     fn rows(width: u32, height: u32, origin: u32) -> Vec<u8> {
         contrast_rows_scaled(width, height, origin, 1)
@@ -1145,6 +1861,57 @@ mod tests {
             find_shift(&previous, &next, 16, 24),
             Motion::Shift(2)
         ));
+    }
+
+    #[test]
+    fn stitches_similar_section_bands_without_overlapping_them() {
+        fn bands(width: u32, height: u32, origin: u32) -> Vec<u8> {
+            let mut rgba = vec![22u8; width as usize * height as usize * 4];
+            for y in 0..height {
+                let absolute = origin + y;
+                let into = absolute % 28;
+                for x in 0..width {
+                    let offset = (y * width + x) as usize * 4;
+                    let (red, green, blue) = if into < 8 {
+                        (16, 16, 18)
+                    } else if x < 18 {
+                        let ink = absolute.wrapping_mul(13) as u8;
+                        (ink, ink.wrapping_add(20), 90)
+                    } else {
+                        (32, 34, 40)
+                    };
+                    rgba[offset] = red;
+                    rgba[offset + 1] = green;
+                    rgba[offset + 2] = blue;
+                    rgba[offset + 3] = 255;
+                }
+            }
+            rgba
+        }
+        let width = 96u32;
+        let height = 220u32;
+        let first = bands(width, height, 0);
+        let next = bands(width, height, 12);
+        assert!(
+            matches!(find_shift(&first, &next, width, height), Motion::Shift(12)),
+            "{:?}",
+            find_shift(&first, &next, width, height)
+        );
+        let mut stitch = Stitch::new(first, width, height);
+        assert!(matches!(
+            stitch.push(&next, 4_000),
+            super::Step::Moved { up: false }
+        ));
+        let expected = bands(width, stitch.height, 0);
+        assert_eq!(stitch.rgba, expected);
+    }
+
+    #[test]
+    fn finds_a_two_pixel_scroll_on_a_tall_page() {
+        let previous = document_rows(80, 360, 0);
+        let next = document_rows(80, 360, 2);
+        let motion = find_shift(&previous, &next, 80, 360);
+        assert!(matches!(motion, Motion::Shift(2)), "{motion:?}");
     }
 
     #[test]
@@ -1392,6 +2159,334 @@ mod tests {
         }
     }
 
+    fn wizard_page(width: u32, height: u32, origin: u32, header: u32, footer: u32) -> Vec<u8> {
+        let mut rgba = vec![18u8; width as usize * height as usize * 4];
+        for y in 0..height {
+            for x in 0..width {
+                let offset = (y * width + x) as usize * 4;
+                let (red, green, blue) = if y < header {
+                    (255, 0, 128)
+                } else if y + footer >= height {
+                    let band = y - (height - footer);
+                    (20, 40u8.wrapping_add((band.wrapping_mul(17)) as u8), 220)
+                } else {
+                    let absolute = origin + (y - header);
+                    let ink = absolute.wrapping_mul(13).wrapping_add(x.wrapping_mul(3)) as u8;
+                    (ink, ink.wrapping_add(20), 48)
+                };
+                rgba[offset] = red;
+                rgba[offset + 1] = green;
+                rgba[offset + 2] = blue;
+                rgba[offset + 3] = 255;
+            }
+        }
+        rgba
+    }
+
+    #[test]
+    fn stitches_a_wizard_without_repeating_its_footer() {
+        let header = 28u32;
+        let footer = 36u32;
+        let width = 64u32;
+        let height = 180u32;
+        let first = wizard_page(width, height, 0, header, footer);
+        let stepped = wizard_page(width, height, 10, header, footer);
+        let jumped = wizard_page(width, height, 50, header, footer);
+        assert_eq!(
+            fixed_edges(&first, &stepped, width, height),
+            (header, footer)
+        );
+        assert!(matches!(
+            find_shift(&first, &stepped, width, height),
+            Motion::Shift(10)
+        ));
+        let mut stitch = Stitch::new(first, width, height);
+        assert!(matches!(
+            stitch.push(&stepped, 4_000),
+            super::Step::Moved { up: false }
+        ));
+        assert_eq!(stitch.height, height + 10);
+        assert!(matches!(
+            find_shift(stitch.view(), &jumped, width, height),
+            Motion::Shift(40)
+        ));
+        assert!(matches!(
+            stitch.push(&jumped, 4_000),
+            super::Step::Moved { up: false }
+        ));
+        assert_eq!(stitch.height, height + 50);
+        let stride = width as usize * 4;
+        let content_end = stitch.height - footer;
+        for y in 0..stitch.height {
+            let offset = y as usize * stride;
+            let pixel = &stitch.rgba[offset..offset + 4];
+            let is_header = pixel == [255, 0, 128, 255];
+            let is_footer = pixel[0] == 20 && pixel[2] == 220;
+            assert_eq!(is_header, y < header, "header row {y}");
+            assert_eq!(is_footer, y >= content_end, "footer row {y}");
+            if (header..content_end).contains(&y) {
+                let absolute = y - header;
+                let ink = absolute.wrapping_mul(13) as u8;
+                assert_eq!(
+                    pixel,
+                    &[ink, ink.wrapping_add(20), 48, 255],
+                    "content row {y}"
+                );
+            }
+        }
+        let footer_top = content_end as usize * stride;
+        assert_eq!(stitch.rgba[footer_top + 1], 40);
+    }
+
+    fn form_page(width: u32, height: u32, origin: u32) -> Vec<u8> {
+        let mut rgba = vec![22u8; width as usize * height as usize * 4];
+        for y in 0..height {
+            let absolute = origin + y;
+            for x in 0..width {
+                let offset = (y * width + x) as usize * 4;
+                let (red, green, blue) = if x < 8 || x + 8 >= width {
+                    (48, 48, 52)
+                } else if absolute % 28 < 18 {
+                    let ink = absolute.wrapping_mul(19).wrapping_add(x.wrapping_mul(5)) as u8;
+                    (ink, ink.wrapping_add(30), 70)
+                } else {
+                    (30, 32, 36)
+                };
+                rgba[offset] = red;
+                rgba[offset + 1] = green;
+                rgba[offset + 2] = blue;
+                rgba[offset + 3] = 255;
+            }
+        }
+        rgba
+    }
+
+    #[test]
+    fn stitches_similar_form_rows_without_stacking_them() {
+        let first = form_page(96, 180, 0);
+        let next = form_page(96, 180, 28);
+        assert!(
+            matches!(find_shift(&first, &next, 96, 180), Motion::Shift(28)),
+            "{:?}",
+            find_shift(&first, &next, 96, 180)
+        );
+        let mut stitch = Stitch::new(first, 96, 180);
+        assert!(matches!(
+            stitch.push(&next, 4_000),
+            super::Step::Moved { up: false }
+        ));
+        assert_eq!(stitch.height, 208);
+        let stride = 96 * 4;
+        for y in 0..stitch.height {
+            let absolute = y;
+            let offset = y as usize * stride + 20 * 4;
+            let ink = absolute
+                .wrapping_mul(19)
+                .wrapping_add(20u32.wrapping_mul(5)) as u8;
+            if absolute % 28 < 18 {
+                assert_eq!(
+                    &stitch.rgba[offset..offset + 3],
+                    &[ink, ink.wrapping_add(30), 70],
+                    "row {y}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_a_torn_grab() {
+        let previous = rows(48, 120, 0);
+        let mut next = rows(48, 120, 20);
+        let torn = rows(48, 120, 70);
+        let stride = 48 * 4;
+        next[60 * stride..].copy_from_slice(&torn[60 * stride..]);
+        assert!(
+            matches!(find_shift(&previous, &next, 48, 120), Motion::Unaligned),
+            "{:?}",
+            find_shift(&previous, &next, 48, 120)
+        );
+        assert!(matches!(
+            find_shift(&rows(48, 120, 0), &rows(48, 120, 20), 48, 120),
+            Motion::Shift(20)
+        ));
+    }
+
+    #[test]
+    fn footer_is_the_action_bar_not_the_dark_page() {
+        let bar = 32u32;
+        let mut previous = vec![24u8; 80 * 200 * 4];
+        let mut next = previous.clone();
+        for (origin, frame) in [(0u32, &mut previous), (36u32, &mut next)] {
+            for y in 0..200 {
+                for x in 0..80 {
+                    let offset = (y * 80 + x) as usize * 4;
+                    if y + bar >= 200 {
+                        let band = y - (200 - bar);
+                        frame[offset] = 12;
+                        frame[offset + 1] = 30u8.wrapping_add((band * 13) as u8);
+                        frame[offset + 2] = 210;
+                    } else if (origin + y) % 26 < 8 {
+                        let ink = (origin + y).wrapping_mul(11).wrapping_add(x) as u8;
+                        frame[offset] = ink;
+                        frame[offset + 1] = ink.wrapping_add(40);
+                        frame[offset + 2] = 90;
+                    }
+                    frame[offset + 3] = 255;
+                }
+            }
+        }
+        let (header, footer) = fixed_edges(&previous, &next, 80, 200);
+        assert_eq!(header, 0);
+        assert!(
+            (bar..bar + 13).contains(&footer),
+            "footer {footer} swallowed the dark page"
+        );
+        let mut stitch = Stitch::new(previous, 80, 200);
+        assert!(matches!(
+            stitch.push(&next, 4_000),
+            super::Step::Moved { up: false }
+        ));
+        let stride = 80 * 4;
+        let mut bars = 0u32;
+        for y in 0..stitch.height {
+            let offset = y as usize * stride;
+            if stitch.rgba[offset] == 12 && stitch.rgba[offset + 2] == 210 {
+                bars += 1;
+            }
+        }
+        assert_eq!(bars, bar);
+    }
+
+    fn dialog_with_padding(width: u32, height: u32, origin: u32, bar: u32, pad: u32) -> Vec<u8> {
+        let mut rgba = vec![18u8; width as usize * height as usize * 4];
+        let bar_top = height - pad - bar;
+        for y in 0..height {
+            for x in 0..width {
+                let offset = (y * width + x) as usize * 4;
+                let (red, green, blue) = if y >= bar_top && y + pad < height {
+                    if x % 8 < 4 {
+                        (240, 240, 245)
+                    } else {
+                        (20, 90, 230)
+                    }
+                } else if (origin + y) % 24 < 10 && y < bar_top {
+                    let ink = (origin + y)
+                        .wrapping_mul(13)
+                        .wrapping_add(x.wrapping_mul(3)) as u8;
+                    (ink, ink.wrapping_add(20), 70)
+                } else {
+                    (18, 18, 22)
+                };
+                rgba[offset] = red;
+                rgba[offset + 1] = green;
+                rgba[offset + 2] = blue;
+                rgba[offset + 3] = 255;
+            }
+        }
+        rgba
+    }
+
+    #[test]
+    fn keeps_one_action_bar_when_dark_padding_sits_under_it() {
+        let width = 80u32;
+        let height = 220u32;
+        let bar = 28u32;
+        let pad = 40u32;
+        let first = dialog_with_padding(width, height, 0, bar, pad);
+        let next = dialog_with_padding(width, height, 80, bar, pad);
+        let footer = fixed_edges(&first, &next, width, height).1;
+        assert!(
+            (bar + pad..bar + pad + 16).contains(&footer),
+            "footer {footer} missed the bar above the dark padding"
+        );
+        let mut stitch = Stitch::new(first, width, height);
+        assert!(matches!(
+            stitch.push(&next, 4_000),
+            super::Step::Moved { up: false }
+        ));
+        assert_eq!(stitch.height, height + 80);
+        let stride = width as usize * 4;
+        let mut bars = 0u32;
+        for y in 0..stitch.height {
+            let offset = y as usize * stride;
+            if stitch.rgba[offset] == 240 && stitch.rgba[offset + 2] == 245 {
+                bars += 1;
+            }
+        }
+        assert_eq!(bars, bar, "the action bar was stamped again");
+        let tail = (stitch.height - pad) as usize * stride;
+        assert_eq!(&stitch.rgba[tail..tail + 4], &[18, 18, 22, 255]);
+        let bar_row = (stitch.height - pad - bar) as usize * stride;
+        assert_eq!(&stitch.rgba[bar_row..bar_row + 4], &[240, 240, 245, 255]);
+    }
+
+    #[test]
+    fn keeps_an_action_bar_shifted_by_one_pixel() {
+        let width = 80u32;
+        let height = 200u32;
+        let bar = 28u32;
+        let pad = 24u32;
+        let first = dialog_with_padding(width, height, 0, bar, pad);
+        let next = dialog_with_padding(width, height, 50, bar, pad);
+        let stride = width as usize * 4;
+        let footer_rows = (bar + pad) as usize;
+        let mut shifted = next.clone();
+        for y in (1..footer_rows).rev() {
+            let dest = (height as usize - footer_rows + y) * stride;
+            let source = (height as usize - footer_rows + y - 1) * stride;
+            shifted[dest..dest + stride].copy_from_slice(&next[source..source + stride]);
+        }
+        let bar_at = (height as usize - footer_rows) * stride;
+        for pixel in shifted[bar_at..bar_at + bar as usize * stride].chunks_mut(4) {
+            pixel[0] = pixel[0].saturating_add(2);
+        }
+        let footer = fixed_edges(&first, &shifted, width, height).1;
+        assert!(
+            footer + 2 >= bar + pad,
+            "footer {footer} dropped the shifted bar"
+        );
+        let mut stitch = Stitch::new(first, width, height);
+        assert!(matches!(
+            stitch.push(&shifted, 4_000),
+            super::Step::Moved { up: false }
+        ));
+        let mut bars = 0u32;
+        for y in 0..stitch.height {
+            let offset = y as usize * stride;
+            if stitch.rgba[offset] >= 230 && stitch.rgba[offset + 2] >= 230 {
+                bars += 1;
+            }
+        }
+        assert!(bars <= bar + 2, "bars {bars}");
+    }
+
+    #[test]
+    fn a_flat_page_bottom_is_appended_with_the_new_rows() {
+        let mut first = plain_rows(32, 120, 0);
+        let mut next = plain_rows(32, 120, 30);
+        for frame in [&mut first, &mut next] {
+            for y in 96..120 {
+                for x in 0..32 {
+                    let offset = (y * 32 + x) as usize * 4;
+                    frame[offset] = 16;
+                    frame[offset + 1] = 16;
+                    frame[offset + 2] = 16;
+                }
+            }
+        }
+        assert_eq!(fixed_edges(&first, &next, 32, 120).1, 0);
+        let mut stitch = Stitch::new(first.clone(), 32, 120);
+        assert!(matches!(
+            stitch.push(&next, 2_000),
+            super::Step::Moved { up: false }
+        ));
+        assert_eq!(stitch.height, 150);
+        let mut expected = first;
+        let stride = 32 * 4;
+        expected.extend_from_slice(&next[(120 - 30) * stride..]);
+        assert_eq!(stitch.rgba, expected);
+    }
+
     #[test]
     fn stitches_a_fast_jump_by_the_full_distance() {
         let first = lined_rows(16, 90, 0);
@@ -1627,5 +2722,43 @@ mod tests {
             y0 += line_h as i32;
         }
         rgba
+    }
+
+    #[test]
+    fn composes_every_frame_of_a_flick() {
+        let frames: Vec<_> = (0..6).map(|step| rows(32, 96, step * 20)).collect();
+        let strip = compose_frames(&frames, 32, 96, 4_000);
+        assert_eq!(strip.height, 96 + 100);
+        let stride = 32 * 4;
+        for y in 0..strip.height {
+            assert_eq!(strip.rgba[y as usize * stride], y as u8, "row {y}");
+        }
+    }
+
+    #[test]
+    fn composes_a_fast_flick_that_one_pair_cannot_span() {
+        let height = 140u32;
+        let step = 80u32;
+        let frames: Vec<_> = (0..4)
+            .map(|index| document_rows(48, height, index * step))
+            .collect();
+        let strip = compose_frames(&frames, 48, height, 4_000);
+        let expected = document_rows(48, height + step * 3, 0);
+        assert_eq!(strip.height, expected.len() as u32 / (48 * 4));
+        assert_eq!(strip.rgba, expected);
+    }
+
+    #[test]
+    fn composes_the_later_frames_when_one_grab_is_torn() {
+        let mut torn = rows(48, 120, 30);
+        let decoy = rows(48, 120, 90);
+        let stride = 48 * 4;
+        torn[70 * stride..].copy_from_slice(&decoy[70 * stride..]);
+        let frames = vec![rows(48, 120, 0), rows(48, 120, 18), torn, rows(48, 120, 40)];
+        let strip = compose_frames(&frames, 48, 120, 4_000);
+        assert_eq!(strip.height, 120 + 40);
+        for y in 0..strip.height {
+            assert_eq!(strip.rgba[y as usize * stride], y as u8, "row {y}");
+        }
     }
 }

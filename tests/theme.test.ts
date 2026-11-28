@@ -8,31 +8,36 @@ test("manual themes override the system and system follows it", () => {
   expect(isDarkTheme("system", false)).toBe(false);
 });
 
-test("illustration theme keeps the ink frame and swaps paper in the dark", () => {
+test("illustration theme keeps a quiet frame and swaps paper in the dark", () => {
   const light = appTheme(false);
   const dark = appTheme(true);
   expect(light.token).toMatchObject({
-    colorPrimary: "#52C41A",
-    colorBorder: "#2C2C2C",
+    colorPrimary: "#1677FF",
+    colorBorder: "#D5CBBC",
+    colorBorderSecondary: "#E4DCD0",
     colorBgLayout: SHELL_BACKGROUND.light,
-    lineWidth: 3,
-    borderRadius: 12,
+    lineWidth: 1,
+    borderRadius: 8,
   });
   expect(dark.token).toMatchObject({
-    colorPrimary: "#52C41A",
-    colorBorder: illustrationPalette(true).ink,
+    colorPrimary: "#1677FF",
+    colorBorder: illustrationPalette(true).stroke,
     colorBgLayout: SHELL_BACKGROUND.dark,
-    lineWidth: 3,
+    lineWidth: 1,
   });
   expect(dark.token?.colorBorder).not.toBe(light.token?.colorBorder);
-  expect(light.components?.Layout).toMatchObject({ bodyBg: "#FFF9F0", lightSiderBg: "#FFF0F6" });
-  expect(dark.components?.Layout).toMatchObject({ bodyBg: "#1C1612", lightSiderBg: "#3A2832" });
-  expect(light.components?.Card).toMatchObject({ boxShadow: inkShadow("#2C2C2C") });
-  expect(dark.components?.Card).toMatchObject({ boxShadow: inkShadow("#F4E7D4") });
+  expect(light.token?.colorBorder).not.toBe(light.token?.colorText);
+  expect(light.token?.colorBorderSecondary).not.toBe(light.token?.colorBorder);
+  expect(light.components?.Layout).toMatchObject({ bodyBg: "#F3EEE6", lightSiderBg: "#E7E0D4" });
+  expect(dark.components?.Layout).toMatchObject({ bodyBg: "#100E0C", lightSiderBg: "#141210" });
+  expect(light.components?.Card).toMatchObject({ boxShadow: "none" });
+  expect(dark.components?.Card).toMatchObject({ boxShadow: "none" });
   expect(illustrationConfig(true).button?.classNames).toMatchObject({ root: "pixo-ink-button" });
-  expect(inkFrameStyle({ lineWidth: 3, colorBorder: "#2C2C2C" }, 16)).toEqual({
-    border: "3px solid #2C2C2C",
-    borderRadius: 16,
-    boxShadow: "4px 4px 0 #2C2C2C",
+  expect(illustrationConfig(true).segmented?.classNames).toMatchObject({ root: "pixo-ink-segmented" });
+  expect(inkShadow("#241F1B", 2)).toBe("2px 2px 0 #241F1B");
+  expect(inkFrameStyle({ lineWidth: 1, colorBorder: "#D5CBBC" }, 12)).toEqual({
+    border: "1px solid #D5CBBC",
+    borderRadius: 12,
+    boxShadow: "none",
   });
 });

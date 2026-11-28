@@ -5,6 +5,7 @@ import {
   clampScrollback,
   defaultSshPalette,
   isHexColor,
+  normalizeThemeId,
   type SshCursorStyle,
   type SshFontId,
   type SshPalette,
@@ -62,7 +63,7 @@ const initial = {
 export const useSshAppearanceStore = createZustandStore<SshAppearanceState>()(persist((set) => ({
   ...initial,
   custom: { ...defaultSshPalette },
-  setThemeId: (themeId) => set({ themeId }),
+  setThemeId: (themeId) => set({ themeId: normalizeThemeId(themeId) }),
   setCustomColor: (key, value) => set((state) => isHexColor(value) ? { custom: { ...state.custom, [key]: value } } : state),
   beginCustom: (palette) => set({ themeId: "custom", custom: { ...palette } }),
   setFontId: (fontId) => set({ fontId }),
@@ -77,4 +78,13 @@ export const useSshAppearanceStore = createZustandStore<SshAppearanceState>()(pe
   setConfirmPaste: (confirmPaste) => set({ confirmPaste }),
   setCopySkipsHistory: (copySkipsHistory) => set({ copySkipsHistory }),
   resetAppearance: () => set({ ...initial, custom: { ...defaultSshPalette } }),
-}), { name: "pixo-ssh-terminal" }));
+}), {
+  name: "pixo-ssh-terminal",
+  version: 1,
+  migrate: (persisted) => {
+    if (!persisted || typeof persisted !== "object") return persisted;
+    const state = persisted as { themeId?: string };
+    if (typeof state.themeId === "string") state.themeId = normalizeThemeId(state.themeId);
+    return persisted;
+  },
+}));

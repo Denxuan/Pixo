@@ -13,7 +13,7 @@ mod forward;
 mod grant;
 mod known_hosts;
 mod model;
-mod remote;
+pub(crate) mod remote;
 mod secret;
 mod session;
 mod shell;

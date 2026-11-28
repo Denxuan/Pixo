@@ -1,4 +1,6 @@
 import { DockerRequestError, dockerSaveEndpoint, dockerSockets } from "@/api/docker";
+import { sshStatus } from "@/api/ssh";
+import HostForm from "@/components/ssh/HostForm";
 import type { SshHost } from "@/types/ssh";
 import type { DockerEndpoint, DockerEndpointDraft, DockerKind, DockerSocket } from "@/types/docker";
 import { dockerErrorText } from "@/utils/dockerMessage";
@@ -20,6 +22,7 @@ export default function EndpointForm({
   sshEnabled,
   onClose,
   onSaved,
+  onHostSaved,
 }: {
   open: boolean;
   endpoint: DockerEndpoint | null;
@@ -27,13 +30,24 @@ export default function EndpointForm({
   sshEnabled: boolean;
   onClose: () => void;
   onSaved: () => void;
+  onHostSaved: (host: SshHost) => void;
 }) {
   const { t } = useTranslation();
+  const { token } = antdTheme.useToken();
   const [form] = Form.useForm<FormValues>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [sockets, setSockets] = useState<DockerSocket[]>([]);
+  const [hostOpen, setHostOpen] = useState(false);
+  const [hostMenu, setHostMenu] = useState(false);
+  const [keyringAvailable, setKeyringAvailable] = useState(false);
+  const [agentAvailable, setAgentAvailable] = useState(false);
   const kind = Form.useWatch("kind", form) ?? "local";
+
+  useEffect(() => {
+    if (open) return;
+    setHostOpen(false);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -73,6 +87,14 @@ export default function EndpointForm({
     }
   }
 
+  function openHostForm() {
+    void sshStatus().then((status) => {
+      setKeyringAvailable(status.keyringAvailable);
+      setAgentAvailable(status.agentAvailable);
+    }).catch(() => undefined);
+    setHostOpen(true);
+  }
+
   return (
     <Modal
       title={t(endpoint ? "zdx.label.docker.editEndpoint" : "zdx.label.docker.newEndpoint")}
@@ -84,7 +106,16 @@ export default function EndpointForm({
       onOk={() => void save()}
       destroyOnHidden
     >
-      <Form form={form} layout="vertical" requiredMark={false}>
+      <Form
+        form={form}
+        layout="vertical"
+        requiredMark={(label, { required }) => (
+          <>
+            {label}
+            {required && <span style={{ color: token.colorError }}> *</span>}
+          </>
+        )}
+      >
         <Form.Item name="name" label={t("zdx.label.docker.name")}>
           <Input placeholder={t("zdx.placeholder.docker.name")} />
         </Form.Item>
@@ -108,11 +139,48 @@ export default function EndpointForm({
           <>
             {!sshEnabled && <Alert type="warning" showIcon message={t("zdx.text.docker.sshOff")} />}
             {sshHosts.length === 0 && <Alert type="info" showIcon message={t("zdx.text.docker.sshRequired")} />}
-            <Form.Item name="sshHostId" label={t("zdx.label.docker.sshHost")} rules={[{ required: true }]}>
-              <Select
-                options={sshHosts.map((host) => ({ value: host.id, label: `${host.name} (${host.username}@${host.host})` }))}
-                disabled={!sshEnabled}
-              />
+            <Form.Item label={t("zdx.label.docker.sshHost")} required>
+              <Space.Compact block>
+                <Form.Item name="sshHostId" noStyle rules={[{ required: true, message: t("zdx.text.ssh.required") }]}>
+                  <Select
+                    className="min-w-0 flex-1"
+                    showSearch
+                    optionFilterProp="label"
+                    placeholder={t("zdx.placeholder.docker.sshHost")}
+                    disabled={!sshEnabled}
+                    open={hostMenu}
+                    options={sshHosts.map((host) => ({ value: host.id, label: `${host.name} (${host.username}@${host.host})` }))}
+                    onOpenChange={setHostMenu}
+                    popupRender={(menu) => (
+                      <>
+                        {menu}
+                        <Button
+                          htmlType="button"
+                          type="text"
+                          block
+                          className="mt-1 justify-start"
+                          icon={<PlusOutlined />}
+                          disabled={!sshEnabled}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => {
+                            setHostMenu(false);
+                            openHostForm();
+                          }}
+                        >
+                          {t("zdx.label.ssh.newHost")}
+                        </Button>
+                      </>
+                    )}
+                  />
+                </Form.Item>
+                <Button
+                  htmlType="button"
+                  aria-label={t("zdx.label.ssh.newHost")}
+                  icon={<PlusOutlined />}
+                  disabled={!sshEnabled}
+                  onClick={openHostForm}
+                />
+              </Space.Compact>
             </Form.Item>
             <Form.Item name="remoteSocket" label={t("zdx.label.docker.remoteSocket")} extra={t("zdx.text.docker.remoteSocketHelp")}>
               <AutoComplete options={REMOTE_SOCKETS.map((value) => ({ value }))} placeholder={t("zdx.placeholder.docker.remoteSocket")} />
@@ -121,6 +189,19 @@ export default function EndpointForm({
         )}
         {error && <Alert type="error" showIcon message={error} />}
       </Form>
+      <HostForm
+        host={null}
+        hosts={sshHosts}
+        open={hostOpen}
+        zIndex={1200}
+        keyringAvailable={keyringAvailable}
+        agentAvailable={agentAvailable}
+        onClose={() => setHostOpen(false)}
+        onSaved={(host) => {
+          onHostSaved(host);
+          form.setFieldValue("sshHostId", host.id);
+        }}
+      />
     </Modal>
   );
 }

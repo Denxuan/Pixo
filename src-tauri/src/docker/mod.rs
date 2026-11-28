@@ -5,11 +5,14 @@ mod compose;
 mod context;
 mod error;
 mod frames;
+mod hostdir;
+mod mirrors;
 mod model;
 mod registry;
 mod service;
 mod sockets;
 mod store;
+mod updates;
 
 pub use service::initialize;
 

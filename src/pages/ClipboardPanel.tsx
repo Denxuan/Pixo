@@ -10,12 +10,13 @@ import { CLIP_FILTERS, isClipFilter } from "@/types/clipboard";
 import { clipboardErrorText } from "@/utils/clipboardMessage";
 import { isDesktop } from "@/utils/desktop";
 import { DEFAULT_DELETE_SHORTCUT, DEFAULT_PIN_SHORTCUT, eventMatchesShortcut, formatShortcut, isApplePlatform } from "@/utils/shortcut";
-import { inkFrameStyle } from "@/utils/theme";
 
 function focusSearch() {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && active.id === "clipboard-pin-title") return;
   const field = document.getElementById("clipboard-panel-search");
   const input = field instanceof HTMLInputElement ? field : field?.querySelector("input");
-  if (!(input instanceof HTMLInputElement)) return;
+  if (!(input instanceof HTMLInputElement) || active === input) return;
   input.focus({ preventScroll: true });
   const end = input.value.length;
   input.setSelectionRange(end, end);
@@ -113,6 +114,7 @@ export default function ClipboardPanel() {
       window.clearTimeout(hideTimer);
       window.clearTimeout(armTimer);
       armed = false;
+      if (labelFocused.current || focusTitle.current) return;
       focusSearch();
       window.setTimeout(focusSearch, 30);
       armTimer = window.setTimeout(() => {
@@ -172,7 +174,9 @@ export default function ClipboardPanel() {
   useEffect(() => {
     if (!active?.pinned || !focusTitle.current) return;
     focusTitle.current = false;
-    titleFocus.current?.();
+    const focus = titleFocus.current;
+    const frame = window.requestAnimationFrame(() => focus?.());
+    return () => window.cancelAnimationFrame(frame);
   }, [active?.id, active?.pinned]);
 
   async function useItem(id: number, mode: "copy" | "paste" | "plain", dismiss: boolean) {
@@ -348,7 +352,9 @@ export default function ClipboardPanel() {
       style={{
         background: token.colorBgContainer,
         color: token.colorText,
-        ...inkFrameStyle(token, token.borderRadiusLG),
+        border: `1px solid ${token.colorBorder}`,
+        borderRadius: token.borderRadiusLG,
+        boxShadow: "0 10px 28px rgba(20, 16, 12, 0.18)",
       }}
     >
       <div data-tauri-drag-region className="flex shrink-0 items-center gap-2 px-3 pb-3 pt-3" style={{ borderBottom: `1px solid ${token.colorBorder}` }}>

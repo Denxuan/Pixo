@@ -26,6 +26,7 @@ export default function HostForm({
   agentAvailable,
   onClose,
   onSaved,
+  zIndex,
 }: {
   host: SshHost | null;
   hosts: SshHost[];
@@ -33,9 +34,11 @@ export default function HostForm({
   keyringAvailable: boolean;
   agentAvailable: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (host: SshHost) => void;
+  zIndex?: number;
 }) {
   const { t } = useTranslation();
+  const { token } = antdTheme.useToken();
   const [form] = Form.useForm<FormValues>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -102,8 +105,8 @@ export default function HostForm({
     setBusy(true);
     setError("");
     try {
-      await sshSaveHost(draft);
-      onSaved();
+      const saved = await sshSaveHost(draft);
+      onSaved(saved);
       onClose();
     } catch (caught) {
       if (caught instanceof SshRequestError) setError(sshErrorText(t, caught));
@@ -116,6 +119,7 @@ export default function HostForm({
     <Modal
       title={host ? t("zdx.label.ssh.editHost") : t("zdx.label.ssh.newHost")}
       open={open}
+      zIndex={zIndex}
       centered
       confirmLoading={busy}
       okText={t("zdx.label.ssh.save")}
@@ -136,7 +140,17 @@ export default function HostForm({
       onCancel={onClose}
       onOk={() => form.submit()}
     >
-      <Form form={form} layout="vertical" requiredMark={false} onFinish={(values) => void submit(values)}>
+      <Form
+        form={form}
+        layout="vertical"
+        requiredMark={(label, { required }) => (
+          <>
+            {label}
+            {required && <span style={{ color: token.colorError }}> *</span>}
+          </>
+        )}
+        onFinish={(values) => void submit(values)}
+      >
         {error && <Alert type="error" showIcon className="mb-3" message={error} />}
         <Form.Item name="name" label={t("zdx.label.ssh.name")} rules={[{ required: true, whitespace: true, message: t("zdx.text.ssh.required") }]}>
           <Input placeholder={t("zdx.placeholder.ssh.name")} />

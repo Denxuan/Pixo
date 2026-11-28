@@ -573,6 +573,7 @@ impl ScreenshotState {
             return Err(ScreenshotError::new("capture_failed"));
         }
         let cursor = scroll_cursor(&monitor, area);
+        let app_handle = app.clone();
         let strip = super::scroll::capture_strip(
             monitor_index as usize,
             area.0,
@@ -581,10 +582,10 @@ impl ScreenshotState {
             area.3,
             max_height,
             cursor,
-            |rgba, width, height| {
+            move |rgba, width, height| {
                 let preview = super::scroll::preview_png(rgba, width, height)
                     .map(|png| super::scroll::encode_base64(&png));
-                let _ = app.emit(
+                let _ = app_handle.emit(
                     "screenshot://scroll",
                     serde_json::json!({
                         "generation": generation,

@@ -12,7 +12,6 @@ import type { SshStatus } from "@/types/ssh";
 import { clipboardReasonText } from "@/utils/clipboardMessage";
 import { screenshotReasonText } from "@/utils/screenshotMessage";
 import { isApplePlatform } from "@/utils/shortcut";
-import { inkFrameStyle } from "@/utils/theme";
 import { TRAY_ICONS, TrayMarkGlyph, type TrayIconId } from "@/components/icons/TrayMark";
 import Page from "@/components/Page";
 import { SettingGroup, SettingRow } from "@/components/SettingGroup";
@@ -222,8 +221,8 @@ function TrayIconPicker() {
                 padding: "0 8px",
                 background: selected ? token.colorPrimaryBg : token.colorFillQuaternary,
                 color: selected ? token.colorPrimary : token.colorText,
-                ...inkFrameStyle(token, token.borderRadius, 2),
-                borderColor: selected ? token.colorPrimary : token.colorBorder,
+                border: `1px solid ${selected ? token.colorPrimary : token.colorBorderSecondary}`,
+                borderRadius: token.borderRadius,
               }}
             >
               <TrayMarkGlyph id={icon.id} />
@@ -252,21 +251,6 @@ export default function SystemSettingsPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const desktop = isDesktop();
-  const showClipboardSettings = !desktop || clipboardOn !== false;
-  const showScreenshotSettings = !desktop || screenshotOn !== false;
-  const showSshSettings = !desktop || sshOn !== false;
-  const showDockerSettings = !desktop || dockerOn !== false;
-  const section = location.pathname === "/settings/clipboard" && showClipboardSettings
-    ? "clipboard"
-    : location.pathname === "/settings/screenshot" && showScreenshotSettings
-      ? "screenshot"
-      : location.pathname === "/settings/ssh" && showSshSettings
-        ? "ssh"
-        : location.pathname === "/settings/docker" && showDockerSettings
-          ? "docker"
-          : location.pathname === "/settings/data"
-            ? "data"
-            : "general";
 
   useEffect(() => {
     if (!desktop) { setLoading(false); return; }
@@ -283,16 +267,6 @@ export default function SystemSettingsPage() {
     return () => { alive = false; };
   }, [desktop]);
 
-  useEffect(() => {
-    if (!desktop || loading) return;
-    const blocked =
-      (location.pathname === "/settings/clipboard" && clipboardOn === false)
-      || (location.pathname === "/settings/screenshot" && screenshotOn === false)
-      || (location.pathname === "/settings/ssh" && sshOn === false)
-      || (location.pathname === "/settings/docker" && dockerOn === false);
-    if (blocked) navigate("/settings", { replace: true });
-  }, [clipboardOn, desktop, dockerOn, loading, location.pathname, navigate, screenshotOn, sshOn]);
-
   async function update(kind: "autostart" | "background" | "clipboard" | "screenshot" | "ssh" | "docker", enabled: boolean) {
     setBusy(true);
     setError(false);
@@ -303,7 +277,6 @@ export default function SystemSettingsPage() {
       else if (kind === "screenshot") {
         const next = await screenshotSetEnabled(enabled);
         setScreenshotOn(next.enabled);
-        if (next.enabled === false && location.pathname === "/settings/screenshot") navigate("/settings", { replace: true });
       } else if (kind === "ssh") {
         setSshOn((await sshSetEnabled(enabled)).enabled);
       } else {
@@ -347,33 +320,81 @@ export default function SystemSettingsPage() {
     });
   }
 
-  return <Page title={t("zdx.label.system.title")}>
-    <Tabs
-      activeKey={section}
-      onChange={(key) => navigate(key === "general" ? "/settings" : `/settings/${key}`)}
-      destroyOnHidden
-      items={[
-        {
-          key: "general",
-          label: t("zdx.label.system.general"),
-          children: (
+  const { token } = antdTheme.useToken();
+  const section = location.pathname === "/settings/clipboard"
+    ? "clipboard"
+    : location.pathname === "/settings/screenshot"
+      ? "screenshot"
+      : location.pathname === "/settings/ssh"
+        ? "ssh"
+        : location.pathname === "/settings/docker"
+          ? "docker"
+          : location.pathname === "/settings/data"
+            ? "data"
+            : "general";
+  const headings = {
+    general: { title: t("zdx.label.system.general"), description: t("zdx.text.system.sectionGeneral") },
+    data: { title: t("zdx.label.system.data"), description: t("zdx.text.system.sectionData") },
+    clipboard: { title: t("zdx.label.system.clipboard"), description: t("zdx.text.clipboard.settingsDescription") },
+    screenshot: { title: t("zdx.label.system.screenshot"), description: t("zdx.text.screenshot.settingsDescription") },
+    ssh: { title: t("zdx.label.system.ssh"), description: t("zdx.text.ssh.settingsDescription") },
+    docker: { title: t("zdx.label.system.docker"), description: t("zdx.text.docker.settingsDescription") },
+  } as const;
+  const heading = headings[section];
+  const sections = [
+    { key: "general" as const, label: t("zdx.label.system.general"), off: false },
+    { key: "data" as const, label: t("zdx.label.system.data"), off: false },
+    { key: "clipboard" as const, label: t("zdx.label.system.clipboard"), off: clipboardOn === false },
+    { key: "screenshot" as const, label: t("zdx.label.system.screenshot"), off: screenshotOn === false },
+    { key: "ssh" as const, label: t("zdx.label.system.ssh"), off: sshOn === false },
+    { key: "docker" as const, label: t("zdx.label.system.docker"), off: dockerOn === false },
+  ];
+  const switchDisabled = !desktop || busy;
+  const toolCopy = (enabled: boolean | null) => !desktop
+    ? t("zdx.text.system.desktopOnly")
+    : enabled === true
+      ? t("zdx.text.system.toolOn")
+      : enabled === false
+        ? t("zdx.text.system.toolOff")
+        : t("zdx.text.system.sessionPending");
+
+  return (
+    <div className="flex min-h-0 flex-1 overflow-hidden">
+      <nav aria-label={t("zdx.label.nav.settings")} className="flex w-[188px] shrink-0 flex-col gap-0.5 overflow-y-auto px-3 py-4" style={{ borderInlineEnd: `1px solid ${token.colorBorderSecondary}` }}>
+        {sections.map((item) => {
+          const active = item.key === section;
+          return (
+            <button
+              key={item.key}
+              type="button"
+              aria-current={active ? "page" : undefined}
+              className="pixo-rail-item flex w-full cursor-pointer items-center gap-2 rounded-lg border-0 bg-transparent px-3 py-2 text-left"
+              style={{
+                background: active ? token.colorBgElevated : undefined,
+                color: active ? token.colorText : token.colorTextSecondary,
+                fontWeight: active ? 600 : 400,
+                boxShadow: active ? `inset 2px 0 0 ${token.colorPrimary}` : undefined,
+              }}
+              onClick={() => navigate(item.key === "general" ? "/settings" : `/settings/${item.key}`)}
+            >
+              <span className="min-w-0 flex-1 truncate">{item.label}</span>
+              {item.off && <span className="shrink-0 text-xs" style={{ color: token.colorTextTertiary }}>{t("zdx.label.system.off")}</span>}
+            </button>
+          );
+        })}
+      </nav>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <Page title={heading.title} description={heading.description}>
+          {section === "general" && (
             <Flex vertical gap={24}>
               {!desktop && <Alert type="info" showIcon message={t("zdx.text.system.desktopOnly")} />}
               {error && <Alert type="error" showIcon message={t("zdx.text.system.error")} />}
               <AppearanceSettings />
               <SettingGroup title={t("zdx.label.system.features")}>
-                <SettingRow label={t("zdx.label.system.clipboardFeature")} description={t("zdx.text.system.clipboardFeature")}>
-                  <Switch aria-label={t("zdx.label.system.clipboardFeature")} checked={clipboardOn === true} disabled={!desktop || clipboardOn === null || busy} onChange={changeClipboard} />
-                </SettingRow>
-                <SettingRow label={t("zdx.label.system.screenshotFeature")} description={t("zdx.text.system.screenshotFeature")}>
-                  <Switch aria-label={t("zdx.label.system.screenshotFeature")} checked={screenshotOn === true} disabled={!desktop || screenshotOn === null || busy} onChange={(enabled) => void update("screenshot", enabled)} />
-                </SettingRow>
-                <SettingRow label={t("zdx.label.system.sshFeature")} description={t("zdx.text.system.sshFeature")}>
-                  <Switch aria-label={t("zdx.label.system.sshFeature")} checked={sshOn === true} disabled={!desktop || sshOn === null || busy} onChange={changeSsh} />
-                </SettingRow>
-                <SettingRow label={t("zdx.label.system.dockerFeature")} description={t("zdx.text.system.dockerFeature")}>
-                  <Switch aria-label={t("zdx.label.system.dockerFeature")} checked={dockerOn === true} disabled={!desktop || dockerOn === null || busy} onChange={changeDocker} />
-                </SettingRow>
+                <FeatureSwitch label={t("zdx.label.system.clipboardFeature")} description={t("zdx.text.system.clipboardFeature")} checked={clipboardOn === true} disabled={switchDisabled || clipboardOn === null} onChange={changeClipboard} onConfigure={() => navigate("/settings/clipboard")} />
+                <FeatureSwitch label={t("zdx.label.system.screenshotFeature")} description={t("zdx.text.system.screenshotFeature")} checked={screenshotOn === true} disabled={switchDisabled || screenshotOn === null} onChange={(enabled) => void update("screenshot", enabled)} onConfigure={() => navigate("/settings/screenshot")} />
+                <FeatureSwitch label={t("zdx.label.system.sshFeature")} description={t("zdx.text.system.sshFeature")} checked={sshOn === true} disabled={switchDisabled || sshOn === null} onChange={changeSsh} onConfigure={() => navigate("/settings/ssh")} />
+                <FeatureSwitch label={t("zdx.label.system.dockerFeature")} description={t("zdx.text.system.dockerFeature")} checked={dockerOn === true} disabled={switchDisabled || dockerOn === null} onChange={changeDocker} onConfigure={() => navigate("/settings/docker")} />
               </SettingGroup>
               <SettingGroup title={t("zdx.label.system.startup")}>
                 <SettingRow label={t("zdx.label.system.autostart")} description={t("zdx.text.system.autostart")}>
@@ -390,34 +411,76 @@ export default function SystemSettingsPage() {
                 <VersionCheck desktop={desktop} />
               </SettingGroup>
             </Flex>
-          ),
-        },
-        {
-          key: "data",
-          label: t("zdx.label.system.data"),
-          children: <DataSettingsPage />,
-        },
-        ...(showClipboardSettings ? [{
-          key: "clipboard",
-          label: t("zdx.label.system.clipboard"),
-          children: <ClipboardSettingsPage />,
-        }] : []),
-        ...(showScreenshotSettings ? [{
-          key: "screenshot",
-          label: t("zdx.label.system.screenshot"),
-          children: <ScreenshotSettingsPage />,
-        }] : []),
-        ...(showSshSettings ? [{
-          key: "ssh",
-          label: t("zdx.label.system.ssh"),
-          children: <SshSettingsPage />,
-        }] : []),
-        ...(showDockerSettings ? [{
-          key: "docker",
-          label: t("zdx.label.system.docker"),
-          children: <DockerSettingsPage />,
-        }] : []),
-      ]}
-    />
-  </Page>;
+          )}
+          {section === "data" && <DataSettingsPage />}
+          {section === "clipboard" && (
+            <Flex vertical gap={24}>
+              {desktop && (
+                <SettingGroup>
+                  <FeatureSwitch label={t("zdx.label.system.clipboardFeature")} description={toolCopy(clipboardOn)} checked={clipboardOn === true} disabled={switchDisabled || clipboardOn === null} onChange={changeClipboard} />
+                </SettingGroup>
+              )}
+              <ClipboardSettingsPage />
+            </Flex>
+          )}
+          {section === "screenshot" && (
+            <Flex vertical gap={24}>
+              {desktop && (
+                <SettingGroup>
+                  <FeatureSwitch label={t("zdx.label.system.screenshotFeature")} description={toolCopy(screenshotOn)} checked={screenshotOn === true} disabled={switchDisabled || screenshotOn === null} onChange={(enabled) => void update("screenshot", enabled)} />
+                </SettingGroup>
+              )}
+              <ScreenshotSettingsPage />
+            </Flex>
+          )}
+          {section === "ssh" && (
+            <Flex vertical gap={24}>
+              {desktop && (
+                <SettingGroup>
+                  <FeatureSwitch label={t("zdx.label.system.sshFeature")} description={toolCopy(sshOn)} checked={sshOn === true} disabled={switchDisabled || sshOn === null} onChange={changeSsh} />
+                </SettingGroup>
+              )}
+              <SshSettingsPage />
+            </Flex>
+          )}
+          {section === "docker" && (
+            <Flex vertical gap={24}>
+              {desktop && (
+                <SettingGroup>
+                  <FeatureSwitch label={t("zdx.label.system.dockerFeature")} description={toolCopy(dockerOn)} checked={dockerOn === true} disabled={switchDisabled || dockerOn === null} onChange={changeDocker} />
+                </SettingGroup>
+              )}
+              <DockerSettingsPage />
+            </Flex>
+          )}
+        </Page>
+      </div>
+    </div>
+  );
+}
+
+function FeatureSwitch({
+  label,
+  description,
+  checked,
+  disabled,
+  onChange,
+  onConfigure,
+}: {
+  label: string;
+  description: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (enabled: boolean) => void;
+  onConfigure?: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SettingRow label={label} description={description}>
+      <div className="flex items-center gap-1">
+        {onConfigure && <Button type="link" size="small" onClick={onConfigure}>{t("zdx.label.system.configure")}</Button>}
+        <Switch aria-label={label} checked={checked} disabled={disabled} onChange={onChange} />
+      </div>
+    </SettingRow>
+  );
 }

@@ -7,8 +7,8 @@ use super::compose::{ComposePreview, ComposeProject, ComposeProjectRequest};
 use super::context::ContextPreview;
 use super::error::DockerError;
 use super::model::{
-    ContainerRow, DockerStatus, Endpoint, EndpointDraft, EngineSummary, ImageRow, NetworkRow,
-    VolumeRow,
+    ContainerRow, DockerStatus, Endpoint, EndpointDraft, EngineSummary, HostDirListing, ImageRow,
+    NetworkRow,
 };
 use super::service::DockerState;
 use super::sockets::SocketCandidate;
@@ -24,6 +24,14 @@ pub fn docker_set_enabled(
     enabled: bool,
 ) -> Result<DockerStatus, DockerError> {
     state.set_enabled(enabled)
+}
+
+#[tauri::command]
+pub fn docker_set_image_updates(
+    state: State<'_, DockerState>,
+    enabled: bool,
+) -> Result<DockerStatus, DockerError> {
+    state.set_image_updates(enabled)
 }
 
 #[tauri::command]
@@ -161,6 +169,23 @@ pub async fn docker_summary(
 }
 
 #[tauri::command]
+pub async fn docker_mirrors(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+) -> Result<Vec<String>, DockerError> {
+    state.mirrors(endpoint_id).await
+}
+
+#[tauri::command]
+pub async fn docker_set_mirrors(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    mirrors: Vec<String>,
+) -> Result<(), DockerError> {
+    state.set_mirrors(endpoint_id, mirrors).await
+}
+
+#[tauri::command]
 pub async fn docker_renew(
     state: State<'_, DockerState>,
     endpoint_id: i64,
@@ -291,14 +316,9 @@ pub fn docker_exec_close(state: State<'_, DockerState>, id: u64) -> Result<(), D
 pub async fn docker_image_run(
     state: State<'_, DockerState>,
     endpoint_id: i64,
-    image: String,
-    name: String,
-    ports: String,
-    command: String,
+    request: super::model::ContainerRunRequest,
 ) -> Result<String, DockerError> {
-    state
-        .image_run(endpoint_id, &image, &name, &ports, &command)
-        .await
+    state.image_run(endpoint_id, request).await
 }
 
 #[tauri::command]
@@ -308,6 +328,24 @@ pub async fn docker_container_stats(
     id: String,
 ) -> Result<super::model::ContainerUsage, DockerError> {
     state.container_stats(endpoint_id, &id).await
+}
+
+#[tauri::command]
+pub async fn docker_image_updates(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    events: Channel<Value>,
+) -> Result<(), DockerError> {
+    state.image_updates(endpoint_id, events).await
+}
+
+#[tauri::command]
+pub async fn docker_image_users(
+    state: State<'_, DockerState>,
+    endpoint_id: i64,
+    reference: String,
+) -> Result<Vec<String>, DockerError> {
+    state.image_users(endpoint_id, &reference).await
 }
 
 #[tauri::command]
@@ -357,29 +395,12 @@ pub async fn docker_network_remove(
 }
 
 #[tauri::command]
-pub async fn docker_volumes(
+pub async fn docker_list_dirs(
     state: State<'_, DockerState>,
     endpoint_id: i64,
-) -> Result<Vec<VolumeRow>, DockerError> {
-    state.volumes(endpoint_id).await
-}
-
-#[tauri::command]
-pub async fn docker_volume_inspect(
-    state: State<'_, DockerState>,
-    endpoint_id: i64,
-    name: String,
-) -> Result<Value, DockerError> {
-    state.volume_inspect(endpoint_id, &name).await
-}
-
-#[tauri::command]
-pub async fn docker_volume_remove(
-    state: State<'_, DockerState>,
-    endpoint_id: i64,
-    name: String,
-) -> Result<(), DockerError> {
-    state.volume_remove(endpoint_id, &name).await
+    path: String,
+) -> Result<HostDirListing, DockerError> {
+    state.list_host_dirs(endpoint_id, &path).await
 }
 
 #[tauri::command]

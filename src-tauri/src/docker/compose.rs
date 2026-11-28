@@ -648,6 +648,95 @@ pub fn merge_projects(
     rows
 }
 
+pub fn project_to_keep(
+    labels: &HashMap<String, String>,
+    recognized: &[RecognizedProject],
+    saved: &[SavedCompose],
+    hidden: &[(String, String)],
+) -> Option<RecognizedProject> {
+    let name = labels
+        .get(PROJECT_LABEL)
+        .map(|value| value.trim())
+        .filter(|value| valid_project_name(value))?;
+    let known = recognized
+        .iter()
+        .find(|item| item.name.eq_ignore_ascii_case(name));
+    let config_path = known
+        .map(|item| item.config_path.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            labels
+                .get(CONFIG_LABEL)
+                .map(|value| clip(value.trim()))
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_default();
+    let file = config_path.split(',').next().unwrap_or("").trim();
+    if file.is_empty() || file.starts_with("engine://") {
+        return None;
+    }
+    if is_hidden(hidden, name, &config_path) || is_hidden(hidden, name, file) {
+        return None;
+    }
+    let already_saved = saved.iter().any(|item| {
+        let usable = !item.config_path.is_empty() && !item.config_path.starts_with("engine://");
+        usable
+            && (item.name.eq_ignore_ascii_case(name)
+                || item.config_path == config_path
+                || item.config_path == file)
+    });
+    if already_saved {
+        return None;
+    }
+    let working_dir = known
+        .map(|item| item.working_dir.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            labels
+                .get(WORKDIR_LABEL)
+                .map(|value| clip(value.trim()))
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_default();
+    let mut services = known.map(|item| item.services.clone()).unwrap_or_default();
+    if let Some(service) = labels
+        .get(SERVICE_LABEL)
+        .map(|value| clip(value.trim()))
+        .filter(|value| !value.is_empty())
+    {
+        if !services
+            .iter()
+            .any(|item| item.eq_ignore_ascii_case(&service))
+        {
+            services.push(service);
+        }
+    }
+    Some(RecognizedProject {
+        name: known
+            .map(|item| item.name.clone())
+            .unwrap_or_else(|| name.to_string()),
+        config_path,
+        working_dir,
+        services,
+        running: 0,
+        total: 0,
+    })
+}
+
+pub fn is_hidden(hidden: &[(String, String)], name: &str, config_path: &str) -> bool {
+    hidden.iter().any(|(hidden_name, hidden_path)| {
+        let name_match = !hidden_name.is_empty() && hidden_name.eq_ignore_ascii_case(name);
+        let path_match = !hidden_path.is_empty()
+            && !config_path.is_empty()
+            && !hidden_path.starts_with("engine://")
+            && !config_path.starts_with("engine://")
+            && hidden_path == config_path;
+        name_match || path_match
+    })
+}
+
 fn same_project(saved: &SavedCompose, project: &RecognizedProject) -> bool {
     let same_name = !saved.name.is_empty() && saved.name.eq_ignore_ascii_case(&project.name);
     let same_path = !saved.config_path.is_empty()
@@ -1052,6 +1141,66 @@ services:
             "compose_exists"
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn deleting_a_container_keeps_its_compose_project() {
+        let mut labels = HashMap::new();
+        labels.insert(PROJECT_LABEL.to_string(), "redis".to_string());
+        labels.insert(SERVICE_LABEL.to_string(), "redis".to_string());
+        labels.insert(
+            CONFIG_LABEL.to_string(),
+            "/opt/zdx/redis/docker-compose.yml".to_string(),
+        );
+        labels.insert(WORKDIR_LABEL.to_string(), "/opt/zdx/redis".to_string());
+        let kept = project_to_keep(&labels, &[], &[], &[]).unwrap();
+        assert_eq!(kept.name, "redis");
+        assert_eq!(kept.config_path, "/opt/zdx/redis/docker-compose.yml");
+        assert_eq!(kept.working_dir, "/opt/zdx/redis");
+        assert_eq!(kept.services, vec!["redis".to_string()]);
+
+        let recognized = vec![RecognizedProject {
+            name: "rocketmq".to_string(),
+            config_path: "/opt/zdx/rocketmq/docker-compose.yaml".to_string(),
+            working_dir: "/opt/zdx/rocketmq".to_string(),
+            services: vec![
+                "broker".to_string(),
+                "namesrv".to_string(),
+                "rocketmq-dashboard".to_string(),
+            ],
+            running: 3,
+            total: 3,
+        }];
+        labels.insert(PROJECT_LABEL.to_string(), "rocketmq".to_string());
+        labels.insert(SERVICE_LABEL.to_string(), "broker".to_string());
+        let kept = project_to_keep(&labels, &recognized, &[], &[]).unwrap();
+        assert_eq!(kept.services.len(), 3);
+
+        let saved = vec![SavedCompose {
+            id: 1,
+            name: "redis".to_string(),
+            config_path: "/opt/zdx/redis/docker-compose.yml".to_string(),
+            working_dir: "/opt/zdx/redis".to_string(),
+            services: Vec::new(),
+        }];
+        labels.insert(PROJECT_LABEL.to_string(), "redis".to_string());
+        assert!(project_to_keep(&labels, &[], &saved, &[]).is_none());
+        let hidden = vec![("redis".to_string(), String::new())];
+        assert!(project_to_keep(&labels, &[], &[], &hidden).is_none());
+        labels.remove(PROJECT_LABEL);
+        assert!(project_to_keep(&labels, &[], &[], &[]).is_none());
+    }
+
+    #[test]
+    fn hiding_a_project_matches_its_name_or_file_and_ignores_others() {
+        let hidden = vec![
+            ("demo".to_string(), String::new()),
+            (String::new(), "/work/demo/compose.yaml".to_string()),
+        ];
+        assert!(is_hidden(&hidden, "Demo", ""));
+        assert!(is_hidden(&hidden, "other", "/work/demo/compose.yaml"));
+        assert!(!is_hidden(&hidden, "other", "/work/other/compose.yaml"));
+        assert!(!is_hidden(&hidden, "other", "engine://other"));
     }
 
     fn labeled(service: &str, _state: &str, running: bool) -> LabeledContainer {

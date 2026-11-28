@@ -40,7 +40,6 @@ export default function SshSettingsPage() {
     <Flex vertical gap={24}>
       {!desktop && <Alert type="info" showIcon message={t("zdx.text.ssh.desktopOnly")} />}
       {error && <Alert type="error" showIcon message={error} />}
-      <Typography.Paragraph type="secondary">{t("zdx.text.ssh.settingsDescription")}</Typography.Paragraph>
       <SettingGroup title={t("zdx.label.ssh.behavior")}>
         <SettingRow label={t("zdx.label.ssh.keepalive")} description={t("zdx.text.ssh.keepaliveHint")}>
           <InputNumber

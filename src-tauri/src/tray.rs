@@ -789,7 +789,14 @@ fn record_label(labels: &TrayLabels, enabled: bool, paused: bool) -> String {
     }
 }
 
-fn tooltip_for(labels: &TrayLabels, enabled: bool, paused: bool, capture: bool, ssh: usize, docker: usize) -> String {
+fn tooltip_for(
+    labels: &TrayLabels,
+    enabled: bool,
+    paused: bool,
+    capture: bool,
+    ssh: usize,
+    docker: usize,
+) -> String {
     let base = if !enabled {
         labels.tooltip_disabled.clone()
     } else if paused {
@@ -802,10 +809,14 @@ fn tooltip_for(labels: &TrayLabels, enabled: bool, paused: bool, capture: bool, 
         parts.push(text_or(&labels.tooltip_capture, "正在录屏"));
     }
     if ssh > 0 {
-        parts.push(text_or(&labels.tooltip_ssh, "SSH {count}").replace("{count}", &ssh.to_string()));
+        parts
+            .push(text_or(&labels.tooltip_ssh, "SSH {count}").replace("{count}", &ssh.to_string()));
     }
     if docker > 0 {
-        parts.push(text_or(&labels.tooltip_docker, "Docker {count}").replace("{count}", &docker.to_string()));
+        parts.push(
+            text_or(&labels.tooltip_docker, "Docker {count}")
+                .replace("{count}", &docker.to_string()),
+        );
     }
     if parts.is_empty() {
         base

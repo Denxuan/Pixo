@@ -12,6 +12,7 @@ export default function SessionExtras({
   onSend: (body: string) => void;
 }) {
   const { t } = useTranslation();
+  const { token } = antdTheme.useToken();
   const [mode, setMode] = useState<"forward" | "snippet" | null>(null);
   const [forwards, setForwards] = useState<SshForward[]>([]);
   const [snippets, setSnippets] = useState<SshSnippet[]>([]);
@@ -125,30 +126,39 @@ export default function SessionExtras({
             <Typography.Paragraph type="secondary">
               {t(kind === "remote" ? "zdx.text.ssh.forwardRemoteHelp" : kind === "dynamic" ? "zdx.text.ssh.forwardDynamicHelp" : "zdx.text.ssh.forwardLocalHelp")}
             </Typography.Paragraph>
-            <InputNumber
-              aria-label={t(kind === "remote" ? "zdx.label.ssh.remotePort" : "zdx.label.ssh.localPort")}
-              min={1}
-              max={65535}
-              value={listenPort}
-              placeholder={t(kind === "remote" ? "zdx.placeholder.ssh.remotePort" : "zdx.placeholder.ssh.localPort")}
-              onChange={(value) => setListenPort(typeof value === "number" ? value : null)}
-            />
+            <label className="flex flex-col gap-1">
+              <span>{t(kind === "remote" ? "zdx.label.ssh.remotePort" : "zdx.label.ssh.localPort")} <span style={{ color: token.colorError }}>*</span></span>
+              <InputNumber
+                aria-label={t(kind === "remote" ? "zdx.label.ssh.remotePort" : "zdx.label.ssh.localPort")}
+                min={1}
+                max={65535}
+                value={listenPort}
+                placeholder={t(kind === "remote" ? "zdx.placeholder.ssh.remotePort" : "zdx.placeholder.ssh.localPort")}
+                onChange={(value) => setListenPort(typeof value === "number" ? value : null)}
+              />
+            </label>
             {kind !== "dynamic" && (
               <>
-                <Input
-                  aria-label={t(kind === "remote" ? "zdx.label.ssh.localForwardHost" : "zdx.label.ssh.remoteHost")}
-                  value={targetHost}
-                  placeholder={t(kind === "remote" ? "zdx.placeholder.ssh.localForwardHost" : "zdx.placeholder.ssh.remoteHost")}
-                  onChange={(event) => setTargetHost(event.target.value)}
-                />
-                <InputNumber
-                  aria-label={t(kind === "remote" ? "zdx.label.ssh.localPort" : "zdx.label.ssh.remotePort")}
-                  min={1}
-                  max={65535}
-                  value={targetPort}
-                  placeholder={t(kind === "remote" ? "zdx.placeholder.ssh.localPort" : "zdx.placeholder.ssh.remotePort")}
-                  onChange={(value) => setTargetPort(typeof value === "number" ? value : null)}
-                />
+                <label className="flex flex-col gap-1">
+                  <span>{t(kind === "remote" ? "zdx.label.ssh.localForwardHost" : "zdx.label.ssh.remoteHost")} <span style={{ color: token.colorError }}>*</span></span>
+                  <Input
+                    aria-label={t(kind === "remote" ? "zdx.label.ssh.localForwardHost" : "zdx.label.ssh.remoteHost")}
+                    value={targetHost}
+                    placeholder={t(kind === "remote" ? "zdx.placeholder.ssh.localForwardHost" : "zdx.placeholder.ssh.remoteHost")}
+                    onChange={(event) => setTargetHost(event.target.value)}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span>{t(kind === "remote" ? "zdx.label.ssh.localPort" : "zdx.label.ssh.remotePort")} <span style={{ color: token.colorError }}>*</span></span>
+                  <InputNumber
+                    aria-label={t(kind === "remote" ? "zdx.label.ssh.localPort" : "zdx.label.ssh.remotePort")}
+                    min={1}
+                    max={65535}
+                    value={targetPort}
+                    placeholder={t(kind === "remote" ? "zdx.placeholder.ssh.localPort" : "zdx.placeholder.ssh.remotePort")}
+                    onChange={(value) => setTargetPort(typeof value === "number" ? value : null)}
+                  />
+                </label>
               </>
             )}
             <Button type="primary" disabled={!ready || !listenPort || (kind !== "dynamic" && (!targetPort || targetHost.trim().length === 0))} onClick={() => void addForward()}>{t("zdx.label.ssh.forwardAdd")}</Button>
@@ -167,8 +177,14 @@ export default function SessionExtras({
         {mode === "snippet" && (
           <Flex vertical gap={12}>
             <Typography.Paragraph type="secondary">{t("zdx.text.ssh.snippetHelp")}</Typography.Paragraph>
-            <Input aria-label={t("zdx.label.ssh.snippetTitle")} value={title} placeholder={t("zdx.placeholder.ssh.snippetTitle")} onChange={(event) => setTitle(event.target.value)} />
-            <Input.TextArea aria-label={t("zdx.label.ssh.snippetBody")} value={body} placeholder={t("zdx.placeholder.ssh.snippetBody")} autoSize={{ minRows: 3, maxRows: 8 }} onChange={(event) => setBody(event.target.value)} />
+            <label className="flex flex-col gap-1">
+              <span>{t("zdx.label.ssh.snippetTitle")} <span style={{ color: token.colorError }}>*</span></span>
+              <Input aria-label={t("zdx.label.ssh.snippetTitle")} value={title} placeholder={t("zdx.placeholder.ssh.snippetTitle")} onChange={(event) => setTitle(event.target.value)} />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span>{t("zdx.label.ssh.snippetBody")} <span style={{ color: token.colorError }}>*</span></span>
+              <Input.TextArea aria-label={t("zdx.label.ssh.snippetBody")} value={body} placeholder={t("zdx.placeholder.ssh.snippetBody")} autoSize={{ minRows: 3, maxRows: 8 }} onChange={(event) => setBody(event.target.value)} />
+            </label>
             <Button type="primary" disabled={title.trim().length === 0 || body.trim().length === 0} onClick={() => void saveSnippet()}>{t("zdx.label.ssh.snippetAdd")}</Button>
             {snippets.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("zdx.text.ssh.snippetEmpty")} />}
             <List

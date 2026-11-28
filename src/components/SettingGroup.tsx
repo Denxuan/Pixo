@@ -1,11 +1,9 @@
-import { inkFrameStyle } from "@/utils/theme";
-
 export function SettingGroup({ title, children }: { title?: ReactNode; children: ReactNode }) {
   const { token } = antdTheme.useToken();
   return (
     <section className="flex flex-col gap-2">
-      {title && <Typography.Text strong className="px-1" style={{ fontSize: token.fontSizeSM, color: token.colorTextSecondary }}>{title}</Typography.Text>}
-      <div className="overflow-hidden" style={{ background: token.colorBgContainer, ...inkFrameStyle(token, token.borderRadiusLG) }}>
+      {title && <Typography.Text className="px-1" style={{ fontSize: token.fontSizeSM, fontWeight: 600, color: token.colorTextSecondary }}>{title}</Typography.Text>}
+      <div className="overflow-hidden" style={{ background: token.colorBgElevated, border: `1px solid ${token.colorBorder}`, borderRadius: token.borderRadiusLG }}>
         {children}
       </div>
     </section>
@@ -31,7 +29,7 @@ export function SettingRow({
     </div>
   );
   return (
-    <div className="border-0 border-t border-solid px-4 py-3.5 first:border-t-0" style={{ borderColor: token.colorBorderSecondary }}>
+    <div className="border-0 border-t border-solid px-4 py-3 first:border-t-0" style={{ borderColor: token.colorBorderSecondary }}>
       {stacked ? (
         <div className="flex flex-col gap-3">
           {text}

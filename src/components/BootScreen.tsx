@@ -1,5 +1,3 @@
-import { inkFrameStyle } from "@/utils/theme";
-
 const motion = `
 .boot-mark,
 .boot-name,
@@ -39,7 +37,7 @@ export default function BootScreen() {
   return (
     <div className="flex h-full" style={{ background: token.colorBgLayout }}>
       <style>{motion}</style>
-      <div className="box-border flex h-full w-[216px] shrink-0 px-5 pt-5" style={{ background: "var(--pixo-sider)", borderInlineEnd: `${token.lineWidth}px solid ${token.colorBorder}` }}>
+      <div className="box-border flex h-full w-[216px] shrink-0 px-5 pt-5" style={{ background: "var(--pixo-sider)", borderInlineEnd: `1px solid ${token.colorBorder}` }}>
         <div className="flex items-center gap-2.5">
           <img className="boot-mark h-8 w-8 rounded-lg" src="/pixo-icon.png" alt="" />
           <div className="min-w-0">
@@ -48,9 +46,7 @@ export default function BootScreen() {
           </div>
         </div>
       </div>
-      <div className="box-border flex min-w-0 flex-1 p-3 pl-2">
-        <div className="flex-1" style={{ background: token.colorBgContainer, ...inkFrameStyle(token, token.borderRadiusLG) }} />
-      </div>
+      <div className="min-w-0 flex-1" style={{ background: token.colorBgContainer }} />
     </div>
   );
 }

@@ -434,8 +434,28 @@ fn note_outside_click(app: &AppHandle) {
             width,
             height,
         });
+        if let Some(ns_window) = retained_window(&window) {
+            // A click that focuses the pin title otherwise fills this transparent
+            // webview with black and hides the panel.
+            clear_panel_surface(&ns_window);
+        }
         if outside_click_dismisses(panel, status, x, y) {
             dismiss(&app);
+            return;
+        }
+        for delay in [50_u64, 200] {
+            let later = app.clone();
+            let when =
+                DispatchTime::try_from(Duration::from_millis(delay)).unwrap_or(DispatchTime::NOW);
+            let _ = DispatchQueue::main().after(when, move || {
+                let Some(window) = later.get_webview_window(PANEL_LABEL) else {
+                    return;
+                };
+                let Some(ns_window) = retained_window(&window) else {
+                    return;
+                };
+                clear_panel_surface(&ns_window);
+            });
         }
     });
 }
@@ -621,6 +641,7 @@ fn take_keyboard(app: &AppHandle, window: &WebviewWindow, ns_window: &NSWindow) 
         MADE_ACTIVE.store(true, Ordering::SeqCst);
     }
     keep_on_top(ns_window);
+    clear_panel_surface(ns_window);
     ns_window.makeKeyWindow();
     focus_webview(ns_window);
     focus_search(window, true);
@@ -662,10 +683,59 @@ fn responds(application: &NSApplication, selector: objc2::runtime::Sel) -> bool 
 fn refocus(window: &WebviewWindow) {
     if let Some(ns_window) = retained_window(window) {
         keep_on_top(&ns_window);
+        clear_panel_surface(&ns_window);
         ns_window.makeKeyWindow();
         focus_webview(&ns_window);
     }
     focus_search(window, false);
+}
+
+#[cfg(target_os = "macos")]
+fn clear_panel_surface(ns_window: &NSWindow) {
+    if let Some(color) = clear_color() {
+        let _: () = unsafe { msg_send![ns_window, setBackgroundColor: &*color] };
+    }
+    let _: () = unsafe { msg_send![ns_window, setOpaque: false] };
+    if let Some(content) = ns_window.contentView() {
+        clear_hosted_page(&content);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn clear_color() -> Option<Retained<AnyObject>> {
+    let class = AnyClass::get(c"NSColor")?;
+    let color: *mut AnyObject = unsafe { msg_send![class, clearColor] };
+    if color.is_null() {
+        None
+    } else {
+        unsafe { Retained::retain(color) }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn clear_hosted_page(view: &NSView) {
+    let under_page = sel!(setUnderPageBackgroundColor:);
+    if responds_view(view, under_page) {
+        if let Some(color) = clear_color() {
+            let _: () = unsafe { msg_send![view, setUnderPageBackgroundColor: &*color] };
+        }
+        let opaque = sel!(setOpaque:);
+        if responds_view(view, opaque) {
+            let _: () = unsafe { msg_send![view, setOpaque: false] };
+        }
+    }
+    if responds_view(view, sel!(setDrawsBackground:)) {
+        let _: () = unsafe { msg_send![view, setDrawsBackground: false] };
+    }
+    let subviews = view.subviews();
+    for index in 0..subviews.count() {
+        clear_hosted_page(&subviews.objectAtIndex(index));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn responds_view(view: &NSView, selector: objc2::runtime::Sel) -> bool {
+    unsafe { msg_send![view, respondsToSelector: selector] }
 }
 
 #[cfg(target_os = "macos")]

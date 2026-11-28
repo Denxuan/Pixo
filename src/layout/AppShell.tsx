@@ -9,8 +9,10 @@ import Launcher from "@/components/Launcher";
 import PermissionPrompt from "@/components/PermissionPrompt";
 import UpdatePrompt from "@/components/UpdatePrompt";
 import type { ClipboardStatus } from "@/types/clipboard";
+import Kbd from "@/components/Kbd";
+import { useSettingsStore } from "@/stores/settings";
 import { isDesktop } from "@/utils/desktop";
-import { inkFrameStyle } from "@/utils/theme";
+import { formatShortcut, isApplePlatform } from "@/utils/shortcut";
 import { redirectForClosedTool } from "@/utils/toolEntry";
 
 const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -26,6 +28,31 @@ function mainWindowPath(path: string) {
   if (clean === "/settings/ssh" || clean === "/settings/docker" || clean === "/settings/data") return clean;
   if (clean === "/clipboard" || clean === "/screenshot" || clean === "/ssh" || clean === "/docker") return clean;
   return "/clipboard";
+}
+
+function SearchLaunch({ collapsed, onOpen }: { collapsed: boolean; onOpen: () => void }) {
+  const { t } = useTranslation();
+  const shortcut = useSettingsStore((state) => state.launcherShortcut);
+  const label = t("zdx.label.launcher.open");
+  const keys = formatShortcut(shortcut, isApplePlatform());
+
+  if (collapsed) {
+    return (
+      <div className="flex justify-center px-2 pb-2">
+        <Tooltip title={`${label} ${keys}`} placement="right">
+          <Button type="text" aria-label={label} icon={<SearchOutlined />} onClick={onOpen} />
+        </Tooltip>
+      </div>
+    );
+  }
+
+  return (
+    <button type="button" className="pixo-search mx-3 mb-2 flex h-8 cursor-pointer items-center gap-2 rounded-lg border-0 px-2.5 text-left" onClick={onOpen} aria-label={label}>
+      <SearchOutlined aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate text-[13px]">{label}</span>
+      <Kbd label={keys}>{keys}</Kbd>
+    </button>
+  );
 }
 
 function ScreenshotNavIcon() {
@@ -196,7 +223,7 @@ export default function AppShell() {
         width={216}
         collapsedWidth={64}
         trigger={null}
-        style={{ height: "100%", borderInlineEnd: `${token.lineWidth}px solid ${token.colorBorder}`, transition: reduceMotion ? "none" : undefined }}
+        style={{ height: "100%", borderInlineEnd: `1px solid ${token.colorBorder}`, transition: reduceMotion ? "none" : undefined }}
       >
         <nav aria-label={t("zdx.label.nav.tools")} className="flex h-full flex-col">
           <div className={collapsed ? "flex shrink-0 justify-center px-0 pb-4 pt-5" : "flex shrink-0 items-center gap-2.5 px-5 pb-4 pt-5"}>
@@ -208,6 +235,7 @@ export default function AppShell() {
               </div>
             )}
           </div>
+          <SearchLaunch collapsed={collapsed} onOpen={() => setLauncherOpen(true)} />
           <Menu
             mode="inline"
             inlineCollapsed={collapsed}
@@ -230,11 +258,9 @@ export default function AppShell() {
               className="pixo-nav"
               style={{ borderInlineEnd: 0, background: "transparent" }}
               onClick={({ key }) => {
-                if (key === "search") setLauncherOpen(true);
                 if (key === "settings") navigate("/settings");
               }}
               items={[
-                { key: "search", icon: <SearchOutlined />, label: t("zdx.label.launcher.open") },
                 { key: "settings", icon: <SettingOutlined />, label: t("zdx.label.nav.settings") },
               ]}
             />
@@ -252,11 +278,8 @@ export default function AppShell() {
           </div>
         </nav>
       </Layout.Sider>
-      <Layout.Content className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-3 pl-2">
-        <main
-          className="flex min-h-0 flex-1 flex-col overflow-hidden"
-          style={{ background: token.colorBgContainer, ...inkFrameStyle(token, token.borderRadiusLG) }}
-        >
+      <Layout.Content className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" style={{ background: token.colorBgContainer }}>
+        <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <Outlet />
         </main>
       </Layout.Content>
